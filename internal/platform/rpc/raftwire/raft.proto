@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package dubi.internal.raft.v1;
+
+option go_package = "github.com/dubi-project/dubi/internal/platform/rpc/raftwire";
+
+// Internal peer protocol. It is not part of DUBI's public api/v1 contract.
+message StepRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes message = 5;
+}
+
+message StepResponse {}
+
+message SnapshotHeader {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  uint64 encoded_size = 5;
+  bytes sha256_digest = 6;
+}
+
+message InstallSnapshotRequest {
+  oneof payload {
+    SnapshotHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+message InstallSnapshotResponse {
+  uint64 applied_index = 1;
+}
+
+message GroupSubmitRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes command = 5;
+}
+
+message GroupSubmitResponse {
+  uint64 confirmed_index = 1;
+  uint64 leader_raft_id = 2;
+}
+
+message GroupReadIndexRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+}
+
+message GroupReadIndexResponse {
+  uint64 confirmed_index = 1;
+  uint64 leader_raft_id = 2;
+}
+
+message GroupMembershipRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+}
+
+message GroupMembershipResponse {
+  bytes conf_state = 1;
+  uint64 leader_raft_id = 2;
+}
+
+enum GroupMembershipOperation {
+  GROUP_MEMBERSHIP_OPERATION_UNSPECIFIED = 0;
+  GROUP_MEMBERSHIP_OPERATION_ADD_LEARNER = 1;
+  GROUP_MEMBERSHIP_OPERATION_PROMOTE_LEARNER = 2;
+  GROUP_MEMBERSHIP_OPERATION_REMOVE_MEMBER = 3;
+}
+
+message GroupMembershipChangeRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  GroupMembershipOperation operation = 5;
+  uint64 member_raft_id = 6;
+}
+
+message GroupLeadershipTransferRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  uint64 target_raft_id = 5;
+}
+
+message GroupLeadershipTransferResponse {
+  uint64 leader_raft_id = 1;
+}
+
+message PrepareJoiningGroupRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+}
+
+message PrepareJoiningGroupResponse {}
+
+message EnsureInitialRangeRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes range_descriptor = 5;
+}
+
+message EnsureInitialRangeResponse {
+  string owner_request_id = 1;
+  uint64 owner_applied_index = 2;
+}
+
+message CapabilityMutateRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes routed_command = 5;
+}
+
+message CapabilityResult {
+  bool applied = 1;
+  string error = 2;
+  bytes value = 3;
+  uint64 applied_index = 4;
+  uint64 leader_raft_id = 5;
+}
+
+message CapabilityReadRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes route_target = 5;
+  bytes payload = 6;
+}
+
+message CapabilityReadResponse {
+  string error = 1;
+  bytes value = 2;
+  uint64 confirmed_index = 3;
+  uint64 leader_raft_id = 4;
+}
+
+service RaftService {
+  rpc Step(StepRequest) returns (StepResponse);
+  // The response is sent only after durable Raft and StateMachine installation.
+  rpc InstallSnapshot(stream InstallSnapshotRequest) returns (InstallSnapshotResponse);
+}
+
+// Internal Group control traffic. It is authenticated with the same Node mTLS
+// identity as Raft transport, but is not a Raft peer-message protocol.
+service GroupService {
+  rpc Submit(GroupSubmitRequest) returns (GroupSubmitResponse);
+  rpc ReadIndex(GroupReadIndexRequest) returns (GroupReadIndexResponse);
+}
+
+// Membership mutations are control-plane operations. They are separate from
+// generic Group command submission and are never exposed as a public API.
+service GroupMembershipService {
+  rpc PrepareJoining(PrepareJoiningGroupRequest) returns (PrepareJoiningGroupResponse);
+  rpc Inspect(GroupMembershipRequest) returns (GroupMembershipResponse);
+  rpc Change(GroupMembershipChangeRequest) returns (GroupMembershipResponse);
+  rpc TransferLeadership(GroupLeadershipTransferRequest) returns (GroupLeadershipTransferResponse);
+}
+
+service RangeControlService {
+  rpc EnsureInitialRange(EnsureInitialRangeRequest) returns (EnsureInitialRangeResponse);
+}
+
+service CapabilityService {
+  rpc Mutate(CapabilityMutateRequest) returns (CapabilityResult);
+  rpc Read(CapabilityReadRequest) returns (CapabilityReadResponse);
+}

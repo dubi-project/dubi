@@ -1,0 +1,228 @@
+package raftrpc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
+)
+
+var ErrPeerUnavailable = errors.New("Group RPC peer is unavailable")
+
+type GroupBackend interface {
+	Submit(groupID string, command []byte) error
+	ReadIndex(ctx context.Context, groupID string) (uint64, error)
+	Status(groupID string) (raft.GroupStatus, error)
+}
+
+type GroupServer struct {
+	raftwire.UnimplementedGroupServiceServer
+	clusterID string
+	raftID    uint64
+	backend   GroupBackend
+	authorize AuthorizePeer
+	maxSize   int
+}
+
+func NewGroupServer(clusterID string, raftID uint64, backend GroupBackend,
+	authorize AuthorizePeer, maxSize int,
+) (*GroupServer, error) {
+	if clusterID == "" || raftID == 0 || backend == nil || authorize == nil {
+		return nil, errors.New("Group server requires ClusterID, RaftID, backend and peer authorizer")
+	}
+	if maxSize <= 0 {
+		maxSize = DefaultMaxMessageSize
+	}
+	return &GroupServer{clusterID: clusterID, raftID: raftID, backend: backend,
+		authorize: authorize, maxSize: maxSize}, nil
+}
+
+func (server *GroupServer) Submit(
+	ctx context.Context, request *raftwire.GroupSubmitRequest,
+) (*raftwire.GroupSubmitResponse, error) {
+	if err := server.validate(ctx, request.GetClusterId(), request.GetGroupId(),
+		request.GetFromRaftId(), request.GetToRaftId()); err != nil {
+		return nil, err
+	}
+	if len(request.GetCommand()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "Group command is empty")
+	}
+	if len(request.GetCommand()) > server.maxSize {
+		return nil, status.Error(codes.ResourceExhausted, "Group command exceeds size limit")
+	}
+	if err := server.backend.Submit(request.GetGroupId(), request.GetCommand()); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "submit Group command: %v", err)
+	}
+	index, err := server.backend.ReadIndex(ctx, request.GetGroupId())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "confirm Group command: %v", err)
+	}
+	groupStatus, err := server.backend.Status(request.GetGroupId())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read Group status: %v", err)
+	}
+	return &raftwire.GroupSubmitResponse{ConfirmedIndex: index, LeaderRaftId: groupStatus.LeaderID}, nil
+}
+
+func (server *GroupServer) ReadIndex(
+	ctx context.Context, request *raftwire.GroupReadIndexRequest,
+) (*raftwire.GroupReadIndexResponse, error) {
+	if err := server.validate(ctx, request.GetClusterId(), request.GetGroupId(),
+		request.GetFromRaftId(), request.GetToRaftId()); err != nil {
+		return nil, err
+	}
+	index, err := server.backend.ReadIndex(ctx, request.GetGroupId())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "confirm Group read: %v", err)
+	}
+	groupStatus, err := server.backend.Status(request.GetGroupId())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read Group status: %v", err)
+	}
+	return &raftwire.GroupReadIndexResponse{ConfirmedIndex: index, LeaderRaftId: groupStatus.LeaderID}, nil
+}
+
+func (server *GroupServer) validate(ctx context.Context, clusterID, groupID string, from, to uint64) error {
+	if clusterID != server.clusterID {
+		return status.Error(codes.PermissionDenied, "Group request belongs to a different Cluster")
+	}
+	if from == 0 || to != server.raftID {
+		return status.Error(codes.FailedPrecondition, "Group request has an invalid sender or target")
+	}
+	if err := raft.ValidateGroupID(groupID); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	return authorizeSender(ctx, from, server.authorize)
+}
+
+type GroupClientOptions struct {
+	ClusterID   string
+	RaftID      uint64
+	Directory   Directory
+	Credentials credentials.TransportCredentials
+	MaxSize     int
+	GroupRoutes GroupRoutes
+}
+
+type groupPeer struct {
+	address      string
+	conn         *grpc.ClientConn
+	client       raftwire.GroupServiceClient
+	ranges       raftwire.RangeControlServiceClient
+	capabilities raftwire.CapabilityServiceClient
+	memberships  raftwire.GroupMembershipServiceClient
+}
+
+type GroupClient struct {
+	mu      sync.Mutex
+	options GroupClientOptions
+	peers   map[uint64]*groupPeer
+	closed  bool
+}
+
+func NewGroupClient(options GroupClientOptions) (*GroupClient, error) {
+	if options.ClusterID == "" || options.RaftID == 0 || options.Directory == nil || options.Credentials == nil ||
+		options.Credentials.Info().SecurityProtocol != "tls" {
+		return nil, errors.New("Group client requires ClusterID, RaftID, Directory and TLS credentials")
+	}
+	if options.MaxSize <= 0 {
+		options.MaxSize = DefaultMaxMessageSize
+	}
+	return &GroupClient{options: options, peers: make(map[uint64]*groupPeer)}, nil
+}
+
+func (client *GroupClient) Submit(ctx context.Context, target uint64, groupID string, command []byte) (uint64, error) {
+	if len(command) == 0 || len(command) > client.options.MaxSize {
+		return 0, errors.New("Group command is empty or exceeds size limit")
+	}
+	peer, err := client.peer(target)
+	if err != nil {
+		return 0, err
+	}
+	response, err := peer.Submit(ctx, &raftwire.GroupSubmitRequest{ClusterId: client.options.ClusterID,
+		GroupId: groupID, FromRaftId: client.options.RaftID, ToRaftId: target, Command: command})
+	if err != nil {
+		return 0, err
+	}
+	if response.GetConfirmedIndex() == 0 {
+		return 0, errors.New("Group command response has no confirmed index")
+	}
+	client.observeLeader(groupID, response.GetLeaderRaftId())
+	return response.GetConfirmedIndex(), nil
+}
+
+func (client *GroupClient) ReadIndex(ctx context.Context, target uint64, groupID string) (uint64, error) {
+	peer, err := client.peer(target)
+	if err != nil {
+		return 0, err
+	}
+	response, err := peer.ReadIndex(ctx, &raftwire.GroupReadIndexRequest{ClusterId: client.options.ClusterID,
+		GroupId: groupID, FromRaftId: client.options.RaftID, ToRaftId: target})
+	if err != nil {
+		return 0, err
+	}
+	if response.GetConfirmedIndex() == 0 {
+		return 0, errors.New("Group read response has no confirmed index")
+	}
+	client.observeLeader(groupID, response.GetLeaderRaftId())
+	return response.GetConfirmedIndex(), nil
+}
+
+func (client *GroupClient) observeLeader(groupID string, leader uint64) {
+	if client.options.GroupRoutes != nil {
+		client.options.GroupRoutes.ObserveLeader(groupID, leader)
+	}
+}
+
+func (client *GroupClient) peer(raftID uint64) (raftwire.GroupServiceClient, error) {
+	if raftID == 0 || raftID == client.options.RaftID {
+		return nil, errors.New("Group RPC target must be a different non-zero RaftID")
+	}
+	address, found := client.options.Directory.Resolve(raftID)
+	if !found {
+		return nil, fmt.Errorf("%w: target %d has no address", ErrPeerUnavailable, raftID)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed {
+		return nil, errors.New("Group client is closed")
+	}
+	peer := client.peers[raftID]
+	if peer != nil && peer.address == address {
+		return peer.client, nil
+	}
+	if peer != nil {
+		_ = peer.conn.Close()
+	}
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(client.options.Credentials),
+		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(client.options.MaxSize+1024)))
+	if err != nil {
+		return nil, err
+	}
+	peer = &groupPeer{address: address, conn: conn, client: raftwire.NewGroupServiceClient(conn),
+		ranges: raftwire.NewRangeControlServiceClient(conn), capabilities: raftwire.NewCapabilityServiceClient(conn),
+		memberships: raftwire.NewGroupMembershipServiceClient(conn)}
+	client.peers[raftID] = peer
+	return peer.client, nil
+}
+
+func (client *GroupClient) Close() error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed {
+		return nil
+	}
+	client.closed = true
+	var failures []error
+	for _, peer := range client.peers {
+		failures = append(failures, peer.conn.Close())
+	}
+	return errors.Join(failures...)
+}
