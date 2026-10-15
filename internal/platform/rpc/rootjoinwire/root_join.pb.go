@@ -376,6 +376,11 @@ func (x *JoinRootResponse) GetAdmittedIndex() uint64 {
 type DiscoverRootResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	View          *RootView              `protobuf:"bytes,1,opt,name=view,proto3" json:"view,omitempty"`
+	ProtocolMin   uint32                 `protobuf:"varint,2,opt,name=protocol_min,json=protocolMin,proto3" json:"protocol_min,omitempty"`
+	ProtocolMax   uint32                 `protobuf:"varint,3,opt,name=protocol_max,json=protocolMax,proto3" json:"protocol_max,omitempty"`
+	StateFormat   uint32                 `protobuf:"varint,4,opt,name=state_format,json=stateFormat,proto3" json:"state_format,omitempty"`
+	PackFormat    uint32                 `protobuf:"varint,5,opt,name=pack_format,json=packFormat,proto3" json:"pack_format,omitempty"`
+	RecordIndex   uint32                 `protobuf:"varint,6,opt,name=record_index,json=recordIndex,proto3" json:"record_index,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -417,6 +422,41 @@ func (x *DiscoverRootResponse) GetView() *RootView {
 	return nil
 }
 
+func (x *DiscoverRootResponse) GetProtocolMin() uint32 {
+	if x != nil {
+		return x.ProtocolMin
+	}
+	return 0
+}
+
+func (x *DiscoverRootResponse) GetProtocolMax() uint32 {
+	if x != nil {
+		return x.ProtocolMax
+	}
+	return 0
+}
+
+func (x *DiscoverRootResponse) GetStateFormat() uint32 {
+	if x != nil {
+		return x.StateFormat
+	}
+	return 0
+}
+
+func (x *DiscoverRootResponse) GetPackFormat() uint32 {
+	if x != nil {
+		return x.PackFormat
+	}
+	return 0
+}
+
+func (x *DiscoverRootResponse) GetRecordIndex() uint32 {
+	if x != nil {
+		return x.RecordIndex
+	}
+	return 0
+}
+
 var File_internal_platform_rpc_rootjoinwire_root_join_proto protoreflect.FileDescriptor
 
 const file_internal_platform_rpc_rootjoinwire_root_join_proto_rawDesc = "" +
@@ -452,9 +492,15 @@ const file_internal_platform_rpc_rootjoinwire_root_join_proto_rawDesc = "" +
 	"\tleader_id\x18\t \x01(\x04R\bleaderId\"r\n" +
 	"\x10JoinRootResponse\x127\n" +
 	"\x04view\x18\x01 \x01(\v2#.dubi.internal.rootjoin.v1.RootViewR\x04view\x12%\n" +
-	"\x0eadmitted_index\x18\x02 \x01(\x04R\radmittedIndex\"O\n" +
+	"\x0eadmitted_index\x18\x02 \x01(\x04R\radmittedIndex\"\xfc\x01\n" +
 	"\x14DiscoverRootResponse\x127\n" +
-	"\x04view\x18\x01 \x01(\v2#.dubi.internal.rootjoin.v1.RootViewR\x04view2\xe7\x01\n" +
+	"\x04view\x18\x01 \x01(\v2#.dubi.internal.rootjoin.v1.RootViewR\x04view\x12!\n" +
+	"\fprotocol_min\x18\x02 \x01(\rR\vprotocolMin\x12!\n" +
+	"\fprotocol_max\x18\x03 \x01(\rR\vprotocolMax\x12!\n" +
+	"\fstate_format\x18\x04 \x01(\rR\vstateFormat\x12\x1f\n" +
+	"\vpack_format\x18\x05 \x01(\rR\n" +
+	"packFormat\x12!\n" +
+	"\frecord_index\x18\x06 \x01(\rR\vrecordIndex2\xe7\x01\n" +
 	"\x0fRootJoinService\x12c\n" +
 	"\bJoinRoot\x12*.dubi.internal.rootjoin.v1.JoinRootRequest\x1a+.dubi.internal.rootjoin.v1.JoinRootResponse\x12o\n" +
 	"\fDiscoverRoot\x12..dubi.internal.rootjoin.v1.DiscoverRootRequest\x1a/.dubi.internal.rootjoin.v1.DiscoverRootResponseBAZ?github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwireb\x06proto3"

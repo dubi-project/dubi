@@ -40,7 +40,7 @@ func (e *dataExecutor) ExecuteRead(_ context.Context, target router.Target, key 
 	if !bytes.Equal(key, target.RoutingKey) {
 		return CapabilityDataReadResult{}, errors.New("wrong forwarded read key")
 	}
-	return CapabilityDataReadResult{Body: e.body, Reference: e.ref, RegionGeneration: 2}, nil
+	return CapabilityDataReadResult{Body: e.body, Reference: e.ref, RegionGeneration: 2, State: "local_ready"}, nil
 }
 
 type dataWriteStream struct {

@@ -12,7 +12,7 @@ Byfile 提供经验证的底座代码与实现经验；DUBI 不依赖 Byfile 的
 
 底座实现的逐项来源与验证见 [`docs/architecture/adoption.md`](docs/architecture/adoption.md)。
 
-首次使用运行 `dubi init`，随后 `dubi server`；同一账号下直接运行 `dubi status`、`dubi volume list`，不必反复传 Store 或服务地址。`init` 在 `~/.dubi/current.json` 记住当前 Store；服务 Ready 后记住实际监听地址。初始 Store 默认 `/var/lib/dubi`，也可在首次 `init` 时用 `--store` 指定；无需 YAML、节点 ID、Raft ID、成员列表或证书名称。多节点同机演示才需要显式选择 Node。
+首次使用运行 `dubi init`，随后 `dubi server`；同一账号下直接运行 `dubi status`、`dubi doctor`、`dubi volume list`，不必反复传 Store 或服务地址。`init` 在 `~/.dubi/current.json` 记住当前 Store；服务 Ready 后记住实际监听地址。初始 Store 默认 `/var/lib/dubi`，也可在首次 `init` 时用 `--store` 指定；无需 YAML、节点 ID、Raft ID、成员列表或证书名称。多节点同机演示才需要显式选择 Node。
 
 未指定卷时，初始化会登记 `<store>/volume`；使用 `dubi init --volume <空目录> --volume <空目录>` 可直接选择多个外部卷，不创建默认卷目录。`dubi volume list` 查询持久登记与健康；`dubi volume add <空目录>` 追加卷，目前要求节点停止。StoreID/VolumeID 自动生成，重启保留；通用 Pack 已实现追加、校验读取、封存、崩溃恢复，以及按 Volume 统一的持久集合清单与自动滚动（不同 Capability 可混写同一 Pack）（见 [Pack 实现边界](docs/architecture/pack.md)）；Node Runtime 已装配带字节预约的多卷 Pack Pool，默认自动选卷、不新增配置。通用 capstate 已接通大值 Pack 落盘、本地引用/result/applied 原子发布，以及跨节点重建位置的 Raft 逻辑快照（见 [提交边界](docs/architecture/pack-state.md)）。内置 `record` 已提供最小写入器；节点内均衡和安全移除尚未实现。
 

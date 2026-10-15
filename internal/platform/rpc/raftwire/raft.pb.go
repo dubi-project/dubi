@@ -2114,6 +2114,7 @@ type CapabilityDataWriteResponse struct {
 	ConfirmationIndex uint64                 `protobuf:"varint,3,opt,name=confirmation_index,json=confirmationIndex,proto3" json:"confirmation_index,omitempty"`
 	RegionGeneration  uint64                 `protobuf:"varint,4,opt,name=region_generation,json=regionGeneration,proto3" json:"region_generation,omitempty"`
 	Error             string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	RequiredRegions   uint32                 `protobuf:"varint,6,opt,name=required_regions,json=requiredRegions,proto3" json:"required_regions,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -2181,6 +2182,13 @@ func (x *CapabilityDataWriteResponse) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *CapabilityDataWriteResponse) GetRequiredRegions() uint32 {
+	if x != nil {
+		return x.RequiredRegions
+	}
+	return 0
 }
 
 type CapabilityDataReadRequest struct {
@@ -2271,6 +2279,7 @@ type CapabilityDataReadHeader struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Reference        []byte                 `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	RegionGeneration uint64                 `protobuf:"varint,2,opt,name=region_generation,json=regionGeneration,proto3" json:"region_generation,omitempty"`
+	State            string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -2317,6 +2326,13 @@ func (x *CapabilityDataReadHeader) GetRegionGeneration() uint64 {
 		return x.RegionGeneration
 	}
 	return 0
+}
+
+func (x *CapabilityDataReadHeader) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
 }
 
 type CapabilityDataReadResponse struct {
@@ -3523,13 +3539,14 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"\x1aCapabilityDataWriteRequest\x12J\n" +
 	"\x06header\x18\x01 \x01(\v20.dubi.internal.raft.v1.CapabilityDataWriteHeaderH\x00R\x06header\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
-	"\apayload\"\xc3\x01\n" +
+	"\apayload\"\xee\x01\n" +
 	"\x1bCapabilityDataWriteResponse\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12\x1c\n" +
 	"\treference\x18\x02 \x01(\fR\treference\x12-\n" +
 	"\x12confirmation_index\x18\x03 \x01(\x04R\x11confirmationIndex\x12+\n" +
 	"\x11region_generation\x18\x04 \x01(\x04R\x10regionGeneration\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error\"\xca\x01\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\x12)\n" +
+	"\x10required_regions\x18\x06 \x01(\rR\x0frequiredRegions\"\xca\x01\n" +
 	"\x19CapabilityDataReadRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
@@ -3539,10 +3556,11 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"\n" +
 	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12!\n" +
 	"\froute_target\x18\x05 \x01(\fR\vrouteTarget\x12\x10\n" +
-	"\x03key\x18\x06 \x01(\fR\x03key\"e\n" +
+	"\x03key\x18\x06 \x01(\fR\x03key\"{\n" +
 	"\x18CapabilityDataReadHeader\x12\x1c\n" +
 	"\treference\x18\x01 \x01(\fR\treference\x12+\n" +
-	"\x11region_generation\x18\x02 \x01(\x04R\x10regionGeneration\"\x88\x01\n" +
+	"\x11region_generation\x18\x02 \x01(\x04R\x10regionGeneration\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\"\x88\x01\n" +
 	"\x1aCapabilityDataReadResponse\x12I\n" +
 	"\x06header\x18\x01 \x01(\v2/.dubi.internal.raft.v1.CapabilityDataReadHeaderH\x00R\x06header\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +

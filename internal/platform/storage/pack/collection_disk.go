@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"golang.org/x/sys/unix"
 )
 
@@ -142,7 +143,7 @@ func (m *Collection) initializePending(dir *os.Root, id string) (result error) {
 	if info.Size() > headerSize {
 		return errors.Join(ErrCorrupt, errors.New("pending Pack contains unexpected records"))
 	}
-	h := header{Scope: Scope{StoreID: m.catalog.StoreID, VolumeID: m.catalog.VolumeID, PackID: id}, Version: 2, TargetSize: m.catalog.TargetSize}
+	h := header{Scope: Scope{StoreID: m.catalog.StoreID, VolumeID: m.catalog.VolumeID, PackID: id}, Version: protocol.PackContainerFormatVersion, TargetSize: m.catalog.TargetSize}
 	if info.Size() == headerSize {
 		b := make([]byte, headerSize)
 		if _, err := file.ReadAt(b, 0); err != nil {

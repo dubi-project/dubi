@@ -30,6 +30,7 @@ type GeoWriteRequest struct {
 type GeoWrite struct {
 	Reference         capstate.RecordReference
 	ConfirmationIndex uint64
+	RegionGeneration  uint64
 	RequiredRegions   int
 }
 
@@ -139,7 +140,7 @@ func (w Writer) WriteGeo(ctx context.Context, request GeoWriteRequest) (GeoWrite
 	if hasPrior && prior.Claim.ReferenceRequestID == claim.ReferenceRequestID && prior.Claim.ReferenceIndex == claim.ReferenceIndex {
 		if current, err := CheckCommittedGeo(ctx, w.Barrier, w.Owner, request.Target, request.Descriptor, cut,
 			request.Plan, staged.Evidence, prior.RequestID, prior.Claim); err == nil {
-			return GeoWrite{Reference: ref, ConfirmationIndex: prior.Index, RequiredRegions: current.RequiredRegions}, nil
+			return GeoWrite{Reference: ref, ConfirmationIndex: prior.Index, RegionGeneration: localRegionGeneration(request.Plan, w.LocalID), RequiredRegions: current.RequiredRegions}, nil
 		}
 	}
 	confirmID, err := randomGeoConfirmationID()
@@ -167,7 +168,18 @@ func (w Writer) WriteGeo(ctx context.Context, request GeoWriteRequest) (GeoWrite
 	if err != nil {
 		return GeoWrite{}, err
 	}
-	return GeoWrite{Reference: ref, ConfirmationIndex: confirmation.Index, RequiredRegions: current.RequiredRegions}, nil
+	return GeoWrite{Reference: ref, ConfirmationIndex: confirmation.Index, RegionGeneration: localRegionGeneration(request.Plan, w.LocalID), RequiredRegions: current.RequiredRegions}, nil
+}
+
+func localRegionGeneration(plan placement.GeoPlan, localID uint64) uint64 {
+	for _, region := range plan.Regions() {
+		for _, node := range region.Nodes() {
+			if node.RaftID == localID {
+				return region.Generation
+			}
+		}
+	}
+	return 0
 }
 
 func randomGeoConfirmationID() (string, error) {

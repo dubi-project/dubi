@@ -161,3 +161,14 @@ func TestDeriveClusterHealthShowsRootMajorityAndRegions(t *testing.T) {
 		t.Fatal("local degradation was not carried into cluster status", got)
 	}
 }
+
+func TestApplyPeerRepairHealthSurfacesUnreachableAndDebt(t *testing.T) {
+	base := clusterHealthView{State: "available", RootQuorumConfirmed: true}
+	got := applyPeerRepairHealth(base, []peerRepairView{
+		{RaftID: 1, NodeID: "node-a", Reachable: true, RepairDebt: 2},
+		{RaftID: 2, NodeID: "node-b", Reachable: false, Error: "timeout"},
+	})
+	if got.State != "degraded" || len(got.Repairs) != 2 || len(got.Reasons) != 2 {
+		t.Fatalf("peer repair observations were not reflected: %+v", got)
+	}
+}

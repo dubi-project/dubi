@@ -36,6 +36,7 @@ type LocalRead struct {
 	Body             []byte
 	Reference        capstate.RecordReference
 	RegionGeneration uint64
+	State            string
 }
 
 func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte) (LocalRead, error) {
@@ -109,5 +110,5 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 	if err != nil {
 		return LocalRead{}, err
 	}
-	return LocalRead{Body: body, Reference: final.Reference, RegionGeneration: final.Plan.Generation}, nil
+	return LocalRead{Body: body, Reference: final.Reference, RegionGeneration: final.Plan.Generation, State: "local_ready"}, nil
 }

@@ -2,6 +2,8 @@
 
 这些是内部默认保护，不要求用户逐节点配置。它们限制参与预算的工作，不是对整个进程 RSS、所有 IO 或 gRPC 接入连接数的承诺。完整 P02 仍未完成。
 
+数据入口现在还有一个统一的请求字节预算，默认 128 MiB，覆盖 Record 读写及 Dataset 等 Node-authenticated 数据请求，从准入开始持有到响应完成。预算满立即返回 `ResourceExhausted`，不会排队，也不会降低数据多数门槛。`dubi status` 的 `local_repair.request_budget` 展示当前、峰值和拒绝次数；这是进程内背压指标，不是对外租户限流或全进程 RSS 上限。
+
 Volume 迁移和 Pack 重写共用节点维护门禁：同一节点同时只运行一个 Volume/Pack 维护操作，维护工作最多预约 128 MiB 的保留字节。预算耗尽会让后台稍后续跑或让显式维护命令返回忙碌，不会降低前台数据写入的多数要求。`status` 会报告维护预算的当前/峰值占用和拒绝次数。
 
 不可变记录组件已由正式 Runtime 持有，限制 Key 4 KiB、载荷 64 MiB、登记文件 4 KiB、索引项 16 KiB；每个 Store 串行执行 Pack/索引操作，在进入锁后才复制载荷，避免等待调用各保留一份 staging。摘要及身份先检查固定长度再解码。父级沿用至多 1 MiB 的 Store 清单读取边界，当前必需资源只有记录索引。该限制不包含调用者自身缓冲、Pebble/Pack 编码、返回载荷或全局 RPC 解码内存，也不是公平调度/全局 IO 预算。后续数据入口仍须统一准入；见[不可变记录](../architecture/immutable-records.md)。

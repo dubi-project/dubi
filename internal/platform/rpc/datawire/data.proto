@@ -24,7 +24,12 @@ message PutRecordRequest {
   bytes key = 6;
   bytes value = 7;
 }
-message PutRecordResponse { uint64 applied_index = 1; }
+message PutRecordResponse {
+  uint64 applied_index = 1;
+  string state = 2;
+  uint64 confirmation_index = 3;
+  uint64 region_generation = 4;
+}
 message GetRecordRequest {
   string cluster_id = 1;
   uint64 from_raft_id = 2;
@@ -36,6 +41,8 @@ message GetRecordResponse {
   bool found = 1;
   bytes value = 2;
   uint64 confirmed_index = 3;
+  string state = 4;
+  uint64 region_generation = 5;
 }
 message CreateTenantTokenRequest {
   string cluster_id = 1;
@@ -115,6 +122,10 @@ message LocalRepairStatusResponse {
   ResourceBudgetStatus maintenance_budget = 7;
   uint64 geo_metadata_debt = 8;
   uint64 geo_record_debt = 9;
+  string node_id = 10;
+  uint64 raft_id = 11;
+  ResourceBudgetStatus request_budget = 12;
+  repeated VolumeHealthStatus volumes = 13;
 }
 message VolumeMigrationStatus {
   bool active = 1;
@@ -133,6 +144,12 @@ message ResourceBudgetStatus {
   uint64 used_bytes = 2;
   uint64 peak_bytes = 3;
   uint64 rejected = 4;
+}
+message VolumeHealthStatus {
+  string volume_id = 1;
+  string state = 2;
+  string health = 3;
+  string error = 4;
 }
 service DataService {
   rpc CreateDataset(CreateDatasetRequest) returns (CreateDatasetResponse);
@@ -153,4 +170,8 @@ service DataService {
   rpc CompactStore(CompactStoreRequest) returns (CompactStoreResponse);
   // Last observed local repair errors, not a global coverage or durability proof.
   rpc LocalRepairStatus(LocalRepairStatusRequest) returns (LocalRepairStatusResponse);
+  // A current Root member may inspect this Node's bounded repair/maintenance
+  // state. The response is still local to the serving Node; it is not a
+  // cluster-wide durability proof.
+  rpc ClusterRepairStatus(LocalRepairStatusRequest) returns (LocalRepairStatusResponse);
 }

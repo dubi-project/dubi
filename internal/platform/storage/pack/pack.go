@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 	"golang.org/x/sys/unix"
 )
@@ -64,7 +65,7 @@ func open(registry *volume.Registry, volumeID, id string, target int64, mode ope
 	if registry == nil || !idPattern.MatchString(id) {
 		return nil, errors.New("invalid registry or PackID")
 	}
-	p := &Pack{registry: registry, header: header{Scope: Scope{VolumeID: volumeID, PackID: id}, Version: 2, TargetSize: target}}
+	p := &Pack{registry: registry, header: header{Scope: Scope{VolumeID: volumeID, PackID: id}, Version: protocol.PackContainerFormatVersion, TargetSize: target}}
 	err := registry.WithVolume(volumeID, !mode.sealedRead, func(root *os.Root, storeID string) error {
 		p.header.StoreID = storeID
 		if err := rejectLegacyLayout(root); err != nil {
@@ -133,7 +134,7 @@ func open(registry *volume.Registry, volumeID, id string, target int64, mode ope
 		if err := decodeDocument(b, "DUBIPK02", &saved); err != nil {
 			return err
 		}
-		if saved.Scope != p.header.Scope || saved.Version != 2 || saved.TargetSize <= headerSize || saved.TargetSize > MaxTargetSize {
+		if saved.Scope != p.header.Scope || saved.Version != protocol.PackContainerFormatVersion || saved.TargetSize <= headerSize || saved.TargetSize > MaxTargetSize {
 			return ErrCorrupt
 		}
 		p.header = saved

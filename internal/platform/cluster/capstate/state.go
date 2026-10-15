@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/storage/pack"
@@ -25,7 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const FormatVersion = 7
+const FormatVersion = protocol.CapabilityStateFormatVersion
 
 var ErrRequestIDReused = errors.New("capability RequestID was reused for a different command")
 

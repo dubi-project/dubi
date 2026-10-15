@@ -13,6 +13,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/node"
+	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -50,6 +51,7 @@ const (
 	// may already have committed after an ACK was lost; retry the RequestID.
 	WritePublishedUnconfirmed WriteState = "published_unconfirmed"
 	WriteLocalReady           WriteState = "local_ready"
+	WriteGeoReady             WriteState = "geo_ready"
 )
 
 type WriteResult struct {
@@ -62,16 +64,21 @@ type WriteResult struct {
 // application authentication belongs to a separate external boundary: the
 // in-process caller must already be authorized to use its Keyspace.
 type Service struct {
-	runtime *node.Runtime
-	client  *raftrpc.GroupClient
+	runtime  *node.Runtime
+	client   *raftrpc.GroupClient
+	geoRetry *recordwrite.GeoMetadataRetryStore
 }
 
 func New(runtime *node.Runtime, client *raftrpc.GroupClient) (*Service, error) {
+	return NewWithGeoRetry(runtime, client, nil)
+}
+
+func NewWithGeoRetry(runtime *node.Runtime, client *raftrpc.GroupClient, geoRetry *recordwrite.GeoMetadataRetryStore) (*Service, error) {
 	if runtime == nil || runtime.Host == nil || runtime.Root == nil || runtime.Capabilities == nil ||
 		runtime.Records == nil || runtime.Identity.RaftID == 0 || runtime.Identity.NodeID == "" || client == nil {
 		return nil, errors.New("capability data entry requires a complete local Node and Group client")
 	}
-	return &Service{runtime: runtime, client: client}, nil
+	return &Service{runtime: runtime, client: client, geoRetry: geoRetry}, nil
 }
 
 // Write is the any-Node entry. A forwarded request carries the same stable
@@ -232,7 +239,22 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Capabi
 				return err
 			}
 			return service.runtime.Host.Submit(groupID, command)
-		}}
+		}, MirrorGeo: service.client, MirrorRetry: service.geoRetry}
+	if geo, err := service.geoPlan(ctx, request.Target); err != nil {
+		return result, err
+	} else if geo != nil {
+		written, err := writer.WriteGeoFromRange(ctx, recordwrite.WriteRequest{RequestID: request.RequestID,
+			Target: request.Target, Descriptor: request.Descriptor, Body: request.Body, Payload: request.Payload}, 16, 256)
+		if err != nil {
+			if service.currentPublication(ctx, owner, request.Target, request.Descriptor, request.RequestID) {
+				result.State = string(WritePublishedUnconfirmed)
+			}
+			return result, err
+		}
+		result.State, result.Reference, result.ConfirmationIndex, result.RegionGeneration, result.RequiredRegions =
+			string(WriteGeoReady), written.Reference, written.ConfirmationIndex, written.RegionGeneration, written.RequiredRegions
+		return result, nil
+	}
 	ready, err := writer.WriteLocal(ctx, recordwrite.WriteRequest{RequestID: request.RequestID,
 		Target: request.Target, Descriptor: request.Descriptor, Body: request.Body, Payload: request.Payload})
 	if err != nil {
@@ -244,6 +266,31 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Capabi
 	result.State, result.Reference, result.ConfirmationIndex, result.RegionGeneration =
 		string(WriteLocalReady), ready.Reference, ready.ConfirmationIndex, ready.RegionGeneration
 	return result, nil
+}
+
+// geoPlan returns a plan only when the confirmed local Region is too small to
+// make a standalone local-majority promise. The plan is obtained at a Root
+// read cut; the Writer rechecks it while staging every Region.
+func (service *Service) geoPlan(ctx context.Context, target router.Target) (*placement.GeoPlan, error) {
+	progress, ready, err := service.runtime.Root.RegionProgress(target.OwnerGroupID)
+	if err != nil {
+		return nil, err
+	}
+	if !ready || !progress.Eligible || progress.Pending != nil || len(progress.Current.Nodes) >= 3 {
+		return nil, nil
+	}
+	_, plan, err := placement.ReadRangeGeoPlan(ctx, service.runtime.Host, service.runtime.Root, target.RangeID, 16, 256)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := placement.SelectWritePolicy(len(progress.Current.Nodes), len(plan.Regions()))
+	if err != nil {
+		return nil, err
+	}
+	if !policy.RequiresGeoReady() {
+		return nil, nil
+	}
+	return &plan, nil
 }
 
 func (service *Service) Read(ctx context.Context, keyspace rootstate.Keyspace, key []byte) (recordwrite.LocalRead, error) {
@@ -298,7 +345,7 @@ func (service *Service) read(ctx context.Context, keyspace rootstate.Keyspace, k
 		}
 		return recordwrite.LocalRead{}, errors.Join(err, routeErr)
 	}
-	return recordwrite.LocalRead{Body: got.Body, Reference: got.Reference, RegionGeneration: got.RegionGeneration}, nil
+	return recordwrite.LocalRead{Body: got.Body, Reference: got.Reference, RegionGeneration: got.RegionGeneration, State: got.State}, nil
 }
 
 func (service *Service) forwardRead(ctx context.Context, target router.Target, key []byte) (recordwrite.LocalRead, error) {
@@ -331,7 +378,7 @@ func (service *Service) forwardRead(ctx context.Context, target router.Target, k
 		done()
 		if err == nil {
 			return recordwrite.LocalRead{Body: response.Body, Reference: response.Reference,
-				RegionGeneration: response.RegionGeneration}, nil
+				RegionGeneration: response.RegionGeneration, State: response.State}, nil
 		}
 		last = err
 	}
@@ -380,10 +427,15 @@ func (service *Service) ExecuteRead(ctx context.Context, target router.Target, k
 		Store: service.runtime.Records, Observer: service.client, Fetcher: service.client}
 	got, err := reader.ReadLocal(ctx, target, key)
 	if err != nil {
-		return raftrpc.CapabilityDataReadResult{}, err
+		geo, geoErr := reader.ReadGeo(ctx, target, key, 16, 256)
+		if geoErr == nil {
+			return raftrpc.CapabilityDataReadResult{Body: geo.Body, Reference: geo.Reference,
+				RegionGeneration: geo.RegionGeneration, State: geo.State}, nil
+		}
+		return raftrpc.CapabilityDataReadResult{}, errors.Join(err, geoErr)
 	}
 	return raftrpc.CapabilityDataReadResult{Body: got.Body, Reference: got.Reference,
-		RegionGeneration: got.RegionGeneration}, nil
+		RegionGeneration: got.RegionGeneration, State: got.State}, nil
 }
 
 func (service *Service) resolveTarget(ctx context.Context, keyspace rootstate.Keyspace, key []byte) (router.Target, error) {

@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/config"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	identityenrollment "github.com/dubi-project/dubi/internal/platform/identity/enrollment"
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/rpc/datawire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
@@ -36,6 +38,7 @@ type localRepairView struct {
 	VolumeMigration   *volumeMigrationView   `json:"volume_migration,omitempty"`
 	VolumeWriteErrors []volumeWriteIssueView `json:"volume_write_errors,omitempty"`
 	MaintenanceBudget *resourceBudgetView    `json:"maintenance_budget,omitempty"`
+	RequestBudget     *resourceBudgetView    `json:"request_budget,omitempty"`
 	GeoMetadataDebt   uint64                 `json:"geo_metadata_debt"`
 	GeoRecordDebt     uint64                 `json:"geo_record_debt"`
 }
@@ -84,6 +87,7 @@ type clusterHealthView struct {
 	RootVoters          int                `json:"root_voters"`
 	RootQuorum          int                `json:"root_quorum"`
 	Regions             []regionHealthView `json:"regions"`
+	Repairs             []peerRepairView   `json:"repair_observations,omitempty"`
 	Reasons             []string           `json:"reasons,omitempty"`
 }
 
@@ -91,6 +95,38 @@ type regionHealthView struct {
 	Region     string `json:"region"`
 	Nodes      int    `json:"nodes"`
 	RootVoters int    `json:"root_voters"`
+}
+
+type peerRepairView struct {
+	RaftID           uint64           `json:"raft_id"`
+	NodeID           string           `json:"node_id"`
+	Reachable        bool             `json:"reachable"`
+	Error            string           `json:"error,omitempty"`
+	RepairDebt       uint32           `json:"repair_debt,omitempty"`
+	GeoDebt          uint64           `json:"geo_debt,omitempty"`
+	WriteQuarantines uint32           `json:"write_quarantines,omitempty"`
+	Volumes          []peerVolumeView `json:"volumes,omitempty"`
+}
+
+type peerVolumeView struct {
+	ID     string `json:"id"`
+	State  string `json:"state"`
+	Health string `json:"health"`
+	Error  string `json:"error,omitempty"`
+}
+
+// statusReport is the shared wire shape for status and doctor. Keeping the
+// report named lets doctor consume exactly the same authenticated observations
+// without implementing a second cluster probe with different guarantees.
+type statusReport struct {
+	ObservedNodeID    string            `json:"observed_node_id"`
+	Root              rootjoin.View     `json:"root"`
+	Cluster           clusterHealthView `json:"cluster"`
+	Health            localHealthView   `json:"health"`
+	LocalStorage      *volume.Report    `json:"local_storage,omitempty"`
+	LocalStorageError string            `json:"local_storage_error,omitempty"`
+	LocalRepair       *localRepairView  `json:"local_repair,omitempty"`
+	LocalRepairError  string            `json:"local_repair_error,omitempty"`
 }
 
 func deriveClusterHealth(view rootjoin.View, local localHealthView, rootQuorumConfirmed bool) clusterHealthView {
@@ -128,6 +164,93 @@ func deriveClusterHealth(view rootjoin.View, local localHealthView, rootQuorumCo
 		result.Reasons = append(result.Reasons, local.Reasons...)
 	}
 	return result
+}
+
+func applyPeerRepairHealth(cluster clusterHealthView, observations []peerRepairView) clusterHealthView {
+	cluster.Repairs = observations
+	for _, observation := range observations {
+		if !observation.Reachable {
+			cluster.State = "degraded"
+			cluster.Reasons = append(cluster.Reasons, fmt.Sprintf("Node %s repair status is unreachable", observation.NodeID))
+			continue
+		}
+		if observation.Error != "" {
+			cluster.State = "degraded"
+			cluster.Reasons = append(cluster.Reasons, fmt.Sprintf("Node %s: %s", observation.NodeID, observation.Error))
+		}
+		if debt := uint64(observation.RepairDebt) + observation.GeoDebt + uint64(observation.WriteQuarantines); debt != 0 {
+			cluster.State = "degraded"
+			cluster.Reasons = append(cluster.Reasons, fmt.Sprintf("Node %s has %d repair/maintenance debt item(s)", observation.NodeID, debt))
+		}
+	}
+	return cluster
+}
+
+func probePeerRepairs(ctx context.Context, id identity.Identity, clientTLS *tls.Config, view rootjoin.View) []peerRepairView {
+	observations := make([]peerRepairView, 0, len(view.Peers))
+	for _, peerNode := range view.Peers {
+		observation := peerRepairView{RaftID: peerNode.RaftID, NodeID: peerNode.NodeID}
+		if identityenrollment.ValidateNodeAddress(peerNode.Address) != nil {
+			observation.Error = "Root member has no valid address"
+			observations = append(observations, observation)
+			continue
+		}
+		conn, err := grpc.NewClient("passthrough:///"+peerNode.Address,
+			grpc.WithTransportCredentials(tlscredentials.NewTLS(clientTLS)),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(rootjoinrpc.MaxResponseSize), grpc.MaxCallSendMsgSize(rootjoinrpc.MaxRequestSize)))
+		if err != nil {
+			observation.Error = err.Error()
+			observations = append(observations, observation)
+			continue
+		}
+		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+		var actual peer.Peer
+		response, callErr := datawire.NewDataServiceClient(conn).ClusterRepairStatus(probe,
+			&datawire.LocalRepairStatusRequest{ClusterId: id.ClusterID, FromRaftId: id.RaftID}, grpc.Peer(&actual))
+		cancel()
+		_ = conn.Close()
+		if callErr != nil {
+			observation.Error = callErr.Error()
+			observations = append(observations, observation)
+			continue
+		}
+		info, ok := actual.AuthInfo.(credentials.TLSInfo)
+		if !ok || len(info.State.VerifiedChains) == 0 || len(info.State.PeerCertificates) == 0 {
+			observation.Error = "peer response has no verified Node TLS identity"
+			observations = append(observations, observation)
+			continue
+		}
+		remote, parseErr := identity.ParseNodeCertificate(info.State.PeerCertificates[0])
+		if parseErr != nil || remote.ClusterID != id.ClusterID || remote.RaftID != peerNode.RaftID || remote.NodeID != peerNode.NodeID {
+			observation.Error = "peer response certificate differs from Root membership"
+			observations = append(observations, observation)
+			continue
+		}
+		if response == nil || response.GetNodeId() != peerNode.NodeID || response.GetRaftId() != peerNode.RaftID ||
+			len(response.GetIssues()) > 64 || len(response.GetVolumeWriteErrors()) > 64 {
+			observation.Error = "peer returned invalid repair status"
+			observations = append(observations, observation)
+			continue
+		}
+		observation.Reachable = true
+		observation.RepairDebt = response.GetTotalIssues()
+		observation.GeoDebt = response.GetGeoMetadataDebt() + response.GetGeoRecordDebt()
+		observation.WriteQuarantines = uint32(len(response.GetVolumeWriteErrors()))
+		for _, volume := range response.GetVolumes() {
+			if volume == nil {
+				observation.Error = "peer returned an invalid Volume status"
+				observation.Reachable = false
+				observations = append(observations, observation)
+				continue
+			}
+			observation.Volumes = append(observation.Volumes, peerVolumeView{ID: volume.GetVolumeId(), State: volume.GetState(), Health: volume.GetHealth(), Error: volume.GetError()})
+			if volume.GetHealth() != "healthy" {
+				observation.Error = "peer has an unhealthy Volume"
+			}
+		}
+		observations = append(observations, observation)
+	}
+	return observations
 }
 
 func deriveLocalHealth(storage *volume.Report, storageErr string, repair *localRepairView, repairErr string) localHealthView {
@@ -225,6 +348,10 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
+	if err := (protocol.Advertisement{ProtocolMin: int(response.GetProtocolMin()), ProtocolMax: int(response.GetProtocolMax()),
+		StateFormat: int(response.GetStateFormat()), PackFormat: int(response.GetPackFormat()), RecordIndex: int(response.GetRecordIndex())}).Validate(); err != nil {
+		return fmt.Errorf("incompatible Root protocol or durable format: %w", err)
+	}
 	view, err := rootjoinrpc.DecodeView(response.GetView(), id.ClusterID)
 	if err != nil {
 		return fmt.Errorf("invalid live Root view: %w", err)
@@ -296,6 +423,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			if budget := response.GetMaintenanceBudget(); budget != nil {
 				repair.MaintenanceBudget = &resourceBudgetView{LimitBytes: budget.GetLimitBytes(), UsedBytes: budget.GetUsedBytes(), PeakBytes: budget.GetPeakBytes(), Rejected: budget.GetRejected()}
 			}
+			if budget := response.GetRequestBudget(); budget != nil {
+				repair.RequestBudget = &resourceBudgetView{LimitBytes: budget.GetLimitBytes(), UsedBytes: budget.GetUsedBytes(), PeakBytes: budget.GetPeakBytes(), Rejected: budget.GetRejected()}
+			}
 			repair.GeoMetadataDebt = response.GetGeoMetadataDebt()
 			repair.GeoRecordDebt = response.GetGeoRecordDebt()
 			for _, issue := range response.GetIssues() {
@@ -312,15 +442,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	encoder.SetIndent("", "  ")
 	health := deriveLocalHealth(storage, storageError, repair, repairError)
 	cluster := deriveClusterHealth(view, health, true)
-	return encoder.Encode(struct {
-		ObservedNodeID    string            `json:"observed_node_id"`
-		Root              rootjoin.View     `json:"root"`
-		Cluster           clusterHealthView `json:"cluster"`
-		Health            localHealthView   `json:"health"`
-		LocalStorage      *volume.Report    `json:"local_storage,omitempty"`
-		LocalStorageError string            `json:"local_storage_error,omitempty"`
-		LocalRepair       *localRepairView  `json:"local_repair,omitempty"`
-		LocalRepairError  string            `json:"local_repair_error,omitempty"`
-	}{ObservedNodeID: remote.NodeID, Root: view, Cluster: cluster, Health: health, LocalStorage: storage, LocalStorageError: storageError,
+	cluster = applyPeerRepairHealth(cluster, probePeerRepairs(ctx, id, clientTLS, view))
+	return encoder.Encode(statusReport{ObservedNodeID: remote.NodeID, Root: view, Cluster: cluster, Health: health, LocalStorage: storage, LocalStorageError: storageError,
 		LocalRepair: repair, LocalRepairError: repairError})
 }

@@ -10,13 +10,12 @@ import (
 
 	"github.com/dubi-project/dubi/internal/capability/record"
 	"github.com/dubi-project/dubi/internal/platform/auth"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/capabilitydata"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rangebootstrap"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordrepair"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regiongroups"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
-	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -35,15 +34,16 @@ import (
 // authorization belongs to a later public API and is deliberately not implied.
 type dataService struct {
 	datawire.UnimplementedDataServiceServer
-	runtime     *node.Runtime
-	client      *raftrpc.GroupClient
-	routes      *raftrpc.RootDirectory
-	slots       chan struct{}
-	volumeSlots chan struct{}
-	maintenance *resource.ByteBudget
-	geoRetry    *recordwrite.GeoMetadataRetryStore
-	geoRecords  *recordrepair.GeoRecordRepairStore
-	repair      *liveRecordRepair
+	runtime       *node.Runtime
+	client        *raftrpc.GroupClient
+	routes        *raftrpc.RootDirectory
+	slots         chan struct{}
+	volumeSlots   chan struct{}
+	maintenance   *resource.ByteBudget
+	requestBudget *resource.ByteBudget
+	geoRetry      *recordwrite.GeoMetadataRetryStore
+	geoRecords    *recordrepair.GeoRecordRepairStore
+	repair        *liveRecordRepair
 }
 
 const maxDemoRecordBytes = 1 << 20
@@ -273,6 +273,39 @@ func (s *dataService) LocalRepairStatus(ctx context.Context, request *datawire.L
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
+	return s.localRepairStatusResponse()
+}
+
+// ClusterRepairStatus is the peer-facing diagnostic path. A current Root
+// member may ask this Node for its own bounded state; the serving Node's
+// certificate and response identity remain authoritative for this report.
+func (s *dataService) ClusterRepairStatus(ctx context.Context, request *datawire.LocalRepairStatusRequest) (*datawire.LocalRepairStatusResponse, error) {
+	if request == nil || proto.Size(request) > 4096 || request.GetFromRaftId() == 0 || request.GetClusterId() != s.runtime.Identity.ClusterID {
+		return nil, status.Error(codes.InvalidArgument, "invalid cluster repair status request")
+	}
+	leaf, err := identity.VerifiedPeerCertificate(ctx, time.Now())
+	if err != nil {
+		return nil, status.Error(codes.PermissionDenied, "verified Node certificate required")
+	}
+	caller, err := identity.ParseNodeCertificate(leaf)
+	if err != nil || caller.ClusterID != s.runtime.Identity.ClusterID || caller.RaftID != request.GetFromRaftId() {
+		return nil, status.Error(codes.PermissionDenied, "cluster repair status caller identity mismatch")
+	}
+	if _, err := s.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "confirm Root membership: %v", err)
+	}
+	member, found, err := s.runtime.Root.RootMember(caller.RaftID)
+	if err != nil || !found || member.NodeID != caller.NodeID {
+		return nil, status.Error(codes.PermissionDenied, "cluster repair status caller is not a current Root member")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	return s.localRepairStatusResponse()
+}
+
+func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusResponse, error) {
+	local := s.runtime.Identity
 	var response *datawire.LocalRepairStatusResponse
 	if s.repair == nil {
 		response = &datawire.LocalRepairStatusResponse{}
@@ -297,9 +330,27 @@ func (s *dataService) LocalRepairStatus(ctx context.Context, request *datawire.L
 			response.VolumeWriteErrors = append(response.VolumeWriteErrors, &datawire.VolumeWriteIssue{VolumeId: volumeID, Error: message})
 		}
 	}
+	if s.runtime.Volumes != nil {
+		report, err := s.runtime.Volumes.Status()
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "read Volume health: %v", err)
+		}
+		for _, item := range report.Volumes {
+			if len(response.Volumes) >= 64 {
+				break
+			}
+			response.Volumes = append(response.Volumes, &datawire.VolumeHealthStatus{VolumeId: item.ID,
+				State: string(item.State), Health: item.Health, Error: item.Error})
+		}
+	}
 	if s.maintenance != nil {
 		budget := s.maintenance.Status()
 		response.MaintenanceBudget = &datawire.ResourceBudgetStatus{LimitBytes: budget.LimitBytes,
+			UsedBytes: budget.UsedBytes, PeakBytes: budget.PeakBytes, Rejected: budget.Rejected}
+	}
+	if s.requestBudget != nil {
+		budget := s.requestBudget.Status()
+		response.RequestBudget = &datawire.ResourceBudgetStatus{LimitBytes: budget.LimitBytes,
 			UsedBytes: budget.UsedBytes, PeakBytes: budget.PeakBytes, Rejected: budget.Rejected}
 	}
 	if s.geoRetry != nil {
@@ -316,6 +367,8 @@ func (s *dataService) LocalRepairStatus(ctx context.Context, request *datawire.L
 		}
 		response.GeoRecordDebt = uint64(len(entries))
 	}
+	response.NodeId = local.NodeID
+	response.RaftId = local.RaftID
 	return response, nil
 }
 
@@ -339,7 +392,7 @@ func encodeRepairStatus(observation repairObservation) *datawire.LocalRepairStat
 func newDataService(runtime *node.Runtime, client *raftrpc.GroupClient, routes *raftrpc.RootDirectory) *dataService {
 	return &dataService{runtime: runtime, client: client, routes: routes,
 		slots: make(chan struct{}, 8), volumeSlots: make(chan struct{}, 1),
-		maintenance: resource.NewByteBudget(128 << 20)}
+		maintenance: resource.NewByteBudget(128 << 20), requestBudget: resource.NewByteBudget(128 << 20)}
 }
 
 func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, size int) (context.Context, func(), error) {
@@ -349,7 +402,17 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 	select {
 	case s.slots <- struct{}{}:
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		release := func() { cancel(); <-s.slots }
+		budgetRelease := func() {}
+		if s.requestBudget != nil {
+			var err error
+			budgetRelease, err = s.requestBudget.TryAcquire(uint64(max(size, 1)))
+			if err != nil {
+				cancel()
+				<-s.slots
+				return nil, nil, status.Error(codes.ResourceExhausted, "data request buffers are busy")
+			}
+		}
+		release := func() { budgetRelease(); cancel(); <-s.slots }
 		if cluster != s.runtime.Identity.ClusterID || raftID == 0 {
 			release()
 			return nil, nil, status.Error(codes.PermissionDenied, "data request belongs to a different Cluster")
@@ -585,56 +648,20 @@ func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecord
 		return nil, err
 	}
 	defer release()
-	target, err := s.target(ctx, request.TenantId, request.DatasetId, request.Key)
+	entry, err := capabilitydata.NewWithGeoRetry(s.runtime, s.client, s.geoRetry)
 	if err != nil {
-		return nil, err
+		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
 	}
-	payload, err := record.PutPayload(request.Value)
+	keyspace := rootstate.Keyspace{TenantID: request.TenantId, CapabilityID: record.CapabilityID, DatasetID: request.DatasetId}
+	result, err := entry.Write(ctx, capabilitydata.WriteRequest{RequestID: request.RequestId, Keyspace: keyspace,
+		Key: request.Key, Body: request.Value, Publish: func(descriptor records.Descriptor) ([]byte, error) {
+			return record.ReferencePutPayload(descriptor)
+		}})
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, status.Errorf(codes.FailedPrecondition, "write Record with physical majority: %v", err)
 	}
-	encoded, err := routedstate.EncodeMutation(request.RequestId, target, payload)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "encode Record mutation: %v", err)
-	}
-	var result capstate.Result
-	if state, found := s.runtime.Capabilities.Resolve(target.OwnerGroupID); found {
-		if err := s.runtime.Host.Submit(target.OwnerGroupID, encoded); err != nil {
-			return nil, status.Errorf(codes.Unavailable, "submit Record: %v", err)
-		}
-		ticker := time.NewTicker(10 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			if _, err := s.runtime.Host.ReadIndex(ctx, target.OwnerGroupID); err != nil {
-				return nil, status.Errorf(codes.Unavailable, "confirm Record: %v", err)
-			}
-			result, found, err = state.ResultForMutation(request.RequestId, target, payload)
-			if err != nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "read Record result: %v", err)
-			}
-			if found {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return nil, status.FromContextError(ctx.Err()).Err()
-			case <-ticker.C:
-			}
-		}
-	} else {
-		remote, err := s.client.RoutedCapability(target.OwnerGroupID)
-		if err != nil {
-			return nil, status.Errorf(codes.Unavailable, "route Record: %v", err)
-		}
-		result, err = remote.Mutate(ctx, encoded)
-		if err != nil {
-			return nil, status.Errorf(codes.Unavailable, "mutate Record: %v", err)
-		}
-	}
-	if !result.Applied || result.Error != "" {
-		return nil, status.Errorf(codes.FailedPrecondition, "Record rejected: %s", result.Error)
-	}
-	return &datawire.PutRecordResponse{AppliedIndex: result.Index}, nil
+	return &datawire.PutRecordResponse{AppliedIndex: result.Local.Reference.Index, State: string(result.State),
+		ConfirmationIndex: result.Local.ConfirmationIndex, RegionGeneration: result.Local.RegionGeneration}, nil
 }
 
 func (s *dataService) GetRecord(ctx context.Context, request *datawire.GetRecordRequest) (*datawire.GetRecordResponse, error) {
@@ -646,29 +673,22 @@ func (s *dataService) GetRecord(ctx context.Context, request *datawire.GetRecord
 		return nil, err
 	}
 	defer release()
-	target, err := s.target(ctx, request.TenantId, request.DatasetId, request.Key)
+	entry, err := capabilitydata.NewWithGeoRetry(s.runtime, s.client, s.geoRetry)
 	if err != nil {
-		return nil, err
+		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
 	}
-	var outcome capstate.Outcome
-	var index uint64
-	if state, found := s.runtime.Capabilities.Resolve(target.OwnerGroupID); found {
-		outcome, index, err = state.QueryRouted(ctx, s.runtime.Host, target, record.ReadPayload())
-	} else {
-		remote, routeErr := s.client.RoutedCapability(target.OwnerGroupID)
-		if routeErr != nil {
-			return nil, status.Errorf(codes.Unavailable, "route Record: %v", routeErr)
+	keyspace := rootstate.Keyspace{TenantID: request.TenantId, CapabilityID: record.CapabilityID, DatasetID: request.DatasetId}
+	read, err := entry.Read(ctx, keyspace, request.Key)
+	if err != nil {
+		if errors.Is(err, router.ErrNoRoute) {
+			return &datawire.GetRecordResponse{State: "not_found"}, nil
 		}
-		outcome, index, err = remote.Read(ctx, target, record.ReadPayload())
+		return nil, status.Errorf(codes.Unavailable, "read Record with physical majority: %v", err)
 	}
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "read Record: %v", err)
+	state := read.State
+	if state == "" {
+		state = "local_ready"
 	}
-	if outcome.Rejection == record.NotFound {
-		return &datawire.GetRecordResponse{ConfirmedIndex: index}, nil
-	}
-	if outcome.Rejection != "" {
-		return nil, status.Errorf(codes.FailedPrecondition, "Record read rejected: %s", outcome.Rejection)
-	}
-	return &datawire.GetRecordResponse{Found: true, Value: outcome.Value, ConfirmedIndex: index}, nil
+	return &datawire.GetRecordResponse{Found: true, Value: read.Body, ConfirmedIndex: read.Reference.Index,
+		State: state, RegionGeneration: read.RegionGeneration}, nil
 }

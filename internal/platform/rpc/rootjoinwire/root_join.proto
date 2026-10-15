@@ -37,7 +37,14 @@ message JoinRootResponse {
   // Zero means redirect/retry, not permission to start a new Root group.
   uint64 admitted_index = 2;
 }
-message DiscoverRootResponse { RootView view = 1; }
+message DiscoverRootResponse {
+  RootView view = 1;
+  uint32 protocol_min = 2;
+  uint32 protocol_max = 3;
+  uint32 state_format = 4;
+  uint32 pack_format = 5;
+  uint32 record_index = 6;
+}
 service RootJoinService {
   rpc JoinRoot(JoinRootRequest) returns (JoinRootResponse);
   rpc DiscoverRoot(DiscoverRootRequest) returns (DiscoverRootResponse);

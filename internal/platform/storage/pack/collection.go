@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 	"golang.org/x/sys/unix"
 )
@@ -140,7 +141,7 @@ func openCollectionMode(registry *volume.Registry, volumeID string, target int64
 			if size == 0 {
 				size = DefaultTargetSize
 			}
-			m.catalog = catalog{collectionIdentity: collectionIdentity{StoreID: storeID, VolumeID: volumeID, CollectionID: "set_" + id[5:]}, Version: 2, TargetSize: size, Packs: []string{}}
+			m.catalog = catalog{collectionIdentity: collectionIdentity{StoreID: storeID, VolumeID: volumeID, CollectionID: "set_" + id[5:]}, Version: protocol.PackCatalogFormatVersion, TargetSize: size, Packs: []string{}}
 			if err := writeDocument(dir, catalogName, "DUBICS02", m.catalog, true); err != nil {
 				return err
 			}
@@ -176,7 +177,7 @@ func openCollectionMode(registry *volume.Registry, volumeID string, target int64
 }
 
 func validateCatalog(c catalog) error {
-	if c.Version != 2 || c.TargetSize <= headerSize || c.TargetSize > MaxTargetSize || len(c.Packs) > maxCollectionPacks || !strings.HasPrefix(c.CollectionID, "set_") || !idPattern.MatchString("pack_"+strings.TrimPrefix(c.CollectionID, "set_")) {
+	if c.Version != protocol.PackCatalogFormatVersion || c.TargetSize <= headerSize || c.TargetSize > MaxTargetSize || len(c.Packs) > maxCollectionPacks || !strings.HasPrefix(c.CollectionID, "set_") || !idPattern.MatchString("pack_"+strings.TrimPrefix(c.CollectionID, "set_")) {
 		return ErrCorrupt
 	}
 	seen := make(map[string]bool, len(c.Packs)+1)

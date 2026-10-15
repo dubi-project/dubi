@@ -19,16 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataService_CreateDataset_FullMethodName     = "/dubi.internal.data.v1.DataService/CreateDataset"
-	DataService_PutRecord_FullMethodName         = "/dubi.internal.data.v1.DataService/PutRecord"
-	DataService_GetRecord_FullMethodName         = "/dubi.internal.data.v1.DataService/GetRecord"
-	DataService_CreateTenantToken_FullMethodName = "/dubi.internal.data.v1.DataService/CreateTenantToken"
-	DataService_RevokeTenantToken_FullMethodName = "/dubi.internal.data.v1.DataService/RevokeTenantToken"
-	DataService_AddVolume_FullMethodName         = "/dubi.internal.data.v1.DataService/AddVolume"
-	DataService_DrainVolume_FullMethodName       = "/dubi.internal.data.v1.DataService/DrainVolume"
-	DataService_RemoveVolume_FullMethodName      = "/dubi.internal.data.v1.DataService/RemoveVolume"
-	DataService_CompactStore_FullMethodName      = "/dubi.internal.data.v1.DataService/CompactStore"
-	DataService_LocalRepairStatus_FullMethodName = "/dubi.internal.data.v1.DataService/LocalRepairStatus"
+	DataService_CreateDataset_FullMethodName       = "/dubi.internal.data.v1.DataService/CreateDataset"
+	DataService_PutRecord_FullMethodName           = "/dubi.internal.data.v1.DataService/PutRecord"
+	DataService_GetRecord_FullMethodName           = "/dubi.internal.data.v1.DataService/GetRecord"
+	DataService_CreateTenantToken_FullMethodName   = "/dubi.internal.data.v1.DataService/CreateTenantToken"
+	DataService_RevokeTenantToken_FullMethodName   = "/dubi.internal.data.v1.DataService/RevokeTenantToken"
+	DataService_AddVolume_FullMethodName           = "/dubi.internal.data.v1.DataService/AddVolume"
+	DataService_DrainVolume_FullMethodName         = "/dubi.internal.data.v1.DataService/DrainVolume"
+	DataService_RemoveVolume_FullMethodName        = "/dubi.internal.data.v1.DataService/RemoveVolume"
+	DataService_CompactStore_FullMethodName        = "/dubi.internal.data.v1.DataService/CompactStore"
+	DataService_LocalRepairStatus_FullMethodName   = "/dubi.internal.data.v1.DataService/LocalRepairStatus"
+	DataService_ClusterRepairStatus_FullMethodName = "/dubi.internal.data.v1.DataService/ClusterRepairStatus"
 )
 
 // DataServiceClient is the client API for DataService service.
@@ -53,6 +54,10 @@ type DataServiceClient interface {
 	CompactStore(ctx context.Context, in *CompactStoreRequest, opts ...grpc.CallOption) (*CompactStoreResponse, error)
 	// Last observed local repair errors, not a global coverage or durability proof.
 	LocalRepairStatus(ctx context.Context, in *LocalRepairStatusRequest, opts ...grpc.CallOption) (*LocalRepairStatusResponse, error)
+	// A current Root member may inspect this Node's bounded repair/maintenance
+	// state. The response is still local to the serving Node; it is not a
+	// cluster-wide durability proof.
+	ClusterRepairStatus(ctx context.Context, in *LocalRepairStatusRequest, opts ...grpc.CallOption) (*LocalRepairStatusResponse, error)
 }
 
 type dataServiceClient struct {
@@ -163,6 +168,16 @@ func (c *dataServiceClient) LocalRepairStatus(ctx context.Context, in *LocalRepa
 	return out, nil
 }
 
+func (c *dataServiceClient) ClusterRepairStatus(ctx context.Context, in *LocalRepairStatusRequest, opts ...grpc.CallOption) (*LocalRepairStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LocalRepairStatusResponse)
+	err := c.cc.Invoke(ctx, DataService_ClusterRepairStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataServiceServer is the server API for DataService service.
 // All implementations must embed UnimplementedDataServiceServer
 // for forward compatibility.
@@ -185,6 +200,10 @@ type DataServiceServer interface {
 	CompactStore(context.Context, *CompactStoreRequest) (*CompactStoreResponse, error)
 	// Last observed local repair errors, not a global coverage or durability proof.
 	LocalRepairStatus(context.Context, *LocalRepairStatusRequest) (*LocalRepairStatusResponse, error)
+	// A current Root member may inspect this Node's bounded repair/maintenance
+	// state. The response is still local to the serving Node; it is not a
+	// cluster-wide durability proof.
+	ClusterRepairStatus(context.Context, *LocalRepairStatusRequest) (*LocalRepairStatusResponse, error)
 	mustEmbedUnimplementedDataServiceServer()
 }
 
@@ -224,6 +243,9 @@ func (UnimplementedDataServiceServer) CompactStore(context.Context, *CompactStor
 }
 func (UnimplementedDataServiceServer) LocalRepairStatus(context.Context, *LocalRepairStatusRequest) (*LocalRepairStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LocalRepairStatus not implemented")
+}
+func (UnimplementedDataServiceServer) ClusterRepairStatus(context.Context, *LocalRepairStatusRequest) (*LocalRepairStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClusterRepairStatus not implemented")
 }
 func (UnimplementedDataServiceServer) mustEmbedUnimplementedDataServiceServer() {}
 func (UnimplementedDataServiceServer) testEmbeddedByValue()                     {}
@@ -426,6 +448,24 @@ func _DataService_LocalRepairStatus_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataService_ClusterRepairStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LocalRepairStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).ClusterRepairStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_ClusterRepairStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).ClusterRepairStatus(ctx, req.(*LocalRepairStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataService_ServiceDesc is the grpc.ServiceDesc for DataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -472,6 +512,10 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LocalRepairStatus",
 			Handler:    _DataService_LocalRepairStatus_Handler,
+		},
+		{
+			MethodName: "ClusterRepairStatus",
+			Handler:    _DataService_ClusterRepairStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

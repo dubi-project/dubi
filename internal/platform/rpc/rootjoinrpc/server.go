@@ -14,6 +14,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	identityenrollment "github.com/dubi-project/dubi/internal/platform/identity/enrollment"
 	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
 	"github.com/dubi-project/dubi/internal/platform/storage/diskpressure"
@@ -190,7 +191,11 @@ func (s *Server) DiscoverRoot(ctx context.Context, request *rootjoinwire.Discove
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	return &rootjoinwire.DiscoverRootResponse{View: view}, nil
+	advertisement := protocol.CurrentAdvertisement()
+	return &rootjoinwire.DiscoverRootResponse{View: view,
+		ProtocolMin: uint32(advertisement.ProtocolMin), ProtocolMax: uint32(advertisement.ProtocolMax),
+		StateFormat: uint32(advertisement.StateFormat), PackFormat: uint32(advertisement.PackFormat),
+		RecordIndex: uint32(advertisement.RecordIndex)}, nil
 }
 
 func (s *Server) view() (*rootjoinwire.RootView, error) {

@@ -122,6 +122,14 @@ dubi status
 
 `status` 从 `~/.dubi/current.json` 找当前 Store 与本机服务端口，使用 Store 中现有 Node 证书调用受保护内部 RPC。输出包含已确认的 Root 应用位置、投票成员、learner、节点登记和 leader 提示；`cluster` 额外给出这次请求确认的 Root 投票数、理论多数门槛和按 Region 汇总的节点/投票分布。`cluster.root_quorum_confirmed=true` 代表本次 Root 读确认成功，不能据此推断每个远端节点在线。`local_storage` 单独报告**本机**已登记卷的健康与容量，失卷显示 `missing`，错误挂载或标记错误显示 `invalid`。若本地卷登记本身无法读取，仍输出已确认 Root 视图，并在 `local_storage_error` 说明问题。连接的是本机节点时，`local_repair` 另显示后台修复最近检查时间、是否启用及尚未解除的错误；`repair_debt` 与 `total_issues` 给出未解除错误数量，最多列出 64 个 Group 错误。`volume_migration` 显示健康源卷迁移的持久游标、已迁记录和最近错误；`volume_write_errors` 显示本机 Pack 写入被隔离的卷；`geo_metadata_debt`/`geo_record_debt` 显示尚未完成的跨区域后台补齐，`maintenance_budget` 显示维护流控占用和拒绝次数。`last_check_unix=0` 表示尚未运行过。修复错误要到该 Group **完整一轮无欠账**才清除；修复游标、当前 Region generation、Group epoch、Fence index、节点集合和欠账保存在节点本地状态，重启后只有在当前 Root 集合完全匹配时才续扫，否则从新集合重新开始。空错误列表不证明所有数据已经扫描或达到物理多数。修复状态查询失败时 Root 视图仍可见，并在 `local_repair_error` 说明。服务停止、Root 失去读多数或证书不匹配时命令失败。目录中的节点即使当前离线也仍列出；这里不报告逐节点在线状态、全群数据持有多数或业务读写就绪。可复制的本地三节点操作见[本地运行指南](local-cluster.md)。
 
+需要快速判断是否应该介入时运行：
+
+```sh
+dubi doctor
+```
+
+`doctor` 使用与 `status` 完全相同的认证 Root/Node 探测，但默认输出简短结论：`healthy` 表示当前观察到 Root 多数、本机卷和修复状态均正常；`degraded` 表示存在失联节点、失卷、写隔离或 Repair/Geo 欠账；`unknown` 表示尚未取得完整观察。发现 `degraded` 或 `unknown` 时命令以非零状态退出，并逐项列出原因，方便值班脚本和人工处理。需要完整机器输出时使用 `dubi doctor --json`；它只读，不会自动移除节点、删除 Volume 或触发恢复。
+
 数据目录优先级为 `--store`、`DUBI_STORE`、当前用户 `~/.dubi/current.json`、`/var/lib/dubi`。首次监听默认 `0.0.0.0:7443`；服务 Ready 后记住实际绑定地址、端口与已登记的 advertise 地址，后续 `dubi server` 重启自动复用。本地上下文只存 Store 绝对路径、节点身份校验信息和网络地址，不存证书或密钥；真实身份、Volume 和集群目录仍在 Store。换 Unix 用户时用户目录不同，需先用 `--store` 明确选择。上下文损坏或身份不匹配会报错，不回退到空目录重新初始化。相对 Store 路径以初始化时的工作目录解析成绝对路径保存；默认目录须由运行 DUBI 的账号持有写权限。
 
 首次启动自动登记本节点的 Region 和集群联络地址，经过 Root 确认后才 Ready。具体监听地址直接使用实际绑定地址/端口；wildcard 监听通过系统默认路由推导本机 IP，UDP connect 只查询路由、不发送探测包。默认 Region 为 `default`，可用 `--region` 表达实际故障域；不同物理区域应如实区分。可选 `--name` 只设置节点显示名称，名称可以为空或之后修改，不改变 NodeID、RaftID、地址或 Region。推导不证明外部可达性，NAT、隧道、多网卡或特殊路由可用 `--advertise host:port` 指定发布地址。这里是网络/部署参数，不是内部身份配置。

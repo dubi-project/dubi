@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/storage/pack"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 )
@@ -21,6 +22,8 @@ var ErrNotHeld = errors.New("immutable record is not held by this Store")
 var ErrCorrupt = errors.New("immutable record index or payload is corrupt")
 var ErrUnavailable = errors.New("immutable record Store is unavailable")
 var identityKey = []byte("meta/identity")
+
+const recordIndexVersion = protocol.RecordIndexFormatVersion
 
 // CompactReport describes the conservative physical garbage-collection pass.
 // It removes only sealed Packs with no live index entry; Packs containing both
@@ -195,7 +198,7 @@ func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding,
 	}
 	b := s.db.NewBatch()
 	defer b.Close()
-	e := entry{Version: 1, Descriptor: d, Location: loc}
+	e := entry{Version: recordIndexVersion, Descriptor: d, Location: loc}
 	encoded, err := json.Marshal(e)
 	if err != nil {
 		return Holding{}, err
@@ -407,7 +410,7 @@ func (s *Store) RepairExisting(ctx context.Context, d Descriptor, payload []byte
 	if err := ctx.Err(); err != nil {
 		return Holding{}, err
 	}
-	next := entry{Version: 1, Descriptor: d, Location: loc}
+	next := entry{Version: recordIndexVersion, Descriptor: d, Location: loc}
 	if _, _, err := s.read(id, d, next); err != nil {
 		return Holding{}, fmt.Errorf("verify replacement before index publication: %w", err)
 	}
@@ -435,7 +438,7 @@ func (s *Store) RepairExisting(ctx context.Context, d Descriptor, payload []byte
 
 func (s *Store) validateEntry(id string, e entry) error {
 	storedID, err := e.Descriptor.ID()
-	if err != nil || e.Version != 1 || storedID != id || e.Location.StoreID != s.identity.StoreID ||
+	if err != nil || e.Version != recordIndexVersion || storedID != id || e.Location.StoreID != s.identity.StoreID ||
 		!strings.HasPrefix(e.Location.VolumeID, "volume_") || !validToken(strings.TrimPrefix(e.Location.VolumeID, "volume_")) ||
 		!strings.HasPrefix(e.Location.PackID, "pack_") || !validToken(strings.TrimPrefix(e.Location.PackID, "pack_")) ||
 		e.Location.Offset <= 0 || e.Location.Length <= 0 || e.Location.Length > pack.MaxPayloadSize+pack.MaxKeySize+pack.MaxCapabilitySize+pack.MaxTenantSize+1024 {

@@ -44,12 +44,14 @@ type CapabilityDataWriteResult struct {
 	Reference         capstate.RecordReference
 	ConfirmationIndex uint64
 	RegionGeneration  uint64
+	RequiredRegions   int
 }
 
 type CapabilityDataReadResult struct {
 	Body             []byte
 	Reference        capstate.RecordReference
 	RegionGeneration uint64
+	State            string
 }
 
 // CapabilityDataExecutor executes only on a locally hosted Owner. The
@@ -233,14 +235,14 @@ func (server *CapabilityDataServer) Write(stream raftwire.CapabilityDataService_
 		}
 		return stream.SendAndClose(response)
 	}
-	if result.State != "local_ready" || result.ConfirmationIndex == 0 || result.RegionGeneration == 0 {
+	if (result.State != "local_ready" && result.State != "geo_ready") || result.ConfirmationIndex == 0 || result.RegionGeneration == 0 {
 		return status.Error(codes.Internal, "Owner returned no committed data confirmation")
 	}
 	response.Reference, err = json.Marshal(result.Reference)
 	if err != nil || len(response.Reference) > recordDescriptorBytes {
 		return status.Error(codes.Internal, "Owner returned an invalid data reference")
 	}
-	response.ConfirmationIndex, response.RegionGeneration = result.ConfirmationIndex, result.RegionGeneration
+	response.ConfirmationIndex, response.RegionGeneration, response.RequiredRegions = result.ConfirmationIndex, result.RegionGeneration, uint32(result.RequiredRegions)
 	return stream.SendAndClose(response)
 }
 
@@ -299,6 +301,9 @@ func (server *CapabilityDataServer) Read(req *raftwire.CapabilityDataReadRequest
 	if after != before {
 		return status.Error(codes.FailedPrecondition, "capability data Node registration changed")
 	}
+	if result.State != "local_ready" && result.State != "geo_ready" {
+		return status.Error(codes.Internal, "Owner returned no recognized data read state")
+	}
 	ref, err := json.Marshal(result.Reference)
 	if err != nil || len(ref) > recordDescriptorBytes || result.RegionGeneration == 0 ||
 		result.Reference.Descriptor.Size != uint64(len(result.Body)) {
@@ -309,7 +314,7 @@ func (server *CapabilityDataServer) Read(req *raftwire.CapabilityDataReadRequest
 		return status.Error(codes.DataLoss, "Owner returned a mismatched capability data body")
 	}
 	if err := server.send(ctx, stream, &raftwire.CapabilityDataReadResponse{Payload: &raftwire.CapabilityDataReadResponse_Header{
-		Header: &raftwire.CapabilityDataReadHeader{Reference: ref, RegionGeneration: result.RegionGeneration}}}); err != nil {
+		Header: &raftwire.CapabilityDataReadHeader{Reference: ref, RegionGeneration: result.RegionGeneration, State: result.State}}}); err != nil {
 		return err
 	}
 	for offset := 0; offset < len(result.Body); offset += capabilityDataFrameBytes {
@@ -399,7 +404,7 @@ func (client *GroupClient) WriteCapabilityData(ctx context.Context, targetNode r
 		}
 		return result, errors.New(response.Error)
 	}
-	if result.State != "local_ready" || response.ConfirmationIndex == 0 || response.RegionGeneration == 0 {
+	if (result.State != "local_ready" && result.State != "geo_ready") || response.ConfirmationIndex == 0 || response.RegionGeneration == 0 {
 		return CapabilityDataWriteResult{State: "unknown"}, errors.New("remote Owner did not prove LocalReady")
 	}
 	ref, err := decodeDataReference(response.Reference, request.Target)
@@ -411,7 +416,7 @@ func (client *GroupClient) WriteCapabilityData(ctx context.Context, targetNode r
 	if ref.RequestID != request.RequestID || gotID != wantID {
 		return CapabilityDataWriteResult{State: "unknown"}, errors.New("remote Owner confirmed a different immutable publication")
 	}
-	result.Reference, result.ConfirmationIndex, result.RegionGeneration = ref, response.ConfirmationIndex, response.RegionGeneration
+	result.Reference, result.ConfirmationIndex, result.RegionGeneration, result.RequiredRegions = ref, response.ConfirmationIndex, response.RegionGeneration, int(response.RequiredRegions)
 	return result, nil
 }
 
@@ -493,6 +498,10 @@ func (client *GroupClient) ReadCapabilityData(ctx context.Context, targetNode ro
 	if hex.EncodeToString(digest[:]) != ref.Descriptor.SHA256 {
 		return CapabilityDataReadResult{}, errors.New("capability data read digest mismatch")
 	}
+	state := first.GetHeader().State
+	if state != "local_ready" && state != "geo_ready" {
+		return CapabilityDataReadResult{}, errors.New("invalid capability data read state")
+	}
 	return CapabilityDataReadResult{Body: body, Reference: ref,
-		RegionGeneration: first.GetHeader().RegionGeneration}, nil
+		RegionGeneration: first.GetHeader().RegionGeneration, State: state}, nil
 }

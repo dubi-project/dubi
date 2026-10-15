@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
@@ -237,6 +239,9 @@ func InitializeRoot(store string, volumePaths ...string) error {
 func Open(options Options) (*Runtime, error) {
 	if options.StoreRoot == "" || options.CapabilityMux == nil || options.TickInterval < 0 {
 		return nil, errors.New("Node runtime requires StoreRoot, Capability Mux, and a non-negative tick interval")
+	}
+	if err := protocol.CurrentAdvertisement().Validate(); err != nil {
+		return nil, fmt.Errorf("validate local protocol formats: %w", err)
 	}
 	value, err := identity.Load(options.StoreRoot)
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/config"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	identityenrollment "github.com/dubi-project/dubi/internal/platform/identity/enrollment"
+	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/rpc/datawire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
@@ -183,6 +184,11 @@ func connectDataNode(ctx context.Context, store, address string) (*grpc.ClientCo
 	if err != nil {
 		conn.Close()
 		return nil, identity.Identity{}, err
+	}
+	if err := (protocol.Advertisement{ProtocolMin: int(response.GetProtocolMin()), ProtocolMax: int(response.GetProtocolMax()),
+		StateFormat: int(response.GetStateFormat()), PackFormat: int(response.GetPackFormat()), RecordIndex: int(response.GetRecordIndex())}).Validate(); err != nil {
+		conn.Close()
+		return nil, identity.Identity{}, fmt.Errorf("incompatible Root protocol or durable format: %w", err)
 	}
 	view, err := rootjoinrpc.DecodeView(response.GetView(), id.ClusterID)
 	if err != nil || !view.Contains(id.RaftID) {
