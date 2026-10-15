@@ -5,10 +5,9 @@ package enrollment
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -42,6 +41,7 @@ type Issuer struct {
 	host       Host
 	root       *rootstate.State
 	signer     *nodepki.Signer
+	mu         sync.RWMutex
 	clusterID  string
 	authorizer Authorizer
 }
@@ -49,10 +49,16 @@ type Issuer struct {
 func New(host Host, root *rootstate.State, signer *nodepki.Signer, clusterID string,
 	authorizer Authorizer,
 ) (*Issuer, error) {
-	if host == nil || root == nil || signer == nil || clusterID == "" || authorizer == nil {
+	if host == nil || root == nil || clusterID == "" || authorizer == nil {
 		return nil, errors.New("Node enrollment issuer requires Host, Root state, signer, ClusterID, and authorizer")
 	}
 	return &Issuer{host: host, root: root, signer: signer, clusterID: clusterID, authorizer: authorizer}, nil
+}
+
+func (issuer *Issuer) SetSigner(signer *nodepki.Signer) {
+	issuer.mu.Lock()
+	issuer.signer = signer
+	issuer.mu.Unlock()
 }
 
 // Issue authorizes the request, durably registers the Node in Root, confirms
@@ -60,7 +66,13 @@ func New(host Host, root *rootstate.State, signer *nodepki.Signer, clusterID str
 func (issuer *Issuer) Issue(ctx context.Context, request identityenrollment.Request,
 	proof []byte, now time.Time,
 ) (identityenrollment.Bundle, error) {
-	encodedRequest, err := identityenrollment.EncodeRequest(request)
+	issuer.mu.RLock()
+	signer := issuer.signer
+	issuer.mu.RUnlock()
+	if signer == nil {
+		return identityenrollment.Bundle{}, errors.New("Node enrollment authority is not installed")
+	}
+	command, err := rootstate.NodeEnrollmentCommand(request)
 	if err != nil {
 		return identityenrollment.Bundle{}, err
 	}
@@ -73,12 +85,7 @@ func (issuer *Issuer) Issue(ctx context.Context, request identityenrollment.Requ
 	if _, err := issuer.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return identityenrollment.Bundle{}, fmt.Errorf("confirm Root before Node enrollment: %w", err)
 	}
-	descriptor := rootstate.Node{NodeID: request.NodeID, RaftID: request.RaftID,
-		RegionID: request.RegionID, Address: request.Address}
-	digest := sha256.Sum256(encodedRequest)
-	command := rootstate.Command{Version: rootstate.FormatVersion,
-		RequestID: "enroll-node-" + hex.EncodeToString(digest[:12]), Type: rootstate.RegisterNode,
-		Node: &descriptor}
+	descriptor := *command.Node
 	encodedCommand, err := rootstate.EncodeCommand(command)
 	if err != nil {
 		return identityenrollment.Bundle{}, err
@@ -86,6 +93,11 @@ func (issuer *Issuer) Issue(ctx context.Context, request identityenrollment.Requ
 	current, found, err := issuer.root.Node(request.RaftID)
 	if err != nil {
 		return identityenrollment.Bundle{}, err
+	}
+	if _, fenced, err := issuer.root.NodeFence(request.RaftID); err != nil {
+		return identityenrollment.Bundle{}, err
+	} else if fenced {
+		return identityenrollment.Bundle{}, errors.New("Node identity is fenced")
 	}
 	if found && current != descriptor {
 		return identityenrollment.Bundle{}, errors.New("RaftID is already registered to different Node metadata")
@@ -109,12 +121,12 @@ func (issuer *Issuer) Issue(ctx context.Context, request identityenrollment.Requ
 	}
 	bound := identity.Identity{Version: 1, NodeID: request.NodeID, RaftID: request.RaftID,
 		ClusterID: issuer.clusterID, CreatedAt: time.Unix(1, 0).UTC()}
-	certificatePEM, err := issuer.signer.IssueNode(bound, request.ServerName, []byte(request.CSRPEM), now)
+	certificatePEM, err := signer.IssueNode(bound, request.ServerName, []byte(request.CSRPEM), now)
 	if err != nil {
 		return identityenrollment.Bundle{}, fmt.Errorf("issue Node certificate: %w", err)
 	}
 	return identityenrollment.Bundle{Version: identityenrollment.FormatVersion,
 		ClusterID: issuer.clusterID, NodeID: request.NodeID, RaftID: request.RaftID,
-		ServerName: request.ServerName, CACertificatePEM: string(issuer.signer.CACertificatePEM()),
+		ServerName: request.ServerName, CACertificatePEM: string(signer.CACertificatePEM()),
 		CertificatePEM: string(certificatePEM)}, nil
 }

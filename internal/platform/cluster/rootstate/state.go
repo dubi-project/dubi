@@ -29,11 +29,19 @@ var appliedKey = []byte("meta/applied")
 var confKey = []byte("meta/conf")
 
 type State struct {
-	mu      sync.RWMutex
-	db      *pebble.DB
-	applied uint64
-	conf    *raftpb.ConfState
-	closed  bool
+	mu          sync.RWMutex
+	db          *pebble.DB
+	applied     uint64
+	conf        *raftpb.ConfState
+	closed      bool
+	failed      error
+	commit      func(*pebble.Batch) error // Test-only uncertainty injection; nil uses Sync.
+	root        string
+	snapshotWG  sync.WaitGroup
+	closeDone   chan struct{}
+	closeErr    error
+	restoring   *restoreFence
+	restoreHook func(string) error // Test-only crash/uncertainty boundaries.
 }
 
 func Open(root string) (*State, error) {
@@ -47,7 +55,7 @@ func Open(root string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := &State{db: db, conf: &raftpb.ConfState{}}
+	state := &State{db: db, conf: &raftpb.ConfState{}, root: root, closeDone: make(chan struct{})}
 	if encoded, found, err := state.get(appliedKey); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -67,6 +75,9 @@ func Open(root string) (*State, error) {
 			return nil, fmt.Errorf("decode Root membership: %w", err)
 		}
 	}
+	if err := state.loadRestoreFence(); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
 	return state, nil
 }
 
@@ -80,6 +91,26 @@ func (s *State) ConfState() *raftpb.ConfState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return proto.Clone(s.conf).(*raftpb.ConfState)
+}
+
+// RootMembership is the fallible directory projection of the applied Root
+// ConfState. ConfState itself is the Raft StateMachine persistence contract;
+// routing callers must not use it to bypass uncertainty/restore fencing.
+// Callers needing a linearizable view must first obtain a Root ReadIndex.
+func (s *State) RootMembership() (*raftpb.ConfState, error) {
+	_, conf, err := s.RootPosition()
+	return conf, err
+}
+
+// RootPosition atomically samples membership with its applied position. In
+// particular, recovery fences must not pair old membership with a newer index.
+func (s *State) RootPosition() (uint64, *raftpb.ConfState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return 0, nil, err
+	}
+	return s.applied, proto.Clone(s.conf).(*raftpb.ConfState), nil
 }
 
 func (s *State) Apply(index uint64, encoded []byte) error {
@@ -111,7 +142,7 @@ func (s *State) Apply(index uint64, encoded []byte) error {
 			result := Result{RequestID: command.RequestID, Hash: hash, Index: index}
 			if err := command.validate(); err != nil {
 				result.Error = err.Error()
-			} else if rejection, err := s.applyMutation(batch, command); err != nil {
+			} else if rejection, err := s.applyMutation(batch, command, hash); err != nil {
 				return err
 			} else {
 				result.Error = rejection
@@ -168,8 +199,8 @@ func (s *State) ApplyMembership(index uint64, conf *raftpb.ConfState) error {
 }
 
 func (s *State) checkNext(index uint64) error {
-	if s.closed {
-		return errors.New("Root state is closed")
+	if err := s.usable(); err != nil {
+		return err
 	}
 	if index != s.applied+1 {
 		return fmt.Errorf("Root applied index gap: current %d, next %d", s.applied, index)
@@ -183,15 +214,62 @@ func (s *State) commitIndex(batch *pebble.Batch, index uint64) error {
 	if err := batch.Set(appliedKey, value[:], nil); err != nil {
 		return err
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return fmt.Errorf("commit Root state: %w", err)
+	if err := s.commitBatch(batch); err != nil {
+		return err
 	}
 	s.applied = index
 	return nil
 }
 
-func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, error) {
+func (s *State) usable() error {
+	if s.closed {
+		return errors.New("Root state is closed")
+	}
+	if s.failed != nil {
+		return fmt.Errorf("Root state needs reopen after uncertain commit: %w", s.failed)
+	}
+	if s.restoring != nil {
+		return errors.New("Root state requires completion of its durable snapshot restore")
+	}
+	return nil
+}
+
+func (s *State) commitBatch(batch *pebble.Batch) error {
+	var err error
+	if s.commit != nil {
+		err = s.commit(batch)
+	} else {
+		err = batch.Commit(pebble.Sync)
+	}
+	if err != nil {
+		s.failed = err
+		return fmt.Errorf("commit Root state (outcome uncertain): %w", err)
+	}
+	return nil
+}
+
+func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string) (string, error) {
 	switch command.Type {
+	case FenceNode:
+		return s.applyNodeFence(batch, *command.NodeFence)
+	case AuthorizeRegionGrowth:
+		return s.applyRegionGrowth(batch, command, hash)
+	case PlanRegionCohort, ConfirmRegionCohort:
+		return s.applyRegionCohort(batch, command)
+	case PublishEnrollmentAuthority:
+		return s.applyEnrollmentAuthority(batch, *command.EnrollmentAuthority)
+	case SetRangePlacement:
+		return s.applyRangePlacement(batch, *command.RangePlacement)
+	case RetireRegionGroup:
+		return s.applyRegionGroupRetirement(batch, *command.GroupRetirement)
+	case PlanRegionGroupRebuild:
+		return s.applyRegionGroupRebuild(batch, *command.GroupRebuild)
+	case BeginRootJoin, CompleteRootJoin:
+		return s.applyRootJoin(batch, command)
+	case CreateJoinGrant, ConsumeJoinGrant, RevokeJoinGrant:
+		return s.applyJoinGrant(batch, command)
+	case CreateTenantCredential, RevokeTenantCredential:
+		return s.applyTenantCredential(batch, command)
 	case RegisterNode:
 		value := command.Node
 		if _, found, err := s.get(nodeKey(value.RaftID)); err != nil {
@@ -204,10 +282,51 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 		} else if found {
 			return "NodeID is already registered", nil
 		}
+		if value.Name != "" {
+			conflict, err := s.nodeNameConflict(value.Name, 0)
+			if err != nil {
+				return "", err
+			}
+			if conflict {
+				return "Node name is already in use", nil
+			}
+		}
 		if err := setJSON(batch, nodeKey(value.RaftID), value); err != nil {
 			return "", err
 		}
 		return "", batch.Set(nodeIDKey(value.NodeID), []byte(fmt.Sprintf("%d", value.RaftID)), nil)
+	case RenameNode:
+		value := command.NodeRename
+		encoded, found, err := s.get(nodeKey(value.RaftID))
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "Node is not registered", nil
+		}
+		var node Node
+		if err := json.Unmarshal(encoded, &node); err != nil {
+			return "", fmt.Errorf("decode Node for rename: %w", err)
+		}
+		if node.NodeID != value.NodeID {
+			return "Node identity does not match", nil
+		}
+		if _, fenced, err := s.nodeFence(value.RaftID); err != nil {
+			return "", err
+		} else if fenced {
+			return "Node is fenced", nil
+		}
+		if value.Name != "" {
+			conflict, err := s.nodeNameConflict(value.Name, value.RaftID)
+			if err != nil {
+				return "", err
+			}
+			if conflict {
+				return "Node name is already in use", nil
+			}
+		}
+		node.Name = value.Name
+		return "", setJSON(batch, nodeKey(value.RaftID), &node)
 	case RegisterGroup:
 		value := command.Group
 		if _, found, err := s.get(groupKey(value.GroupID)); err != nil {
@@ -218,6 +337,15 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 		return "", setJSON(batch, groupKey(value.GroupID),
 			Group{GroupID: value.GroupID, StateKind: value.StateKind, Epoch: 1})
 	case PublishGroupMembers:
+		retired, retirementErr := s.regionGroupRetired(command.Membership.GroupID)
+		if retirementErr != nil {
+			return "", retirementErr
+		}
+		if _, confirmed, err := s.confirmedRegion(command.Membership.GroupID); err != nil {
+			return "", err
+		} else if confirmed && !retired {
+			return "confirmed regional membership requires authorized growth or maintenance", nil
+		}
 		membership := command.Membership
 		encoded, found, err := s.get(groupKey(membership.GroupID))
 		if err != nil {
@@ -233,12 +361,55 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 		if descriptor.Epoch != membership.ExpectedEpoch {
 			return "Group membership Epoch does not match", nil
 		}
+		if descriptor.Epoch == 1 {
+			region, found, err := s.get(regionCohortGroupKey(membership.GroupID))
+			if err != nil {
+				return "", err
+			}
+			if found {
+				cohortGeneration := uint64(1)
+				if retired {
+					head, headFound, headErr := s.regionCohortHead(string(region))
+					if headErr != nil {
+						return "", headErr
+					}
+					if !headFound || head.PendingGeneration == 0 {
+						return "same-name Region formation has no pending cohort", nil
+					}
+					cohortGeneration = head.PendingGeneration
+				}
+				cohort, exists, err := s.regionCohort(string(region), cohortGeneration)
+				if err != nil {
+					return "", err
+				}
+				if !exists {
+					return "", errors.New("Group formation cohort is missing")
+				}
+				if cohort.Formation && !formationMatchesMembers(cohort, membership.Members) {
+					return "initial Group membership differs from immutable regional formation", nil
+				}
+				if cohort.Formation {
+					for _, id := range cohort.Nodes {
+						if _, member, err := s.rootMember(id); err != nil {
+							return "", err
+						} else if !member {
+							return "initial regional publication requires current Root members", nil
+						}
+					}
+				}
+			}
+		}
 		if _, found, err := s.get(activeGroupChangeKey(membership.GroupID)); err != nil {
 			return "", err
 		} else if found {
 			return "Group has an active membership change", nil
 		}
 		for _, member := range membership.Members {
+			if _, fenced, err := s.nodeFence(member.RaftID); err != nil {
+				return "", err
+			} else if fenced {
+				return "Group member Node identity is fenced", nil
+			}
 			if _, found, err := s.get(nodeKey(member.RaftID)); err != nil {
 				return "", err
 			} else if !found {
@@ -249,6 +420,12 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 		descriptor.Members = append([]GroupMember(nil), membership.Members...)
 		return "", setJSON(batch, groupKey(membership.GroupID), descriptor)
 	case PlanGroupMembers:
+		_, confirmed, err := s.confirmedRegion(command.GroupPlan.GroupID)
+		if err != nil {
+			return "", err
+		} else if confirmed && !command.GroupPlan.Maintenance {
+			return "confirmed regional membership requires an authorized sealed growth task", nil
+		}
 		plan := command.GroupPlan
 		encoded, found, err := s.get(groupKey(plan.GroupID))
 		if err != nil {
@@ -261,8 +438,31 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 		if err := json.Unmarshal(encoded, &descriptor); err != nil {
 			return "", fmt.Errorf("decode Group for membership plan: %w", err)
 		}
+		if plan.Maintenance {
+			if err := validateMaintenanceRemoval(descriptor, plan.Members); err != nil {
+				return err.Error(), nil
+			}
+		}
 		if descriptor.Epoch != plan.ExpectedEpoch {
 			return "Group membership Epoch does not match", nil
+		}
+		if descriptor.Epoch == 1 {
+			region, found, err := s.get(regionCohortGroupKey(plan.GroupID))
+			if err != nil {
+				return "", err
+			}
+			if found {
+				cohort, exists, err := s.regionCohort(string(region), 1)
+				if err != nil {
+					return "", err
+				}
+				if !exists {
+					return "", errors.New("Group formation cohort is missing")
+				}
+				if cohort.Formation {
+					return "regional Group initial formation must be published before membership changes", nil
+				}
+			}
 		}
 		currentRoles := make(map[uint64]string, len(descriptor.Members))
 		for _, member := range descriptor.Members {
@@ -284,6 +484,11 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 			return "Group already has an active membership change", nil
 		}
 		for _, member := range plan.Members {
+			if _, fenced, err := s.nodeFence(member.RaftID); err != nil {
+				return "", err
+			} else if fenced {
+				return "Group member Node identity is fenced", nil
+			}
 			if _, found, err := s.get(nodeKey(member.RaftID)); err != nil {
 				return "", err
 			} else if !found {
@@ -292,7 +497,7 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 		}
 		change := GroupChange{ChangeID: plan.ChangeID, GroupID: plan.GroupID,
 			ExpectedEpoch: plan.ExpectedEpoch, Members: append([]GroupMember(nil), plan.Members...),
-			State: GroupChangePending}
+			Maintenance: plan.Maintenance, State: GroupChangePending}
 		if err := setJSON(batch, groupChangeKey(plan.ChangeID), change); err != nil {
 			return "", err
 		}
@@ -315,6 +520,18 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 		}
 		if change.State == GroupChangeCompleted {
 			return "", nil
+		}
+		var authorizeErr error
+		if change.Maintenance {
+			authorizeErr = s.authorizeMaintenanceTask(change)
+		} else {
+			authorizeErr = s.authorizeGrowthTask(change)
+		}
+		if err := authorizeErr; err != nil {
+			if errors.Is(err, ErrGroupMutationUnauthorized) {
+				return "regional growth task is no longer authorized", nil
+			}
+			return "", err
 		}
 		active, found, err := s.get(activeGroupChangeKey(change.GroupID))
 		if err != nil {
@@ -426,6 +643,9 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command) (string, err
 }
 
 func (s *State) get(key []byte) ([]byte, bool, error) {
+	if err := s.usable(); err != nil {
+		return nil, false, err
+	}
 	value, closer, err := s.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil, false, nil
@@ -461,6 +681,36 @@ func rangeKey(value Dataset) []byte {
 func keyspaceRangeKey(value Keyspace) []byte { return []byte("data/range/" + value.path()) }
 func rangeIDKey(id string) []byte            { return []byte("data/range-id/" + id) }
 func resultKey(id string) []byte             { return []byte("result/" + id) }
+
+// nodeNameConflict checks the durable Node catalog while ignoring explicitly
+// fenced identities. A removed Node's label can therefore be reused by the
+// newly enrolled Node that replaces it, while every current or pending Node
+// keeps a unique operator-facing name.
+func (s *State) nodeNameConflict(name string, exceptRaftID uint64) (bool, error) {
+	if name == "" {
+		return false, nil
+	}
+	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/node/"), UpperBound: []byte("data/node0")})
+	if err != nil {
+		return false, err
+	}
+	defer iterator.Close()
+	for iterator.First(); iterator.Valid(); iterator.Next() {
+		var node Node
+		if err := decodeStreamJSON(iterator.Value(), &node); err != nil {
+			return false, err
+		}
+		if node.RaftID == exceptRaftID || node.Name != name {
+			continue
+		}
+		if _, fenced, err := s.nodeFence(node.RaftID); err != nil {
+			return false, err
+		} else if !fenced {
+			return true, nil
+		}
+	}
+	return false, iterator.Error()
+}
 
 func (s *State) Result(requestID string) (Result, bool, error) {
 	s.mu.RLock()
@@ -510,6 +760,48 @@ func (s *State) Node(raftID uint64) (Node, bool, error) {
 	return value, err == nil, err
 }
 
+// NodeByName resolves one active, non-fenced Node by its unique operator
+// label. Names are unique among all non-fenced registrations, including a
+// pending join, so this lookup cannot silently select an arbitrary Node.
+func (s *State) NodeByName(name string) (Node, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return Node{}, false, err
+	}
+	if err := ValidateNodeName(name); err != nil || name == "" {
+		return Node{}, false, errors.New("invalid Node name")
+	}
+	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/node/"), UpperBound: []byte("data/node0")})
+	if err != nil {
+		return Node{}, false, err
+	}
+	defer iterator.Close()
+	var match Node
+	found := false
+	for iterator.First(); iterator.Valid(); iterator.Next() {
+		var node Node
+		if err := decodeStreamJSON(iterator.Value(), &node); err != nil {
+			return Node{}, false, err
+		}
+		if node.Name != name {
+			continue
+		}
+		if _, fenced, err := s.nodeFence(node.RaftID); err != nil {
+			return Node{}, false, err
+		} else if !fenced {
+			if found {
+				return Node{}, false, errors.New("Node name is ambiguous")
+			}
+			match, found = node, true
+		}
+	}
+	if err := iterator.Error(); err != nil {
+		return Node{}, false, err
+	}
+	return match, found, nil
+}
+
 func (s *State) Group(groupID string) (Group, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -528,8 +820,8 @@ func (s *State) Group(groupID string) (Group, bool, error) {
 func (s *State) Groups() ([]Group, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed {
-		return nil, errors.New("Root state is closed")
+	if err := s.usable(); err != nil {
+		return nil, err
 	}
 	iterator, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("data/group/"), UpperBound: []byte("data/group0"),
@@ -586,8 +878,8 @@ func (s *State) ActiveGroupChange(groupID string) (GroupChange, bool, error) {
 func (s *State) PendingGroupChanges() ([]GroupChange, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed {
-		return nil, errors.New("Root state is closed")
+	if err := s.usable(); err != nil {
+		return nil, err
 	}
 	iterator, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("data/group-change/"), UpperBound: []byte("data/group-change0"),
@@ -687,8 +979,8 @@ func (s *State) Range(rangeID string) (Range, bool, error) {
 func (s *State) PendingRanges() ([]Range, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed {
-		return nil, errors.New("Root state is closed")
+	if err := s.usable(); err != nil {
+		return nil, err
 	}
 	iterator, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("data/range/"), UpperBound: []byte("data/range0"),
@@ -710,12 +1002,45 @@ func (s *State) PendingRanges() ([]Range, error) {
 	return ranges, iterator.Error()
 }
 
+func (s *State) ActiveRanges() ([]Range, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
+	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/range/"), UpperBound: []byte("data/range0")})
+	if err != nil {
+		return nil, err
+	}
+	defer iterator.Close()
+	var ranges []Range
+	for iterator.First(); iterator.Valid(); iterator.Next() {
+		var value Range
+		if err := decodeStreamJSON(iterator.Value(), &value); err != nil {
+			return nil, err
+		}
+		if value.State == RangeStateActive {
+			ranges = append(ranges, value)
+		}
+	}
+	return ranges, iterator.Error()
+}
+
 func (s *State) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
-		return nil
+		done := s.closeDone
+		s.mu.Unlock()
+		<-done
+		return s.closeErr
 	}
 	s.closed = true
-	return s.db.Close()
+	s.mu.Unlock()
+	s.snapshotWG.Wait()
+	err := s.db.Close()
+	s.mu.Lock()
+	s.closeErr = err
+	close(s.closeDone)
+	s.mu.Unlock()
+	return err
 }

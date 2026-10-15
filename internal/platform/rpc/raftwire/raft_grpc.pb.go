@@ -764,3 +764,724 @@ var CapabilityService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "internal/platform/rpc/raftwire/raft.proto",
 }
+
+const (
+	CapabilityDataService_Write_FullMethodName = "/dubi.internal.raft.v1.CapabilityDataService/Write"
+	CapabilityDataService_Read_FullMethodName  = "/dubi.internal.raft.v1.CapabilityDataService/Read"
+)
+
+// CapabilityDataServiceClient is the client API for CapabilityDataService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type CapabilityDataServiceClient interface {
+	Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CapabilityDataWriteRequest, CapabilityDataWriteResponse], error)
+	Read(ctx context.Context, in *CapabilityDataReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CapabilityDataReadResponse], error)
+}
+
+type capabilityDataServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewCapabilityDataServiceClient(cc grpc.ClientConnInterface) CapabilityDataServiceClient {
+	return &capabilityDataServiceClient{cc}
+}
+
+func (c *capabilityDataServiceClient) Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CapabilityDataWriteRequest, CapabilityDataWriteResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CapabilityDataService_ServiceDesc.Streams[0], CapabilityDataService_Write_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CapabilityDataWriteRequest, CapabilityDataWriteResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CapabilityDataService_WriteClient = grpc.ClientStreamingClient[CapabilityDataWriteRequest, CapabilityDataWriteResponse]
+
+func (c *capabilityDataServiceClient) Read(ctx context.Context, in *CapabilityDataReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CapabilityDataReadResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CapabilityDataService_ServiceDesc.Streams[1], CapabilityDataService_Read_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CapabilityDataReadRequest, CapabilityDataReadResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CapabilityDataService_ReadClient = grpc.ServerStreamingClient[CapabilityDataReadResponse]
+
+// CapabilityDataServiceServer is the server API for CapabilityDataService service.
+// All implementations must embed UnimplementedCapabilityDataServiceServer
+// for forward compatibility.
+type CapabilityDataServiceServer interface {
+	Write(grpc.ClientStreamingServer[CapabilityDataWriteRequest, CapabilityDataWriteResponse]) error
+	Read(*CapabilityDataReadRequest, grpc.ServerStreamingServer[CapabilityDataReadResponse]) error
+	mustEmbedUnimplementedCapabilityDataServiceServer()
+}
+
+// UnimplementedCapabilityDataServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedCapabilityDataServiceServer struct{}
+
+func (UnimplementedCapabilityDataServiceServer) Write(grpc.ClientStreamingServer[CapabilityDataWriteRequest, CapabilityDataWriteResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Write not implemented")
+}
+func (UnimplementedCapabilityDataServiceServer) Read(*CapabilityDataReadRequest, grpc.ServerStreamingServer[CapabilityDataReadResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Read not implemented")
+}
+func (UnimplementedCapabilityDataServiceServer) mustEmbedUnimplementedCapabilityDataServiceServer() {}
+func (UnimplementedCapabilityDataServiceServer) testEmbeddedByValue()                               {}
+
+// UnsafeCapabilityDataServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to CapabilityDataServiceServer will
+// result in compilation errors.
+type UnsafeCapabilityDataServiceServer interface {
+	mustEmbedUnimplementedCapabilityDataServiceServer()
+}
+
+func RegisterCapabilityDataServiceServer(s grpc.ServiceRegistrar, srv CapabilityDataServiceServer) {
+	// If the following call pancis, it indicates UnimplementedCapabilityDataServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&CapabilityDataService_ServiceDesc, srv)
+}
+
+func _CapabilityDataService_Write_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CapabilityDataServiceServer).Write(&grpc.GenericServerStream[CapabilityDataWriteRequest, CapabilityDataWriteResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CapabilityDataService_WriteServer = grpc.ClientStreamingServer[CapabilityDataWriteRequest, CapabilityDataWriteResponse]
+
+func _CapabilityDataService_Read_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CapabilityDataReadRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CapabilityDataServiceServer).Read(m, &grpc.GenericServerStream[CapabilityDataReadRequest, CapabilityDataReadResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CapabilityDataService_ReadServer = grpc.ServerStreamingServer[CapabilityDataReadResponse]
+
+// CapabilityDataService_ServiceDesc is the grpc.ServiceDesc for CapabilityDataService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var CapabilityDataService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.CapabilityDataService",
+	HandlerType: (*CapabilityDataServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Write",
+			Handler:       _CapabilityDataService_Write_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Read",
+			Handler:       _CapabilityDataService_Read_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "internal/platform/rpc/raftwire/raft.proto",
+}
+
+const (
+	RegionFenceService_Observe_FullMethodName = "/dubi.internal.raft.v1.RegionFenceService/Observe"
+)
+
+// RegionFenceServiceClient is the client API for RegionFenceService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type RegionFenceServiceClient interface {
+	Observe(ctx context.Context, in *ObserveRegionFenceRequest, opts ...grpc.CallOption) (*ObserveRegionFenceResponse, error)
+}
+
+type regionFenceServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRegionFenceServiceClient(cc grpc.ClientConnInterface) RegionFenceServiceClient {
+	return &regionFenceServiceClient{cc}
+}
+
+func (c *regionFenceServiceClient) Observe(ctx context.Context, in *ObserveRegionFenceRequest, opts ...grpc.CallOption) (*ObserveRegionFenceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ObserveRegionFenceResponse)
+	err := c.cc.Invoke(ctx, RegionFenceService_Observe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RegionFenceServiceServer is the server API for RegionFenceService service.
+// All implementations must embed UnimplementedRegionFenceServiceServer
+// for forward compatibility.
+type RegionFenceServiceServer interface {
+	Observe(context.Context, *ObserveRegionFenceRequest) (*ObserveRegionFenceResponse, error)
+	mustEmbedUnimplementedRegionFenceServiceServer()
+}
+
+// UnimplementedRegionFenceServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRegionFenceServiceServer struct{}
+
+func (UnimplementedRegionFenceServiceServer) Observe(context.Context, *ObserveRegionFenceRequest) (*ObserveRegionFenceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Observe not implemented")
+}
+func (UnimplementedRegionFenceServiceServer) mustEmbedUnimplementedRegionFenceServiceServer() {}
+func (UnimplementedRegionFenceServiceServer) testEmbeddedByValue()                            {}
+
+// UnsafeRegionFenceServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RegionFenceServiceServer will
+// result in compilation errors.
+type UnsafeRegionFenceServiceServer interface {
+	mustEmbedUnimplementedRegionFenceServiceServer()
+}
+
+func RegisterRegionFenceServiceServer(s grpc.ServiceRegistrar, srv RegionFenceServiceServer) {
+	// If the following call pancis, it indicates UnimplementedRegionFenceServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RegionFenceService_ServiceDesc, srv)
+}
+
+func _RegionFenceService_Observe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ObserveRegionFenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RegionFenceServiceServer).Observe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RegionFenceService_Observe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RegionFenceServiceServer).Observe(ctx, req.(*ObserveRegionFenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// RegionFenceService_ServiceDesc is the grpc.ServiceDesc for RegionFenceService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RegionFenceService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.RegionFenceService",
+	HandlerType: (*RegionFenceServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Observe",
+			Handler:    _RegionFenceService_Observe_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "internal/platform/rpc/raftwire/raft.proto",
+}
+
+const (
+	RecordHoldingService_Observe_FullMethodName = "/dubi.internal.raft.v1.RecordHoldingService/Observe"
+)
+
+// RecordHoldingServiceClient is the client API for RecordHoldingService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type RecordHoldingServiceClient interface {
+	Observe(ctx context.Context, in *ObserveRecordHoldingRequest, opts ...grpc.CallOption) (*ObserveRecordHoldingResponse, error)
+}
+
+type recordHoldingServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRecordHoldingServiceClient(cc grpc.ClientConnInterface) RecordHoldingServiceClient {
+	return &recordHoldingServiceClient{cc}
+}
+
+func (c *recordHoldingServiceClient) Observe(ctx context.Context, in *ObserveRecordHoldingRequest, opts ...grpc.CallOption) (*ObserveRecordHoldingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ObserveRecordHoldingResponse)
+	err := c.cc.Invoke(ctx, RecordHoldingService_Observe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RecordHoldingServiceServer is the server API for RecordHoldingService service.
+// All implementations must embed UnimplementedRecordHoldingServiceServer
+// for forward compatibility.
+type RecordHoldingServiceServer interface {
+	Observe(context.Context, *ObserveRecordHoldingRequest) (*ObserveRecordHoldingResponse, error)
+	mustEmbedUnimplementedRecordHoldingServiceServer()
+}
+
+// UnimplementedRecordHoldingServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRecordHoldingServiceServer struct{}
+
+func (UnimplementedRecordHoldingServiceServer) Observe(context.Context, *ObserveRecordHoldingRequest) (*ObserveRecordHoldingResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Observe not implemented")
+}
+func (UnimplementedRecordHoldingServiceServer) mustEmbedUnimplementedRecordHoldingServiceServer() {}
+func (UnimplementedRecordHoldingServiceServer) testEmbeddedByValue()                              {}
+
+// UnsafeRecordHoldingServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RecordHoldingServiceServer will
+// result in compilation errors.
+type UnsafeRecordHoldingServiceServer interface {
+	mustEmbedUnimplementedRecordHoldingServiceServer()
+}
+
+func RegisterRecordHoldingServiceServer(s grpc.ServiceRegistrar, srv RecordHoldingServiceServer) {
+	// If the following call pancis, it indicates UnimplementedRecordHoldingServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RecordHoldingService_ServiceDesc, srv)
+}
+
+func _RecordHoldingService_Observe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ObserveRecordHoldingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RecordHoldingServiceServer).Observe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RecordHoldingService_Observe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RecordHoldingServiceServer).Observe(ctx, req.(*ObserveRecordHoldingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// RecordHoldingService_ServiceDesc is the grpc.ServiceDesc for RecordHoldingService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RecordHoldingService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.RecordHoldingService",
+	HandlerType: (*RecordHoldingServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Observe",
+			Handler:    _RecordHoldingService_Observe_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "internal/platform/rpc/raftwire/raft.proto",
+}
+
+const (
+	RecordTransferService_Put_FullMethodName = "/dubi.internal.raft.v1.RecordTransferService/Put"
+	RecordTransferService_Get_FullMethodName = "/dubi.internal.raft.v1.RecordTransferService/Get"
+)
+
+// RecordTransferServiceClient is the client API for RecordTransferService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type RecordTransferServiceClient interface {
+	Put(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutRecordRequest, ObserveRecordHoldingResponse], error)
+	Get(ctx context.Context, in *ObserveRecordHoldingRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetRecordResponse], error)
+}
+
+type recordTransferServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRecordTransferServiceClient(cc grpc.ClientConnInterface) RecordTransferServiceClient {
+	return &recordTransferServiceClient{cc}
+}
+
+func (c *recordTransferServiceClient) Put(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutRecordRequest, ObserveRecordHoldingResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RecordTransferService_ServiceDesc.Streams[0], RecordTransferService_Put_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PutRecordRequest, ObserveRecordHoldingResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordTransferService_PutClient = grpc.ClientStreamingClient[PutRecordRequest, ObserveRecordHoldingResponse]
+
+func (c *recordTransferServiceClient) Get(ctx context.Context, in *ObserveRecordHoldingRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetRecordResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RecordTransferService_ServiceDesc.Streams[1], RecordTransferService_Get_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ObserveRecordHoldingRequest, GetRecordResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordTransferService_GetClient = grpc.ServerStreamingClient[GetRecordResponse]
+
+// RecordTransferServiceServer is the server API for RecordTransferService service.
+// All implementations must embed UnimplementedRecordTransferServiceServer
+// for forward compatibility.
+type RecordTransferServiceServer interface {
+	Put(grpc.ClientStreamingServer[PutRecordRequest, ObserveRecordHoldingResponse]) error
+	Get(*ObserveRecordHoldingRequest, grpc.ServerStreamingServer[GetRecordResponse]) error
+	mustEmbedUnimplementedRecordTransferServiceServer()
+}
+
+// UnimplementedRecordTransferServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRecordTransferServiceServer struct{}
+
+func (UnimplementedRecordTransferServiceServer) Put(grpc.ClientStreamingServer[PutRecordRequest, ObserveRecordHoldingResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Put not implemented")
+}
+func (UnimplementedRecordTransferServiceServer) Get(*ObserveRecordHoldingRequest, grpc.ServerStreamingServer[GetRecordResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedRecordTransferServiceServer) mustEmbedUnimplementedRecordTransferServiceServer() {}
+func (UnimplementedRecordTransferServiceServer) testEmbeddedByValue()                               {}
+
+// UnsafeRecordTransferServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RecordTransferServiceServer will
+// result in compilation errors.
+type UnsafeRecordTransferServiceServer interface {
+	mustEmbedUnimplementedRecordTransferServiceServer()
+}
+
+func RegisterRecordTransferServiceServer(s grpc.ServiceRegistrar, srv RecordTransferServiceServer) {
+	// If the following call pancis, it indicates UnimplementedRecordTransferServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RecordTransferService_ServiceDesc, srv)
+}
+
+func _RecordTransferService_Put_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(RecordTransferServiceServer).Put(&grpc.GenericServerStream[PutRecordRequest, ObserveRecordHoldingResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordTransferService_PutServer = grpc.ClientStreamingServer[PutRecordRequest, ObserveRecordHoldingResponse]
+
+func _RecordTransferService_Get_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ObserveRecordHoldingRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(RecordTransferServiceServer).Get(m, &grpc.GenericServerStream[ObserveRecordHoldingRequest, GetRecordResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordTransferService_GetServer = grpc.ServerStreamingServer[GetRecordResponse]
+
+// RecordTransferService_ServiceDesc is the grpc.ServiceDesc for RecordTransferService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RecordTransferService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.RecordTransferService",
+	HandlerType: (*RecordTransferServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Put",
+			Handler:       _RecordTransferService_Put_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Get",
+			Handler:       _RecordTransferService_Get_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "internal/platform/rpc/raftwire/raft.proto",
+}
+
+const (
+	RecordCutService_Get_FullMethodName = "/dubi.internal.raft.v1.RecordCutService/Get"
+)
+
+// RecordCutServiceClient is the client API for RecordCutService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type RecordCutServiceClient interface {
+	Get(ctx context.Context, in *GetRecordCutRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetRecordCutResponse], error)
+}
+
+type recordCutServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRecordCutServiceClient(cc grpc.ClientConnInterface) RecordCutServiceClient {
+	return &recordCutServiceClient{cc}
+}
+
+func (c *recordCutServiceClient) Get(ctx context.Context, in *GetRecordCutRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetRecordCutResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RecordCutService_ServiceDesc.Streams[0], RecordCutService_Get_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetRecordCutRequest, GetRecordCutResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordCutService_GetClient = grpc.ServerStreamingClient[GetRecordCutResponse]
+
+// RecordCutServiceServer is the server API for RecordCutService service.
+// All implementations must embed UnimplementedRecordCutServiceServer
+// for forward compatibility.
+type RecordCutServiceServer interface {
+	Get(*GetRecordCutRequest, grpc.ServerStreamingServer[GetRecordCutResponse]) error
+	mustEmbedUnimplementedRecordCutServiceServer()
+}
+
+// UnimplementedRecordCutServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRecordCutServiceServer struct{}
+
+func (UnimplementedRecordCutServiceServer) Get(*GetRecordCutRequest, grpc.ServerStreamingServer[GetRecordCutResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedRecordCutServiceServer) mustEmbedUnimplementedRecordCutServiceServer() {}
+func (UnimplementedRecordCutServiceServer) testEmbeddedByValue()                          {}
+
+// UnsafeRecordCutServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RecordCutServiceServer will
+// result in compilation errors.
+type UnsafeRecordCutServiceServer interface {
+	mustEmbedUnimplementedRecordCutServiceServer()
+}
+
+func RegisterRecordCutServiceServer(s grpc.ServiceRegistrar, srv RecordCutServiceServer) {
+	// If the following call pancis, it indicates UnimplementedRecordCutServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RecordCutService_ServiceDesc, srv)
+}
+
+func _RecordCutService_Get_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetRecordCutRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(RecordCutServiceServer).Get(m, &grpc.GenericServerStream[GetRecordCutRequest, GetRecordCutResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordCutService_GetServer = grpc.ServerStreamingServer[GetRecordCutResponse]
+
+// RecordCutService_ServiceDesc is the grpc.ServiceDesc for RecordCutService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RecordCutService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.RecordCutService",
+	HandlerType: (*RecordCutServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Get",
+			Handler:       _RecordCutService_Get_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "internal/platform/rpc/raftwire/raft.proto",
+}
+
+const (
+	RecordRepairService_Fill_FullMethodName   = "/dubi.internal.raft.v1.RecordRepairService/Fill"
+	RecordRepairService_Repair_FullMethodName = "/dubi.internal.raft.v1.RecordRepairService/Repair"
+)
+
+// RecordRepairServiceClient is the client API for RecordRepairService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type RecordRepairServiceClient interface {
+	Fill(ctx context.Context, in *FillRecordCutRequest, opts ...grpc.CallOption) (*FillRecordCutResponse, error)
+	Repair(ctx context.Context, in *RepairRecordRequest, opts ...grpc.CallOption) (*RepairRecordResponse, error)
+}
+
+type recordRepairServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRecordRepairServiceClient(cc grpc.ClientConnInterface) RecordRepairServiceClient {
+	return &recordRepairServiceClient{cc}
+}
+
+func (c *recordRepairServiceClient) Fill(ctx context.Context, in *FillRecordCutRequest, opts ...grpc.CallOption) (*FillRecordCutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FillRecordCutResponse)
+	err := c.cc.Invoke(ctx, RecordRepairService_Fill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *recordRepairServiceClient) Repair(ctx context.Context, in *RepairRecordRequest, opts ...grpc.CallOption) (*RepairRecordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepairRecordResponse)
+	err := c.cc.Invoke(ctx, RecordRepairService_Repair_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RecordRepairServiceServer is the server API for RecordRepairService service.
+// All implementations must embed UnimplementedRecordRepairServiceServer
+// for forward compatibility.
+type RecordRepairServiceServer interface {
+	Fill(context.Context, *FillRecordCutRequest) (*FillRecordCutResponse, error)
+	Repair(context.Context, *RepairRecordRequest) (*RepairRecordResponse, error)
+	mustEmbedUnimplementedRecordRepairServiceServer()
+}
+
+// UnimplementedRecordRepairServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRecordRepairServiceServer struct{}
+
+func (UnimplementedRecordRepairServiceServer) Fill(context.Context, *FillRecordCutRequest) (*FillRecordCutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Fill not implemented")
+}
+func (UnimplementedRecordRepairServiceServer) Repair(context.Context, *RepairRecordRequest) (*RepairRecordResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Repair not implemented")
+}
+func (UnimplementedRecordRepairServiceServer) mustEmbedUnimplementedRecordRepairServiceServer() {}
+func (UnimplementedRecordRepairServiceServer) testEmbeddedByValue()                             {}
+
+// UnsafeRecordRepairServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RecordRepairServiceServer will
+// result in compilation errors.
+type UnsafeRecordRepairServiceServer interface {
+	mustEmbedUnimplementedRecordRepairServiceServer()
+}
+
+func RegisterRecordRepairServiceServer(s grpc.ServiceRegistrar, srv RecordRepairServiceServer) {
+	// If the following call pancis, it indicates UnimplementedRecordRepairServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RecordRepairService_ServiceDesc, srv)
+}
+
+func _RecordRepairService_Fill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FillRecordCutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RecordRepairServiceServer).Fill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RecordRepairService_Fill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RecordRepairServiceServer).Fill(ctx, req.(*FillRecordCutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RecordRepairService_Repair_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RepairRecordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RecordRepairServiceServer).Repair(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RecordRepairService_Repair_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RecordRepairServiceServer).Repair(ctx, req.(*RepairRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// RecordRepairService_ServiceDesc is the grpc.ServiceDesc for RecordRepairService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RecordRepairService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.RecordRepairService",
+	HandlerType: (*RecordRepairServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Fill",
+			Handler:    _RecordRepairService_Fill_Handler,
+		},
+		{
+			MethodName: "Repair",
+			Handler:    _RecordRepairService_Repair_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "internal/platform/rpc/raftwire/raft.proto",
+}

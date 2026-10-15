@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -23,13 +24,11 @@ type RootControl interface {
 }
 
 type GroupControl interface {
-	PrepareJoining(ctx context.Context, groupID string, raftID uint64) error
+	PrepareJoining(ctx context.Context, task rootstate.GroupTaskReference, raftID uint64) error
 	Membership(ctx context.Context, groupID string) (*raftpb.ConfState, error)
 	Status(ctx context.Context, groupID string) (raft.GroupStatus, error)
-	AddLearner(ctx context.Context, groupID string, raftID uint64) error
-	PromoteLearner(ctx context.Context, groupID string, raftID uint64) error
-	RemoveMember(ctx context.Context, groupID string, raftID uint64) error
-	TransferLeadership(ctx context.Context, groupID string, target uint64) (raft.GroupStatus, error)
+	ChangeMembership(ctx context.Context, mutation rootstate.GroupMutation) error
+	TransferLeadership(ctx context.Context, task rootstate.GroupTaskReference, target uint64) (raft.GroupStatus, error)
 }
 
 type Reconciler struct {
@@ -52,6 +51,30 @@ func (reconciler *Reconciler) Plan(ctx context.Context, plan rootstate.GroupChan
 		RequestID: commandRequestID("plan", plan.ChangeID), Type: rootstate.PlanGroupMembers,
 		GroupPlan: &plan}
 	return reconciler.submitRoot(ctx, command)
+}
+
+// CheckAvailable confirms that the target Group can answer a real membership
+// read before a maintenance task is persisted. An explicit Node removal may
+// fall back to the Root-only retirement path when this check cannot reach a
+// Group quorum; no health timeout invokes that path.
+func (reconciler *Reconciler) CheckAvailable(ctx context.Context, groupID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := reconciler.rootControl.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		return fmt.Errorf("confirm Root before Group availability check: %w", err)
+	}
+	if _, found, err := reconciler.root.Group(groupID); err != nil {
+		return err
+	} else if !found {
+		return errors.New("Group is not registered")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := reconciler.groupControl.Membership(checkCtx, groupID); err != nil {
+		return fmt.Errorf("Group has no available quorum: %w", err)
+	}
+	return nil
 }
 
 // Reconcile is restart-safe: each invocation derives the next action from the
@@ -96,10 +119,10 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context, changeID string) er
 		for _, member := range change.Members {
 			role, present := actual[member.RaftID]
 			if !present {
-				if err := reconciler.groupControl.PrepareJoining(ctx, change.GroupID, member.RaftID); err != nil {
+				if err := reconciler.groupControl.PrepareJoining(ctx, taskReference(change), member.RaftID); err != nil {
 					return fmt.Errorf("prepare RaftID %d as joining Group: %w", member.RaftID, err)
 				}
-				if err := reconciler.groupControl.AddLearner(ctx, change.GroupID, member.RaftID); err != nil {
+				if err := reconciler.change(ctx, change, member.RaftID, raftpb.ConfChangeType_ConfChangeAddLearnerNode); err != nil {
 					return fmt.Errorf("add RaftID %d as Learner: %w", member.RaftID, err)
 				}
 				if err := reconciler.confirmTarget(ctx, change.GroupID); err != nil {
@@ -109,7 +132,7 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context, changeID string) er
 				break
 			}
 			if member.Role == rootstate.GroupMemberVoter && role == rootstate.GroupMemberLearner {
-				if err := reconciler.groupControl.PromoteLearner(ctx, change.GroupID, member.RaftID); err != nil {
+				if err := reconciler.change(ctx, change, member.RaftID, raftpb.ConfChangeType_ConfChangeAddNode); err != nil {
 					return fmt.Errorf("promote Learner %d: %w", member.RaftID, err)
 				}
 				if err := reconciler.confirmTarget(ctx, change.GroupID); err != nil {
@@ -137,12 +160,12 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context, changeID string) er
 				if target == 0 {
 					return errors.New("cannot remove local Leader without another desired Voter")
 				}
-				if _, err := reconciler.groupControl.TransferLeadership(ctx, change.GroupID, target); err != nil {
+				if _, err := reconciler.groupControl.TransferLeadership(ctx, taskReference(change), target); err != nil {
 					return fmt.Errorf("transfer Group leadership to %d: %w", target, err)
 				}
 				return ErrLeadershipTransferred
 			}
-			if err := reconciler.groupControl.RemoveMember(ctx, change.GroupID, raftID); err != nil {
+			if err := reconciler.change(ctx, change, raftID, raftpb.ConfChangeType_ConfChangeRemoveNode); err != nil {
 				return fmt.Errorf("remove RaftID %d: %w", raftID, err)
 			}
 			if err := reconciler.confirmTarget(ctx, change.GroupID); err != nil {
@@ -158,7 +181,9 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context, changeID string) er
 			continue
 		}
 		completion := rootstate.Command{Version: rootstate.FormatVersion,
-			RequestID: commandRequestID("complete", change.ChangeID), Type: rootstate.CompleteGroupMembers,
+			// A temporary Root eligibility rejection is durable. Retry at a fresh
+			// Root cut; the immutable task still makes successful completion idempotent.
+			RequestID: commandRequestID("complete", fmt.Sprintf("%s:%d", change.ChangeID, reconciler.root.AppliedIndex())), Type: rootstate.CompleteGroupMembers,
 			GroupCompletion: &rootstate.GroupChangeCompletion{ChangeID: change.ChangeID, GroupID: change.GroupID}}
 		return reconciler.submitRoot(ctx, completion)
 	}
@@ -184,6 +209,14 @@ func (reconciler *Reconciler) ReconcilePending(ctx context.Context) error {
 func (reconciler *Reconciler) confirmTarget(ctx context.Context, groupID string) error {
 	_, err := reconciler.groupControl.Membership(ctx, groupID)
 	return err
+}
+
+func (reconciler *Reconciler) change(ctx context.Context, task rootstate.GroupChange, member uint64, operation raftpb.ConfChangeType) error {
+	return reconciler.groupControl.ChangeMembership(ctx, rootstate.GroupMutation{GroupID: task.GroupID, ChangeID: task.ChangeID, ExpectedEpoch: task.ExpectedEpoch, Member: member, Operation: operation})
+}
+
+func taskReference(task rootstate.GroupChange) rootstate.GroupTaskReference {
+	return rootstate.GroupTaskReference{GroupID: task.GroupID, ChangeID: task.ChangeID, ExpectedEpoch: task.ExpectedEpoch}
 }
 
 func (reconciler *Reconciler) submitRoot(ctx context.Context, command rootstate.Command) error {

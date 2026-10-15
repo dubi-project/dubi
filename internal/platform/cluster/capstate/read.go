@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/router"
 )
 
@@ -20,18 +21,18 @@ type ReadHandler interface {
 	Read(view ReadView, target router.Target, payload []byte) (Outcome, error)
 }
 
-// ReadView exposes only capability-owned keys. It is valid for the duration of
+// ReadView exposes only keys in the Target's immutable Keyspace. It is valid for the duration of
 // the ReadRouted callback and cannot access Fence, result, or Raft metadata.
 type ReadView struct {
-	state        *State
-	capabilityID string
+	state    *State
+	keyspace rootstate.Keyspace
 }
 
 func (view ReadView) Get(key []byte) ([]byte, bool, error) {
 	if view.state == nil || validateCapabilityKey(key) != nil {
 		return nil, false, errors.New("invalid capability read key")
 	}
-	return view.state.get(capabilityKey(view.capabilityID, key))
+	return view.state.getValue(capabilityKey(view.keyspace, key))
 }
 
 // ReadRouted establishes a quorum read barrier on this Owner Group, then holds
@@ -55,8 +56,8 @@ func (s *State) ReadRouted(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed {
-		return 0, errors.New("capability state is closed")
+	if err := s.usable(); err != nil {
+		return 0, err
 	}
 	if s.applied < index {
 		return 0, ErrStateBehind
@@ -71,7 +72,7 @@ func (s *State) ReadRouted(
 	if err := router.CheckOwner(s.groupID, descriptor, target); err != nil {
 		return 0, err
 	}
-	if err := read(ReadView{state: s, capabilityID: target.Keyspace.CapabilityID}); err != nil {
+	if err := read(ReadView{state: s, keyspace: target.Keyspace}); err != nil {
 		return 0, err
 	}
 	return index, nil

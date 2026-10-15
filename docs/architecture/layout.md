@@ -13,7 +13,7 @@ dubi/
 │   │   ├── cluster/           # 集群、Tenant 目录、成员与全局控制面
 │   │   ├── config/            # 配置加载、校验和动态配置投影
 │   │   ├── identity/          # NodeID、CSR/enrollment、证书、PKI、TLS 身份
-│   │   ├── node/              # Node 加入、Drain、替换、退役与身份 Fence
+│   │   ├── node/              # Node 加入、Drain、成员移除、退役与身份 Fence
 │   │   ├── observability/     # 状态、指标、日志、诊断基础设施
 │   │   ├── placement/         # 跨能力的 Store 选择、预约、迁移与均衡控制
 │   │   ├── raft/              # Raft Storage、Group Host、Snapshot 生命周期
@@ -22,7 +22,8 @@ dubi/
 │   │   ├── router/            # Tenant / Dataset / Range 路由、Epoch 与栅栏
 │   │   ├── rpc/               # 连接、传输、重试、控制/数据通道边界
 │   │   ├── storage/           # Store / Volume 生命周期、故障隔离与空间预留
-│   │   │   └── pack/          # 节点底座提供的聚合记录容器
+│   │   │   ├── pack/          # 节点底座提供的聚合记录容器
+│   │   │   └── records/       # 不可变内容身份、本地索引和持有校验（Node 所有）
 │   │   └── task/              # 有界后台任务、调度与资源预算
 │   ├── capability/            # 独立的数据产品语义
 │   │   ├── record/            # 首个正式 capability：版本化 KV / 文档记录

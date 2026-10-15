@@ -1,18 +1,8 @@
 package config
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
-	"fmt"
-	"math/big"
-	"net"
-	"net/url"
+	"crypto/tls"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,9 +10,8 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
 )
 
-func TestLoadUsesBootstrapPKIDefaults(t *testing.T) {
-	root := t.TempDir()
-	store := filepath.Join(root, "store")
+func TestManagedTLSAndIdentity(t *testing.T) {
+	store := t.TempDir()
 	value, err := identity.Bootstrap(store)
 	if err != nil {
 		t.Fatal(err)
@@ -31,151 +20,111 @@ func TestLoadUsesBootstrapPKIDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	configuration := fmt.Sprintf(`version: 1
-store_root: store
-listen: 127.0.0.1:7443
-advertise: 127.0.0.1:7443
-root_bootstrap:
-  - raft_id: %d
-    address: 127.0.0.1:7443
-`, value.RaftID)
-	path := filepath.Join(root, "dubi.yaml")
-	if err := os.WriteFile(path, []byte(configuration), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := Load(path)
+	server, client, err := LoadTLS(store, value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.TLS.Certificate != material.Paths.Certificate || loaded.TLS.PrivateKey != material.Paths.PrivateKey ||
-		loaded.TLS.CA != material.Paths.CACertificate || loaded.TLS.ServerName != nodepki.DefaultServerName {
-		t.Fatalf("default TLS paths = %+v", loaded.TLS)
+	if server.ClientAuth != tls.RequireAndVerifyClientCert ||
+		server.MinVersion != tls.VersionTLS13 || client.MinVersion != tls.VersionTLS13 ||
+		client.ServerName != nodepki.DefaultServerName || client.InsecureSkipVerify {
+		t.Fatal("managed TLS did not enforce mutual authentication and fixed server name")
 	}
-	_, clientTLS, err := loaded.LoadTLS(value)
-	if err != nil {
+	if err := identity.ValidateNodeCertificate(client.Certificates[0].Leaf, value); err != nil {
 		t.Fatal(err)
 	}
-	if clientTLS.ServerName != nodepki.DefaultServerName {
-		t.Fatalf("default TLS server name = %q", clientTLS.ServerName)
+	wrong := value
+	wrong.RaftID++
+	if _, _, err := LoadTLS(store, wrong); err == nil {
+		t.Fatal("accepted TLS for another identity")
+	}
+	if err := os.Chmod(material.Paths.PrivateKey, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadTLS(store, value); err == nil {
+		t.Fatal("accepted exposed private key")
 	}
 }
 
-func TestLoadStrictConfigurationAndTLSIdentity(t *testing.T) {
-	root := t.TempDir()
-	value := identity.Identity{Version: 1,
-		ClusterID: "cluster_0123456789abcdef0123456789abcdef",
-		NodeID:    "node_0123456789abcdef0123456789abcdef", RaftID: 42,
-		CreatedAt: time.Now()}
-	writeConfigTLS(t, root, value)
-	configuration := fmt.Sprintf(`version: 1
-store_root: store
-listen: 127.0.0.1:7443
-advertise: 127.0.0.1:7443
-tls:
-  certificate: node.crt
-  private_key: node.key
-  ca: ca.crt
-  server_name: 127.0.0.1
-root_bootstrap:
-  - raft_id: %d
-    address: 127.0.0.1:7443
-tick_interval: 25ms
-membership_interval: 2s
-max_message_size: 1048576
-`, value.RaftID)
-	path := filepath.Join(root, "dubi.yaml")
-	if err := os.WriteFile(path, []byte(configuration), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := Load(path)
+func TestManagedReloadableTLSUsesCallbacksOnly(t *testing.T) {
+	store := t.TempDir()
+	id, err := identity.Bootstrap(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.StoreRoot != filepath.Join(root, "store") || loaded.TickInterval != 25*time.Millisecond ||
-		loaded.MembershipInterval != 2*time.Second || len(loaded.RootPeers()) != 1 || loaded.RootPeers()[0] != 42 {
-		t.Fatalf("loaded configuration = %+v", loaded)
+	if _, err := nodepki.Ensure(store, id, nodepki.DefaultServerName, time.Time{}); err != nil {
+		t.Fatal(err)
 	}
-	_, clientTLS, err := loaded.LoadTLS(value)
+	server, client, err := LoadReloadableTLS(store, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clientTLS.ServerName != "127.0.0.1" {
-		t.Fatalf("expert TLS server name = %q", clientTLS.ServerName)
+	if len(server.Certificates) != 0 || len(client.Certificates) != 0 || server.GetCertificate == nil || client.GetClientCertificate == nil ||
+		server.ClientAuth != tls.RequireAndVerifyClientCert || server.MinVersion != tls.VersionTLS13 || client.MinVersion != tls.VersionTLS13 ||
+		client.InsecureSkipVerify || client.ServerName != nodepki.DefaultServerName {
+		t.Fatal("invalid dynamic TLS policy")
 	}
-	directory, err := loaded.BootstrapDirectory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if address, found := directory.Resolve(42); !found || address != "127.0.0.1:7443" {
-		t.Fatalf("bootstrap address = %q, %v", address, found)
-	}
-
-	if err := os.WriteFile(path, append([]byte(configuration), []byte("unknown: true\n")...), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("unknown configuration field was accepted")
-	}
-}
-
-func TestLoadTLSRejectsExposedPrivateKey(t *testing.T) {
-	root := t.TempDir()
-	value := identity.Identity{Version: 1,
-		ClusterID: "cluster_0123456789abcdef0123456789abcdef",
-		NodeID:    "node_0123456789abcdef0123456789abcdef", RaftID: 42,
-		CreatedAt: time.Now()}
-	writeConfigTLS(t, root, value)
-	configuration := Config{Version: 1, StoreRoot: filepath.Join(root, "store"),
-		Listen: "127.0.0.1:7443", Advertise: "127.0.0.1:7443",
-		TLS: TLSFiles{Certificate: filepath.Join(root, "node.crt"), PrivateKey: filepath.Join(root, "node.key"),
-			CA: filepath.Join(root, "ca.crt"), ServerName: "127.0.0.1"}, TickInterval: time.Second,
-		MembershipInterval: time.Second, MaxMessageSize: 1024}
-	if err := os.Chmod(configuration.TLS.PrivateKey, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := configuration.LoadTLS(value); err == nil {
-		t.Fatal("group/world-readable Node private key was accepted")
-	}
-}
-
-func writeConfigTLS(t *testing.T, root string, value identity.Identity) {
-	t.Helper()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	now := time.Now()
-	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "DUBI CA"},
-		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), IsCA: true,
-		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, _ := x509.ParseCertificate(caDER)
-	nodeKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	identityURI, _ := identity.NodeIdentityURI(value)
-	nodeTemplate := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: value.NodeID},
-		URIs: []*url.URL{identityURI}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}}
-	nodeDER, err := x509.CreateCertificate(rand.Reader, nodeTemplate, ca, &nodeKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(nodeKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writes := []struct {
-		name string
-		data []byte
-		mode os.FileMode
-	}{
-		{"ca.crt", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o644},
-		{"node.crt", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: nodeDER}), 0o644},
-		{"node.key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600},
-	}
-	for _, write := range writes {
-		if err := os.WriteFile(filepath.Join(root, write.name), write.data, write.mode); err != nil {
+	for _, get := range []func() (*tls.Certificate, error){func() (*tls.Certificate, error) { return server.GetCertificate(nil) }, func() (*tls.Certificate, error) { return client.GetClientCertificate(nil) }} {
+		cert, err := get()
+		if err != nil {
 			t.Fatal(err)
+		}
+		if err := identity.ValidateNodeCertificate(cert.Leaf, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestManagedTLSRejectsMissingAndReplacedMaterial(t *testing.T) {
+	store := t.TempDir()
+	value, err := identity.Bootstrap(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadTLS(store, value); err == nil {
+		t.Fatal("missing PKI was accepted")
+	}
+	material, err := nodepki.Ensure(store, value, nodepki.DefaultServerName, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherStore := t.TempDir()
+	other, err := identity.Bootstrap(otherStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPKI, err := nodepki.Ensure(otherStore, other, nodepki.DefaultServerName, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := os.ReadFile(otherPKI.Paths.CACertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(material.Paths.CACertificate, ca, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadTLS(store, value); err == nil {
+		t.Fatal("accepted CA from another cluster")
+	}
+}
+
+func TestProcessDefaultsAndListenValidation(t *testing.T) {
+	t.Setenv("DUBI_STORE", "")
+	if DefaultStore() != "/var/lib/dubi" {
+		t.Fatal("unexpected default store")
+	}
+	t.Setenv("DUBI_STORE", "/data/dubi")
+	if DefaultStore() != "/data/dubi" {
+		t.Fatal("store environment ignored")
+	}
+	for _, address := range []string{DefaultListen, "127.0.0.1:0", "[::1]:7443"} {
+		if err := ValidateListen(address); err != nil {
+			t.Fatalf("%s: %v", address, err)
+		}
+	}
+	for _, address := range []string{"", ":7443", "localhost", "127.0.0.1:65536", "127.0.0.1:-1"} {
+		if err := ValidateListen(address); err == nil {
+			t.Fatalf("accepted %q", address)
 		}
 	}
 }

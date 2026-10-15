@@ -32,6 +32,48 @@ func TestPrepareIsIdempotentAndRejectsMetadataOrKeyChanges(t *testing.T) {
 	}
 }
 
+func TestLoadPreparedIsReadOnlyAndChecksLocalKeyBinding(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent")
+	if _, _, err := LoadPrepared(missing); err == nil {
+		t.Fatal("missing request accepted")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatal("read created store", err)
+	}
+	store, ticket, request, bundle, now := receiptFixture(t)
+	id, loaded, err := LoadPrepared(store)
+	if err != nil || loaded != request || id.ClusterID != "" {
+		t.Fatal("prepared intent changed", err)
+	}
+	key, err := os.ReadFile(StorePaths(store).PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, _, _, _ := receiptFixture(t)
+	foreign, err := os.ReadFile(StorePaths(other).PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(StorePaths(store).PrivateKey, foreign, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadPrepared(store); err == nil {
+		t.Fatal("foreign CSR key accepted")
+	}
+	if err := os.WriteFile(StorePaths(store).PrivateKey, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveReceipt(store, ticket, request, bundle, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ResumeReceipt(store, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadPrepared(store); err == nil {
+		t.Fatal("bound node treated as fresh intent")
+	}
+}
+
 func TestEnrollmentDocumentsAreStrictAndCSRIsAuthenticated(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "joiner")
 	_, request, err := Prepare(store, "127.0.0.1", "region-b", "127.0.0.1:7443")

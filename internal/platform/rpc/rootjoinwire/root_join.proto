@@ -1,0 +1,44 @@
+syntax = "proto3";
+package dubi.internal.rootjoin.v1;
+option go_package = "github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire";
+
+// Node-role only, available without the CA signer. This protocol admits a
+// learner; it neither promotes voters nor certifies that a learner caught up.
+message JoinRootRequest {
+  string cluster_id = 1;
+  string grant_id = 2;
+  bytes request_document = 3;
+}
+message DiscoverRootRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+}
+message RootPeer {
+  uint64 raft_id = 1;
+  string node_id = 2;
+  string region_id = 3;
+  string address = 4;
+	string name = 5;
+}
+message RootView {
+  string cluster_id = 1;
+  uint64 applied_index = 2;
+  repeated uint64 voters = 3;
+  repeated uint64 voters_outgoing = 4;
+  repeated uint64 learners = 5;
+  repeated uint64 learners_next = 6;
+  bool auto_leave = 7;
+  repeated RootPeer peers = 8;
+  // A routing preference only: never introduces a peer outside membership.
+  uint64 leader_id = 9;
+}
+message JoinRootResponse {
+  RootView view = 1;
+  // Zero means redirect/retry, not permission to start a new Root group.
+  uint64 admitted_index = 2;
+}
+message DiscoverRootResponse { RootView view = 1; }
+service RootJoinService {
+  rpc JoinRoot(JoinRootRequest) returns (JoinRootResponse);
+  rpc DiscoverRoot(DiscoverRootRequest) returns (DiscoverRootResponse);
+}

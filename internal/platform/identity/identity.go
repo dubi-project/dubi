@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	filename      = "DUBI_NODE_IDENTITY"
-	formatVersion = 1
+	filename        = "DUBI_NODE_IDENTITY"
+	formatVersion   = 1
+	OriginBootstrap = "bootstrap"
+	OriginJoin      = "join"
 )
 
 var (
@@ -36,6 +38,9 @@ type Identity struct {
 	RaftID    uint64    `json:"raft_id"`
 	ClusterID string    `json:"cluster_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// Origin is generated once; binding a joining identity never changes it.
+	// Empty is accepted only for identities written before origin tracking.
+	Origin string `json:"origin,omitempty"`
 }
 
 // Bootstrap creates a new Cluster and its first Node, or loads an existing bootstrap identity.
@@ -52,7 +57,7 @@ func Bootstrap(root string) (Identity, error) {
 	defer release()
 	current, err := load(root)
 	if err == nil {
-		if current.ClusterID == "" {
+		if current.ClusterID == "" || current.Origin == OriginJoin {
 			return Identity{}, fmt.Errorf("node %s was prepared to join and cannot bootstrap a new Cluster", current.NodeID)
 		}
 		return current, nil
@@ -113,6 +118,13 @@ func prepareRoot(root string) error {
 	return nil
 }
 
+func ValidateClusterID(clusterID string) error {
+	if !clusterRE.MatchString(clusterID) {
+		return errors.New("invalid Cluster identity")
+	}
+	return nil
+}
+
 // BindCluster binds a prepared Node once; rebinding it to another Cluster is forbidden.
 func BindCluster(root, clusterID string) (Identity, error) {
 	if !clusterRE.MatchString(clusterID) {
@@ -146,6 +158,13 @@ func BindCluster(root, clusterID string) (Identity, error) {
 func Load(root string) (Identity, error) {
 	identityMu.Lock()
 	defer identityMu.Unlock()
+	// Publication is atomic. Validate an existing artifact before opening the
+	// cross-process lock, so probing an unmanaged or malformed Store cannot
+	// initialize even a lock file there. Re-read under the lock to serialize
+	// against a concurrent Cluster binding in another process.
+	if _, err := load(root); err != nil {
+		return Identity{}, err
+	}
 	release, err := lock(root)
 	if err != nil {
 		return Identity{}, err
@@ -193,8 +212,10 @@ func newIdentity(bootstrap bool) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
-	value := Identity{Version: formatVersion, NodeID: nodeID, RaftID: raftID, CreatedAt: time.Now().UTC()}
+	value := Identity{Version: formatVersion, NodeID: nodeID, RaftID: raftID,
+		CreatedAt: time.Now().UTC(), Origin: OriginJoin}
 	if bootstrap {
+		value.Origin = OriginBootstrap
 		value.ClusterID, err = randomID("cluster_", 16)
 		if err != nil {
 			return Identity{}, err
@@ -224,6 +245,12 @@ func randomRaftID() (uint64, error) {
 }
 
 func validate(value Identity) error {
+	if value.Origin != "" && value.Origin != OriginBootstrap && value.Origin != OriginJoin {
+		return errors.New("invalid Node identity origin")
+	}
+	if value.Origin == OriginBootstrap && value.ClusterID == "" {
+		return errors.New("bootstrap identity must belong to a Cluster")
+	}
 	if value.Version != formatVersion {
 		return fmt.Errorf("unsupported Node identity version %d", value.Version)
 	}

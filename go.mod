@@ -6,9 +6,9 @@ require (
 	github.com/cockroachdb/pebble v1.1.5
 	go.etcd.io/raft/v3 v3.7.0
 	golang.org/x/sys v0.46.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -37,5 +37,4 @@ require (
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459 // indirect
 )

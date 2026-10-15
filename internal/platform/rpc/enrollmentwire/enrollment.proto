@@ -1,0 +1,39 @@
+syntax = "proto3";
+package dubi.internal.enrollment.v1;
+option go_package = "github.com/dubi-project/dubi/internal/platform/rpc/enrollmentwire";
+
+// Private foundation protocol, not a tenant/public data API. Grant management
+// requires a confirmed Node certificate; EnrollNode requires enrollment role.
+message CreateGrantRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string grant_id = 3;
+  string secret_sha256 = 4;
+  bytes public_key_der = 5;
+  int64 expires_unix = 6;
+}
+message CreateGrantResponse {
+  string cluster_id = 1;
+  string grant_id = 2;
+  string issuer_address = 3;
+  int64 expires_unix = 4;
+  string ca_certificate_pem = 5;
+  string certificate_pem = 6;
+}
+message RevokeGrantRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string grant_id = 3;
+}
+message RevokeGrantResponse {}
+message EnrollNodeRequest {
+  string cluster_id = 1;
+  bytes request_document = 2;
+  bytes admission_proof = 3;
+}
+message EnrollNodeResponse { bytes bundle_document = 1; }
+service EnrollmentService {
+  rpc CreateGrant(CreateGrantRequest) returns (CreateGrantResponse);
+  rpc RevokeGrant(RevokeGrantRequest) returns (RevokeGrantResponse);
+  rpc EnrollNode(EnrollNodeRequest) returns (EnrollNodeResponse);
+}

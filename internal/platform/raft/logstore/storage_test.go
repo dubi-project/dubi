@@ -199,6 +199,79 @@ func TestStorageRejectsGapsAndStateRegression(t *testing.T) {
 	}
 }
 
+func TestStorageSmallByteLimitDoesNotPreallocateWholeLog(t *testing.T) {
+	storage, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	var entries []*raftpb.Entry
+	for index := uint64(1); index <= 1000; index++ {
+		entries = append(entries, entry(index, 1, "data"))
+	}
+	if err := storage.Save(nil, entries, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, bound := range []uint64{0, 1, uint64(proto.Size(entries[0]))} {
+		got, err := storage.Entries(1, 1001, bound)
+		if err != nil || len(got) != 1 || cap(got) > 64 {
+			t.Fatal("byte-limited read allocated the full range", len(got), cap(got), err)
+		}
+	}
+}
+
+func TestLocalSnapshotPreservesNewerMembershipAndLogSuffix(t *testing.T) {
+	root := t.TempDir()
+	storage, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	if err := storage.Save(hard(1, 1, 3), []*raftpb.Entry{entry(1, 1, "one"), entry(2, 1, "two"), entry(3, 1, "three")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	oldConf := &raftpb.ConfState{Voters: []uint64{1}}
+	newConf := &raftpb.ConfState{Voters: []uint64{1}, Learners: []uint64{2}}
+	if err := storage.SaveConfState(newConf); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &raftpb.Snapshot{Data: []byte("captured-at-two"), Metadata: &raftpb.SnapshotMetadata{Index: proto.Uint64(2), Term: proto.Uint64(1), ConfState: oldConf}}
+	if err := storage.SaveLocalSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	storage, err = Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	_, current, err := storage.InitialState()
+	if err != nil || !proto.Equal(current, newConf) {
+		t.Fatal("local snapshot rolled back membership", current, err)
+	}
+	stored, err := storage.Snapshot()
+	if err != nil || !proto.Equal(stored, snapshot) {
+		t.Fatal("snapshot lost its historical membership", err)
+	}
+	suffix, err := storage.Entries(3, 4, 1024)
+	if err != nil || len(suffix) != 1 || string(suffix[0].GetData()) != "three" {
+		t.Fatal("newer log suffix lost", err)
+	}
+	for _, invalid := range []*raftpb.Snapshot{
+		{Metadata: &raftpb.SnapshotMetadata{Index: proto.Uint64(4), Term: proto.Uint64(1), ConfState: newConf}},
+		{Metadata: &raftpb.SnapshotMetadata{Index: proto.Uint64(3), Term: proto.Uint64(2), ConfState: newConf}},
+	} {
+		if err := storage.SaveLocalSnapshot(invalid); err == nil {
+			t.Fatal("invalid local cut accepted")
+		}
+	}
+	if after, _ := storage.Snapshot(); !proto.Equal(after, stored) {
+		t.Fatal("rejection changed snapshot")
+	}
+}
+
 func entry(index, term uint64, data string) *raftpb.Entry {
 	return &raftpb.Entry{Index: new(index), Term: new(term), Data: []byte(data)}
 }

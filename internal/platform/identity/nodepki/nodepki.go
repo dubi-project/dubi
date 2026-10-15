@@ -1,6 +1,7 @@
-// Package nodepki owns DUBI's bootstrap Node CA and serving certificate files.
-// The CA signer is stored only as an authenticated envelope encrypted to a
-// node-local X25519 wrapping key; joined nodes will receive a leaf, not signer.
+// Package nodepki owns DUBI's Node CA and serving certificate files. Authority
+// signer material is always stored as an authenticated envelope encrypted to a
+// node-local X25519 wrapping key; transfer and Root qualification are separate
+// control-plane responsibilities.
 package nodepki
 
 import (
@@ -27,9 +28,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/identity"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -78,11 +81,84 @@ type Signer struct {
 	ca         *x509.Certificate
 	privateKey crypto.Signer
 	clusterID  string
+	epoch      uint64
+}
+
+// Managed servers already hold the Store lease. Serialize wrapping-key
+// creation and envelope CAS within the process as well.
+var signerInstallMu sync.Mutex
+
+func (signer *Signer) AuthorityEpoch() uint64 {
+	if signer == nil {
+		return 0
+	}
+	return signer.epoch
+}
+
+// SealFor encrypts this CA signer for another Node's X25519 wrapping key. The
+// target identity and authority epoch are authenticated as envelope AAD; Root
+// must authorize the transfer separately before exposing this payload.
+func (signer *Signer) SealFor(target identity.Identity, wrappingPublic []byte, authorityEpoch uint64) ([]byte, error) {
+	if signer == nil || signer.ca == nil || signer.privateKey == nil || target.ClusterID != signer.clusterID || target.NodeID == "" || target.RaftID == 0 || authorityEpoch == 0 {
+		return nil, errors.New("signer transfer requires a bound target and authority epoch")
+	}
+	public, err := ecdh.X25519().NewPublicKey(wrappingPublic)
+	if err != nil {
+		return nil, errors.New("invalid target signer wrapping public key")
+	}
+	private, ok := signer.privateKey.(ed25519.PrivateKey)
+	if !ok {
+		return nil, errors.New("Node CA signer must use Ed25519")
+	}
+	envelope, err := sealSignerAt(target, signer.ca, private, public, authorityEpoch)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, errors.New("encode signer transfer envelope")
+	}
+	return encoded, nil
+}
+
+// OpenTransferredSigner decrypts a signer envelope using a target Node's local
+// X25519 wrapping key. The caller persists the validated envelope atomically.
+func OpenTransferredSigner(value identity.Identity, caPEM, wrappingPrivate, encoded []byte, authorityEpoch uint64, now time.Time) (*Signer, error) {
+	if value.ClusterID == "" || value.NodeID == "" || value.RaftID == 0 || authorityEpoch == 0 {
+		return nil, errors.New("invalid transferred signer target")
+	}
+	ca, err := ValidateClusterCA(value.ClusterID, caPEM, now)
+	if err != nil {
+		return nil, err
+	}
+	key, err := parseWrappingKey(wrappingPrivate)
+	if err != nil {
+		return nil, err
+	}
+	var envelope signerEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil || envelope.AuthorityEpoch != authorityEpoch || envelope.CAFingerprint != certificateFingerprint(ca) {
+		return nil, errors.New("invalid transferred signer envelope")
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return nil, errors.New("trailing transferred signer envelope")
+	}
+	private, err := openSigner(value, envelope, key)
+	if err != nil {
+		return nil, err
+	}
+	public, ok := ca.PublicKey.(ed25519.PublicKey)
+	if !ok || !bytes.Equal(private.Public().(ed25519.PublicKey), public) {
+		return nil, errors.New("transferred signer does not match Cluster CA")
+	}
+	return &Signer{ca: ca, privateKey: private, clusterID: value.ClusterID, epoch: authorityEpoch}, nil
 }
 
 type signerEnvelope struct {
 	Version            int    `json:"version"`
 	CAFingerprint      string `json:"ca_sha256"`
+	AuthorityEpoch     uint64 `json:"authority_epoch,omitempty"`
 	EphemeralPublicKey []byte `json:"ephemeral_public_key"`
 	Nonce              []byte `json:"nonce"`
 	Ciphertext         []byte `json:"ciphertext"`
@@ -108,6 +184,28 @@ func ValidateServerName(value string) error {
 func ValidateIssuedLeaf(value identity.Identity, serverName string, caPEM, certificatePEM []byte, now time.Time) error {
 	_, _, err := validateIssuedLeaf(value, strings.TrimSpace(serverName), caPEM, certificatePEM, now)
 	return err
+}
+
+// ValidateEnrollmentRetry checks an issued bundle against material returned by
+// Load. Installation retries may reissue a leaf, but cannot rotate the trust
+// root or Node key, or replace the installed certificate as an implicit renewal.
+func ValidateEnrollmentRetry(material Material, value identity.Identity, serverName string,
+	caPEM, certificatePEM []byte, now time.Time,
+) error {
+	ca, leaf, err := validateIssuedLeaf(value, strings.TrimSpace(serverName), caPEM, certificatePEM, now)
+	if err != nil {
+		return err
+	}
+	return validateRetryBinding(material, ca, leaf)
+}
+
+func validateRetryBinding(material Material, ca, leaf *x509.Certificate) error {
+	if material.CACertificate == nil || material.Certificate == nil ||
+		!bytes.Equal(material.CACertificate.Raw, ca.Raw) ||
+		!bytes.Equal(material.Certificate.RawSubjectPublicKeyInfo, leaf.RawSubjectPublicKeyInfo) {
+		return errors.New("enrollment retry does not match installed CA and Node public key")
+	}
+	return nil
 }
 
 // Ensure atomically creates bootstrap PKI or validates the existing material.
@@ -251,7 +349,7 @@ func InstallLeaf(store string, value identity.Identity, clusterID, serverName st
 	if _, err := identity.NodeIdentityURI(candidate); err != nil {
 		return Material{}, err
 	}
-	ca, _, err := validateIssuedLeaf(candidate, serverName, caPEM, certificatePEM, now)
+	ca, leaf, err := validateIssuedLeaf(candidate, serverName, caPEM, certificatePEM, now)
 	if err != nil {
 		return Material{}, err
 	}
@@ -261,9 +359,15 @@ func InstallLeaf(store string, value identity.Identity, clusterID, serverName st
 		if loadErr != nil {
 			return Material{}, fmt.Errorf("existing Node PKI is incomplete or invalid: %w", loadErr)
 		}
+		if err := validateRetryBinding(material, ca, leaf); err != nil {
+			return Material{}, err
+		}
 		bound, bindErr := identity.BindCluster(store, clusterID)
 		if bindErr != nil || bound.ClusterID != clusterID {
 			return Material{}, errors.Join(bindErr, errors.New("bind prepared Node to enrolled Cluster"))
+		}
+		if err := confirmLeafPublication(store, paths); err != nil {
+			return Material{}, err
 		}
 		return material, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -313,6 +417,12 @@ func InstallLeaf(store string, value identity.Identity, clusterID, serverName st
 	}
 	if err := os.Rename(staging, paths.Directory); err != nil {
 		if material, loadErr := Load(store, bound, serverName, now); loadErr == nil {
+			if bindingErr := validateRetryBinding(material, ca, leaf); bindingErr != nil {
+				return Material{}, bindingErr
+			}
+			if syncErr := confirmLeafPublication(store, paths); syncErr != nil {
+				return Material{}, syncErr
+			}
 			return material, nil
 		}
 		return Material{}, fmt.Errorf("publish enrolled Node PKI: %w", err)
@@ -321,6 +431,15 @@ func InstallLeaf(store string, value identity.Identity, clusterID, serverName st
 		return Material{}, err
 	}
 	return Load(store, bound, serverName, now)
+}
+
+func confirmLeafPublication(store string, paths Paths) error {
+	// A previous attempt may have published the directory but failed its parent
+	// sync. Reaffirm that boundary before acknowledging an idempotent retry.
+	if err := syncDirectory(paths.Directory); err != nil {
+		return err
+	}
+	return syncDirectory(store)
 }
 
 func Load(store string, value identity.Identity, serverName string, now time.Time) (Material, error) {
@@ -341,7 +460,13 @@ func loadPaths(paths Paths, value identity.Identity, serverName string, now time
 	if err := validateDirectory(paths.Directory); err != nil {
 		return Material{}, err
 	}
-	encodedConfig, err := readFile(paths.Config, 0o600)
+	return loadMaterial(paths, value, serverName, now, readFile)
+}
+
+func loadMaterial(paths Paths, value identity.Identity, serverName string, now time.Time,
+	read func(string, os.FileMode) ([]byte, error),
+) (Material, error) {
+	encodedConfig, err := read(paths.Config, 0o600)
 	if err != nil {
 		return Material{}, err
 	}
@@ -356,7 +481,7 @@ func loadPaths(paths Paths, value identity.Identity, serverName string, now time
 		configuration.ServerName != serverName || len(configuration.CAFingerprint) != sha256.Size*2 {
 		return Material{}, errors.New("Node PKI configuration does not match durable identity")
 	}
-	caPEM, err := readFile(paths.CACertificate, 0o644)
+	caPEM, err := read(paths.CACertificate, 0o644)
 	if err != nil {
 		return Material{}, err
 	}
@@ -368,7 +493,7 @@ func loadPaths(paths Paths, value identity.Identity, serverName string, now time
 	if err := ca.CheckSignatureFrom(ca); err != nil {
 		return Material{}, errors.New("Node CA is not self-signed")
 	}
-	certificatePEM, err := readFile(paths.Certificate, 0o644)
+	certificatePEM, err := read(paths.Certificate, 0o644)
 	if err != nil {
 		return Material{}, err
 	}
@@ -379,7 +504,7 @@ func loadPaths(paths Paths, value identity.Identity, serverName string, now time
 	if err := validateLeaf(certificate, ca, value, serverName, now); err != nil {
 		return Material{}, err
 	}
-	privatePEM, err := readFile(paths.PrivateKey, 0o600)
+	privatePEM, err := read(paths.PrivateKey, 0o600)
 	if err != nil {
 		return Material{}, err
 	}
@@ -441,7 +566,127 @@ func OpenSigner(store string, value identity.Identity, now time.Time) (*Signer, 
 		now.Before(ca.NotBefore) || !now.Before(ca.NotAfter) {
 		return nil, errors.New("Node CA signer does not match active certificate")
 	}
-	return &Signer{ca: ca, privateKey: privateKey, clusterID: value.ClusterID}, nil
+	return &Signer{ca: ca, privateKey: privateKey, clusterID: value.ClusterID, epoch: envelope.AuthorityEpoch}, nil
+}
+
+// SignerWrappingPublicKey returns a durable target key for authority transfer.
+// Leaf-only Nodes create the local wrapping key on first use; bootstrap Nodes
+// already have one from Ensure.
+func SignerWrappingPublicKey(store string, value identity.Identity, now time.Time) ([]byte, error) {
+	signerInstallMu.Lock()
+	defer signerInstallMu.Unlock()
+	return signerWrappingPublicKey(store, value, now)
+}
+
+func signerWrappingPublicKey(store string, value identity.Identity, now time.Time) ([]byte, error) {
+	if _, err := Load(store, value, DefaultServerName, now); err != nil {
+		return nil, err
+	}
+	paths := StorePaths(store)
+	encoded, err := readFile(paths.WrappingKey, 0o600)
+	if err == nil {
+		key, parseErr := parseWrappingKey(encoded)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		return key.PublicKey().Bytes(), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	encoded = pem.EncodeToMemory(&pem.Block{Type: "DUBI SIGNER WRAPPING PRIVATE KEY", Bytes: key.Bytes()})
+	if err := writeExclusive(paths.WrappingKey, encoded, 0o600); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		encoded, err = readFile(paths.WrappingKey, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		key, err = parseWrappingKey(encoded)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := syncDirectory(paths.Directory); err != nil {
+		return nil, err
+	}
+	return key.PublicKey().Bytes(), nil
+}
+
+// InstallTransferredSigner validates and atomically persists a new authority
+// envelope. Equal epochs are idempotent after decrypting and verifying the
+// same Cluster CA key, even when randomized sealing produces different bytes.
+func InstallTransferredSigner(store string, value identity.Identity, authorityEpoch uint64, encoded []byte, now time.Time) error {
+	signerInstallMu.Lock()
+	defer signerInstallMu.Unlock()
+	if authorityEpoch == 0 || len(encoded) == 0 {
+		return errors.New("invalid transferred signer installation")
+	}
+	if _, err := signerWrappingPublicKey(store, value, now); err != nil {
+		return err
+	}
+	paths := StorePaths(store)
+	wrapping, err := readFile(paths.WrappingKey, 0o600)
+	if err != nil {
+		return err
+	}
+	caPEM, err := readFile(paths.CACertificate, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := OpenTransferredSigner(value, caPEM, wrapping, encoded, authorityEpoch, now); err != nil {
+		return err
+	}
+	if current, err := readFile(paths.Envelope, 0o600); err == nil {
+		if bytes.Equal(bytes.TrimSpace(current), bytes.TrimSpace(encoded)) {
+			return syncDirectory(paths.Directory)
+		}
+		var existing signerEnvelope
+		decoder := json.NewDecoder(bytes.NewReader(current))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&existing) != nil {
+			return errors.New("invalid existing signer envelope")
+		}
+		if existing.AuthorityEpoch > authorityEpoch {
+			return errors.New("transferred signer authority epoch is stale")
+		}
+		if existing.AuthorityEpoch == authorityEpoch {
+			if _, err := OpenTransferredSigner(value, caPEM, wrapping, current, authorityEpoch, now); err != nil {
+				return err
+			}
+			return syncDirectory(paths.Directory)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(paths.Directory, ".signer-envelope-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	err = temporary.Chmod(0o600)
+	if err == nil {
+		_, err = temporary.Write(encoded)
+	}
+	if err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, paths.Envelope); err != nil {
+		return err
+	}
+	return syncDirectory(paths.Directory)
 }
 
 func (signer *Signer) CACertificatePEM() []byte {
@@ -523,6 +768,9 @@ func createLeaf(value identity.Identity, serverName string, now time.Time, publi
 }
 
 func validateLeaf(certificate, ca *x509.Certificate, value identity.Identity, serverName string, now time.Time) error {
+	if now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) {
+		return errors.New("Node certificate is not currently valid")
+	}
 	if err := identity.ValidateNodeCertificate(certificate, value); err != nil {
 		return err
 	}
@@ -549,13 +797,9 @@ func validateIssuedLeaf(value identity.Identity, serverName string, caPEM, certi
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	ca, err := parseCertificate(caPEM)
-	if err != nil || !ca.IsCA || caIdentityURI(value.ClusterID).String() != onlyURI(ca) ||
-		now.Before(ca.NotBefore) || !now.Before(ca.NotAfter) {
-		return nil, nil, errors.New("invalid or expired Node CA certificate")
-	}
-	if err := ca.CheckSignatureFrom(ca); err != nil {
-		return nil, nil, errors.New("Node CA is not self-signed")
+	ca, err := ValidateClusterCA(value.ClusterID, caPEM, now)
+	if err != nil {
+		return nil, nil, err
 	}
 	certificate, err := parseCertificate(certificatePEM)
 	if err != nil {
@@ -570,6 +814,12 @@ func validateIssuedLeaf(value identity.Identity, serverName string, caPEM, certi
 func sealSigner(value identity.Identity, ca *x509.Certificate, privateKey ed25519.PrivateKey,
 	wrappingPublic *ecdh.PublicKey,
 ) (signerEnvelope, error) {
+	return sealSignerAt(value, ca, privateKey, wrappingPublic, 0)
+}
+
+func sealSignerAt(value identity.Identity, ca *x509.Certificate, privateKey ed25519.PrivateKey,
+	wrappingPublic *ecdh.PublicKey, authorityEpoch uint64,
+) (signerEnvelope, error) {
 	ephemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return signerEnvelope{}, err
@@ -580,7 +830,7 @@ func sealSigner(value identity.Identity, ca *x509.Certificate, privateKey ed2551
 	}
 	defer clear(shared)
 	fingerprint := certificateFingerprint(ca)
-	aad := envelopeAAD(value, fingerprint)
+	aad := envelopeAADAt(value, fingerprint, authorityEpoch)
 	key, err := hkdf.Key(sha256.New, shared, []byte(envelopeDomain), string(aad), 32)
 	if err != nil {
 		return signerEnvelope{}, err
@@ -597,7 +847,7 @@ func sealSigner(value identity.Identity, ca *x509.Certificate, privateKey ed2551
 		return signerEnvelope{}, err
 	}
 	defer clear(privateDER)
-	return signerEnvelope{Version: formatVersion, CAFingerprint: fingerprint,
+	return signerEnvelope{Version: formatVersion, CAFingerprint: fingerprint, AuthorityEpoch: authorityEpoch,
 		EphemeralPublicKey: ephemeral.PublicKey().Bytes(), Nonce: nonce,
 		Ciphertext: aead.Seal(nil, nonce, privateDER, aad)}, nil
 }
@@ -612,7 +862,7 @@ func openSigner(value identity.Identity, envelope signerEnvelope, wrappingKey *e
 		return nil, errors.New("derive signer envelope key")
 	}
 	defer clear(shared)
-	aad := envelopeAAD(value, envelope.CAFingerprint)
+	aad := envelopeAADAt(value, envelope.CAFingerprint, envelope.AuthorityEpoch)
 	key, err := hkdf.Key(sha256.New, shared, []byte(envelopeDomain), string(aad), 32)
 	if err != nil {
 		return nil, err
@@ -681,15 +931,29 @@ func validServerName(value string) bool {
 }
 
 func readFile(path string, mode os.FileMode) ([]byte, error) {
-	info, err := os.Lstat(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	return readOpenedFile(file, mode)
+}
+
+// Inspect and read the same descriptor. A path stat followed by ReadFile can
+// follow a replacement symlink/FIFO and allocates before enforcing the bound.
+func readOpenedFile(file *os.File, mode os.FileMode) ([]byte, error) {
+	defer file.Close()
+	info, err := file.Stat()
 	permissionsOK := info != nil && info.Mode().Perm() == mode
 	if mode == 0o644 && info != nil && info.Mode().Perm() == 0o600 {
 		permissionsOK = true
 	}
 	if err != nil || info == nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !permissionsOK {
-		return nil, errors.Join(err, fmt.Errorf("Node PKI file %s must be a regular %04o file", filepath.Base(path), mode))
+		return nil, errors.Join(err, fmt.Errorf("Node PKI file %s must be a regular %04o file", filepath.Base(file.Name()), mode))
 	}
-	encoded, err := os.ReadFile(path)
+	if info.Size() <= 0 || info.Size() > 1<<20 {
+		return nil, errors.New("Node PKI file is empty or too large")
+	}
+	encoded, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
 	if err != nil || len(encoded) == 0 || len(encoded) > 1<<20 {
 		return nil, errors.Join(err, errors.New("Node PKI file is empty or too large"))
 	}
@@ -698,7 +962,8 @@ func readFile(path string, mode os.FileMode) ([]byte, error) {
 
 func parseCertificate(encoded []byte) (*x509.Certificate, error) {
 	block, rest := pem.Decode(encoded)
-	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+	if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 ||
+		!bytes.HasPrefix(bytes.TrimSpace(encoded), []byte("-----BEGIN CERTIFICATE-----")) || len(bytes.TrimSpace(rest)) != 0 {
 		return nil, errors.New("Node PKI certificate must contain one PEM certificate")
 	}
 	return x509.ParseCertificate(block.Bytes)
@@ -809,8 +1074,16 @@ func onlyURI(certificate *x509.Certificate) string {
 }
 
 func envelopeAAD(value identity.Identity, fingerprint string) []byte {
-	return []byte(strings.Join([]string{envelopeDomain, value.ClusterID, value.NodeID,
-		fmt.Sprintf("%d", value.RaftID), fingerprint}, "\x00"))
+	return envelopeAADAt(value, fingerprint, 0)
+}
+
+func envelopeAADAt(value identity.Identity, fingerprint string, authorityEpoch uint64) []byte {
+	parts := []string{envelopeDomain, value.ClusterID, value.NodeID,
+		fmt.Sprintf("%d", value.RaftID), fingerprint}
+	if authorityEpoch != 0 {
+		parts = append(parts, fmt.Sprintf("%d", authorityEpoch))
+	}
+	return []byte(strings.Join(parts, "\x00"))
 }
 
 func minTime(first, second time.Time) time.Time {

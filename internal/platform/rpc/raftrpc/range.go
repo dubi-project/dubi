@@ -73,7 +73,7 @@ func (server *RangeControlServer) EnsureInitialRange(
 	}
 	proof, err := owner.EnsureInitialRange(ctx, descriptor)
 	if err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "ensure initial Range: %v", err)
+		return nil, mutationError("ensure initial Range", err, codes.FailedPrecondition)
 	}
 	if proof.RequestID != rangebootstrap.OwnerRequestID(descriptor) || proof.AppliedIndex == 0 {
 		return nil, status.Error(codes.Internal, "Range Owner returned invalid proof")

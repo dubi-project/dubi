@@ -17,12 +17,37 @@ const (
 	MaxGroupIDBytes = 128
 	groupDirectory  = "dubi-raft-groups"
 	identityFile    = "GROUP_IDENTITY"
-	identityVersion = 1
+	identityVersion = 2
 )
 
 type diskIdentity struct {
-	Version int    `json:"version"`
-	GroupID string `json:"group_id"`
+	Version    int    `json:"version"`
+	GroupID    string `json:"group_id"`
+	ResourceID string `json:"resource_id"`
+}
+
+// HasGroupResources is a read-only guard for fresh enrollment. Any entry in
+// the consensus directory (including an incomplete Group) is existing state,
+// never permission to recreate a missing admission/activation fence.
+func HasGroupResources(storeRoot string) (bool, error) {
+	if storeRoot == "" {
+		return false, errors.New("Store root must not be empty")
+	}
+	if _, err := os.Lstat(filepath.Join(storeRoot, groupRegistryFile)); err == nil {
+		return true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	parent := filepath.Join(storeRoot, groupDirectory)
+	info, err := os.Lstat(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || !info.IsDir() {
+		return false, errors.Join(err, errors.New("Raft Group parent must be a physical directory"))
+	}
+	entries, err := os.ReadDir(parent)
+	return len(entries) != 0, err
 }
 
 // ValidateGroupID rejects path separators and non-canonical Group IDs.
@@ -39,80 +64,11 @@ func ValidateGroupID(groupID string) error {
 	return nil
 }
 
-// PrepareGroupRoot creates an isolated directory and durable identity marker
-// before the Group's Raft log or state machine is opened. It never adopts an
-// existing non-empty, unidentified directory.
+// PrepareGroupRoot registers an isolated directory before its Raft log opens.
+// The Store-level catalog survives loss of the entire Group directory. A
+// missing active resource is never re-created; only pending creation resumes.
 func PrepareGroupRoot(storeRoot, groupID string) (string, error) {
-	if storeRoot == "" {
-		return "", errors.New("Store root must not be empty")
-	}
-	if err := ValidateGroupID(groupID); err != nil {
-		return "", err
-	}
-	parent := filepath.Join(storeRoot, groupDirectory)
-	if err := os.MkdirAll(parent, 0o750); err != nil {
-		return "", fmt.Errorf("create Raft Group parent: %w", err)
-	}
-	parentInfo, err := os.Lstat(parent)
-	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
-		return "", errors.Join(err, errors.New("Raft Group parent is not a directory"))
-	}
-	root := filepath.Join(parent, groupID)
-	if err := os.MkdirAll(root, 0o750); err != nil {
-		return "", fmt.Errorf("create Raft Group root: %w", err)
-	}
-	info, err := os.Lstat(root)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.Join(err, errors.New("Raft Group root is not a directory"))
-	}
-	marker := filepath.Join(root, identityFile)
-	if encoded, err := os.ReadFile(marker); err == nil {
-		value, err := decodeIdentity(encoded)
-		if err != nil {
-			return "", fmt.Errorf("read Raft Group identity: %w", err)
-		}
-		if value.GroupID != groupID {
-			return "", fmt.Errorf("Raft Group directory is bound to %q, not %q", value.GroupID, groupID)
-		}
-		return root, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read Raft Group identity: %w", err)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return "", fmt.Errorf("inspect new Raft Group root: %w", err)
-	}
-	if len(entries) != 0 {
-		return "", errors.New("refusing to adopt a non-empty Raft Group directory without an identity marker")
-	}
-	encoded, err := json.Marshal(diskIdentity{Version: identityVersion, GroupID: groupID})
-	if err != nil {
-		return "", err
-	}
-	file, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
-	if err != nil {
-		return "", fmt.Errorf("create Raft Group identity: %w", err)
-	}
-	writeErr := error(nil)
-	if _, err := file.Write(append(encoded, '\n')); err != nil {
-		writeErr = err
-	} else if err := file.Sync(); err != nil {
-		writeErr = err
-	}
-	writeErr = errors.Join(writeErr, file.Close())
-	if writeErr != nil {
-		return "", fmt.Errorf("persist Raft Group identity: %w", writeErr)
-	}
-	directory, err := os.Open(root)
-	if err != nil {
-		return "", fmt.Errorf("open Raft Group root for sync: %w", err)
-	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
-	if syncErr != nil || closeErr != nil {
-		return "", fmt.Errorf("sync Raft Group root: %w", errors.Join(syncErr, closeErr))
-	}
-	return root, nil
+	return prepareRegisteredGroup(storeRoot, groupID, nil)
 }
 
 func decodeIdentity(encoded []byte) (diskIdentity, error) {
@@ -125,7 +81,7 @@ func decodeIdentity(encoded []byte) (diskIdentity, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return diskIdentity{}, errors.New("unexpected trailing Group identity data")
 	}
-	if value.Version != identityVersion || ValidateGroupID(value.GroupID) != nil {
+	if value.Version != identityVersion || ValidateGroupID(value.GroupID) != nil || !validGroupResourceID(value.ResourceID) {
 		return diskIdentity{}, errors.New("invalid Raft Group identity")
 	}
 	return value, nil

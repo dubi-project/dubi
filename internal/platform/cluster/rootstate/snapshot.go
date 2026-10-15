@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/cockroachdb/pebble"
@@ -25,11 +26,27 @@ type snapshotImage struct {
 	Entries []snapshotEntry `json:"entries"`
 }
 
+const maxSnapshotBytes = 64 << 20
+
+// The inline image is already bounded and decoded. Reference its values rather
+// than copying them into a second database; share the file snapshot validator.
+type inlineRootView map[string][]byte
+type inlineRootCloser struct{}
+
+func (inlineRootCloser) Close() error { return nil }
+func (v inlineRootView) Get(key []byte) ([]byte, io.Closer, error) {
+	value, found := v[string(key)]
+	if !found {
+		return nil, nil, pebble.ErrNotFound
+	}
+	return value, inlineRootCloser{}, nil
+}
+
 func (s *State) Snapshot() ([]byte, uint64, *raftpb.ConfState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed {
-		return nil, 0, nil, errors.New("Root state is closed")
+	if err := s.usable(); err != nil {
+		return nil, 0, nil, err
 	}
 	conf, err := proto.Marshal(s.conf)
 	if err != nil {
@@ -43,10 +60,19 @@ func (s *State) Snapshot() ([]byte, uint64, *raftpb.ConfState, error) {
 		return nil, 0, nil, err
 	}
 	defer iterator.Close()
+	total := uint64(0)
 	for iterator.First(); iterator.Valid(); iterator.Next() {
 		key := iterator.Key()
 		if !bytes.HasPrefix(key, []byte("data/")) && !bytes.HasPrefix(key, []byte("result/")) {
 			continue
+		}
+		keySize, valueSize := uint64(len(key)), uint64(len(iterator.Value()))
+		if keySize > maxSnapshotBytes || valueSize > maxSnapshotBytes || keySize+valueSize+32 > maxSnapshotBytes-total {
+			return nil, 0, nil, errors.New("Root snapshot exceeds inline limit")
+		}
+		total += keySize + valueSize + 32
+		if err := validateStreamEntry(view, s.applied, key, iterator.Value()); err != nil {
+			return nil, 0, nil, err
 		}
 		image.Entries = append(image.Entries, snapshotEntry{Key: bytes.Clone(key), Value: bytes.Clone(iterator.Value())})
 	}
@@ -54,20 +80,26 @@ func (s *State) Snapshot() ([]byte, uint64, *raftpb.ConfState, error) {
 		return nil, 0, nil, err
 	}
 	encoded, err := json.Marshal(image)
+	if len(encoded) > maxSnapshotBytes {
+		return nil, 0, nil, errors.New("Root snapshot exceeds inline limit")
+	}
 	return encoded, s.applied, proto.Clone(s.conf).(*raftpb.ConfState), err
 }
 
 func (s *State) Restore(index uint64, encoded []byte, conf *raftpb.ConfState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("Root state is closed")
+	if err := s.usable(); err != nil {
+		return err
 	}
 	if conf == nil || index <= s.applied {
 		return errors.New("Root snapshot is stale or lacks membership")
 	}
 	var image snapshotImage
-	if err := json.Unmarshal(encoded, &image); err != nil {
+	if len(encoded) > maxSnapshotBytes {
+		return errors.New("Root snapshot exceeds inline limit")
+	}
+	if err := decodeStreamJSON(encoded, &image); err != nil {
 		return fmt.Errorf("decode Root snapshot: %w", err)
 	}
 	storedConf := new(raftpb.ConfState)
@@ -77,13 +109,18 @@ func (s *State) Restore(index uint64, encoded []byte, conf *raftpb.ConfState) er
 	if image.Version != FormatVersion || image.Applied != index || !proto.Equal(storedConf, conf) {
 		return errors.New("Root snapshot metadata does not match Raft")
 	}
-	seen := make(map[string]bool, len(image.Entries))
+	view := make(inlineRootView, len(image.Entries))
 	for _, entry := range image.Entries {
 		key := string(entry.Key)
-		if seen[key] || !(strings.HasPrefix(key, "data/") || strings.HasPrefix(key, "result/")) || len(entry.Value) == 0 {
+		if _, seen := view[key]; seen || !(strings.HasPrefix(key, "data/") || strings.HasPrefix(key, "result/")) || len(entry.Value) == 0 {
 			return errors.New("Root snapshot contains invalid or duplicate key")
 		}
-		seen[key] = true
+		view[key] = entry.Value
+	}
+	for _, entry := range image.Entries {
+		if err := validateStreamEntry(view, index, entry.Key, entry.Value); err != nil {
+			return err
+		}
 	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
@@ -110,7 +147,7 @@ func (s *State) Restore(index uint64, encoded []byte, conf *raftpb.ConfState) er
 	if err := batch.Set(appliedKey, applied[:], nil); err != nil {
 		return err
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
+	if err := s.commitBatch(batch); err != nil {
 		return fmt.Errorf("install Root snapshot: %w", err)
 	}
 	s.applied = index

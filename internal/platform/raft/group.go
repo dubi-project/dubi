@@ -41,6 +41,25 @@ type Snapshotter interface {
 	Snapshot() (data []byte, index uint64, conf *raftpb.ConfState, err error)
 }
 
+// SnapshotPreparer captures an immutable cut quickly under the Group lock.
+// Build runs outside that lock and must honor cancellation; Close releases the
+// captured resources on success, failure or shutdown. The returned bytes may
+// be a durable artifact reference once the state/transport support that format.
+type SnapshotPreparer interface {
+	PrepareSnapshot() (*PreparedSnapshot, error)
+}
+
+type PreparedSnapshot struct {
+	Index uint64
+	Conf  *raftpb.ConfState
+	Build func(context.Context) ([]byte, error)
+	Close func() error
+}
+
+var ErrSnapshotBusy = errors.New("Raft Group already has a snapshot build in progress")
+
+var ErrNoLeader = errors.New("Raft Group has no known leader for ReadIndex")
+
 // Transport enqueues a durable Raft message for another Node. Send must not
 // synchronously call back into this Group; Group emits messages after unlocking.
 type Transport interface {
@@ -51,25 +70,33 @@ type GroupOptions struct {
 	StoreRoot string
 	GroupID   string
 	RaftID    uint64
-	// BootstrapPeers is used only if the Group has no persisted Raft log.
+	// BootstrapPeers is fixed durably on first creation, before any Raft Ready.
+	// On restart it may be omitted or must match the original set exactly.
 	// Leave empty when joining an existing Group as a learner.
 	BootstrapPeers []uint64
 	Joining        bool
 	State          StateMachine
 	Transport      Transport
+	ProposalGuard  func() error
 }
 
 type Group struct {
-	mu           sync.Mutex
-	id           uint64
-	groupID      string
-	storage      *logstore.Storage
-	state        StateMachine
-	transport    Transport
-	raw          *etcdraft.RawNode
-	closed       bool
-	fatal        error
-	pendingReads map[string]*pendingRead
+	mu             sync.Mutex
+	id             uint64
+	groupID        string
+	storage        *logstore.Storage
+	state          StateMachine
+	transport      Transport
+	raw            *etcdraft.RawNode
+	closed         bool
+	fatal          error
+	pendingReads   map[string]*pendingRead
+	proposalGuard  func() error
+	snapshotting   bool
+	snapshotCancel context.CancelFunc
+	snapshotWG     sync.WaitGroup
+	closeDone      chan struct{}
+	closeErr       error
 }
 
 type pendingRead struct {
@@ -96,6 +123,10 @@ type GroupStatus struct {
 // OpenGroup starts a serialized, caller-driven Raft Group. The surrounding
 // Node host will supply ticks, transport, membership operations and shutdown.
 func OpenGroup(options GroupOptions) (*Group, error) {
+	return openGroup(options, nil)
+}
+
+func openGroup(options GroupOptions, hook func(string) error) (*Group, error) {
 	if options.RaftID == 0 || options.State == nil {
 		return nil, errors.New("Raft Group requires a non-zero RaftID and StateMachine")
 	}
@@ -103,13 +134,39 @@ func OpenGroup(options GroupOptions) (*Group, error) {
 	if err != nil {
 		return nil, errors.Join(err, options.State.Close())
 	}
-	storage, err := logstore.Open(root)
+	expectedLog, err := groupLogBinding(options.StoreRoot, options.GroupID, "")
+	if err != nil {
+		return nil, errors.Join(err, options.State.Close())
+	}
+	storage, err := logstore.OpenForGroup(root, expectedLog)
 	if err != nil {
 		_ = options.State.Close()
 		return nil, err
 	}
 	closeOnError := func(openErr error) (*Group, error) {
 		return nil, errors.Join(openErr, options.State.Close(), storage.Close())
+	}
+	stage := func(at string) error {
+		if hook != nil {
+			return hook(at)
+		}
+		return nil
+	}
+	if err := stage("after-log-open"); err != nil {
+		return closeOnError(err)
+	}
+	if _, err := groupLogBinding(options.StoreRoot, options.GroupID, storage.Identity()); err != nil {
+		return closeOnError(err)
+	}
+	if err := stage("after-log-binding"); err != nil {
+		return closeOnError(err)
+	}
+	initialPeers, err := storage.BindGroup(options.GroupID, options.RaftID, options.BootstrapPeers, options.Joining)
+	if err != nil {
+		return closeOnError(err)
+	}
+	if err := stage("after-formation"); err != nil {
+		return closeOnError(err)
 	}
 	if err := reconcileGroup(storage, options.State); err != nil {
 		return closeOnError(err)
@@ -121,10 +178,11 @@ func OpenGroup(options GroupOptions) (*Group, error) {
 	if options.State.AppliedIndex() > hard.GetCommit() {
 		return closeOnError(fmt.Errorf("StateMachine applied index %d exceeds Raft commit %d", options.State.AppliedIndex(), hard.GetCommit()))
 	}
-	if options.State.AppliedIndex() > 0 && !containsMember(options.State.ConfState(), options.RaftID) {
-		return closeOnError(fmt.Errorf("RaftID %d is not in persisted Group %q membership", options.RaftID, options.GroupID))
-	}
-	if options.Transport == nil && len(options.BootstrapPeers) > 1 {
+	// A historical snapshot may predate this Node's AddLearner. Membership
+	// eligibility is checked after replaying the committed tail below, never
+	// from that cut alone. Joining=true is supplied only by an authorized join
+	// workflow; normal recovery still rejects absent/removed Nodes after replay.
+	if options.Transport == nil && len(initialPeers) > 1 {
 		return closeOnError(errors.New("multi-node Raft Group requires a Transport"))
 	}
 	if options.Transport == nil && membershipSize(storedConf) > 1 {
@@ -146,9 +204,9 @@ func OpenGroup(options GroupOptions) (*Group, error) {
 	}
 	group := &Group{id: options.RaftID, groupID: options.GroupID, storage: storage,
 		state: options.State, transport: options.Transport, raw: raw,
-		pendingReads: make(map[string]*pendingRead)}
-	if last == 0 && len(options.BootstrapPeers) != 0 {
-		peers, err := bootstrapPeers(options.BootstrapPeers, options.RaftID)
+		pendingReads: make(map[string]*pendingRead), proposalGuard: options.ProposalGuard, closeDone: make(chan struct{})}
+	if last == 0 && len(initialPeers) != 0 {
+		peers, err := bootstrapPeers(initialPeers, options.RaftID)
 		if err != nil {
 			return closeOnError(err)
 		}
@@ -157,6 +215,9 @@ func OpenGroup(options GroupOptions) (*Group, error) {
 		}
 	}
 	if err := group.process(); err != nil {
+		return closeOnError(err)
+	}
+	if err := stage("after-initial-ready"); err != nil {
 		return closeOnError(err)
 	}
 	if !options.Joining && !containsMember(options.State.ConfState(), options.RaftID) {
@@ -266,7 +327,12 @@ func (g *Group) Submit(command []byte) error {
 			return fmt.Errorf("validate Raft command: %w", err)
 		}
 	}
-	return g.mutate(func() error { return g.raw.Propose(command) })
+	return g.mutate(func() error {
+		if err := g.admitProposal(); err != nil {
+			return err
+		}
+		return g.raw.Propose(command)
+	})
 }
 
 // ReadIndex returns only after a quorum-confirmed read barrier is applied by
@@ -288,7 +354,7 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 	}
 	if g.raw.BasicStatus().SoftState.Lead == 0 {
 		g.mu.Unlock()
-		return 0, errors.New("Raft Group has no known leader for ReadIndex")
+		return 0, ErrNoLeader
 	}
 	g.pendingReads[key] = request
 	g.raw.ReadIndex(token[:])
@@ -330,8 +396,11 @@ func (g *Group) AddLearner(raftID uint64) error {
 	return g.proposeMembership(raftID, raftpb.ConfChangeType_ConfChangeAddLearnerNode)
 }
 
-// PromoteLearner requires the learner's Raft log to have matched the current
-// committed index. The change itself still requires majority commitment.
+// PromoteLearner requires recent Raft activity and a log matched through the
+// current committed index. Historical Match alone survives disconnection and
+// must not qualify an offline peer for a larger voting quorum. Recent activity
+// is not a guarantee against subsequent failure; the change still commits via
+// Raft and does not establish regional placement/durability qualification.
 func (g *Group) PromoteLearner(raftID uint64) error {
 	return g.proposeMembership(raftID, raftpb.ConfChangeType_ConfChangeAddNode)
 }
@@ -346,13 +415,17 @@ func (g *Group) RemoveMember(raftID uint64) error {
 // The caller should set a deadline. Raft itself catches a lagging voter up
 // before sending MsgTimeoutNow; a temporary transfer abort is retried.
 func (g *Group) TransferLeadership(ctx context.Context, target uint64) (GroupStatus, error) {
+	return g.transferLeadership(ctx, target, nil, 0)
+}
+
+func (g *Group) transferLeadership(ctx context.Context, target uint64, expected *MembershipCut, term uint64) (GroupStatus, error) {
 	if target == 0 || target == g.id {
 		return GroupStatus{}, errors.New("leadership transfer target must be another RaftID")
 	}
 	if err := ctx.Err(); err != nil {
 		return GroupStatus{}, err
 	}
-	if err := g.requestLeadershipTransfer(target); err != nil {
+	if err := g.requestLeadershipTransferExpected(target, expected, term); err != nil {
 		return GroupStatus{}, err
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
@@ -369,7 +442,7 @@ func (g *Group) TransferLeadership(ctx context.Context, target uint64) (GroupSta
 			return GroupStatus{}, fmt.Errorf("leadership moved to RaftID %d instead of %d", status.LeaderID, target)
 		}
 		if status.Role == etcdraft.StateLeader && status.LeadTransferee == 0 {
-			if err := g.requestLeadershipTransfer(target); err != nil {
+			if err := g.requestLeadershipTransferExpected(target, expected, term); err != nil {
 				return GroupStatus{}, err
 			}
 		}
@@ -382,10 +455,26 @@ func (g *Group) TransferLeadership(ctx context.Context, target uint64) (GroupSta
 }
 
 func (g *Group) requestLeadershipTransfer(target uint64) error {
+	return g.requestLeadershipTransferExpected(target, nil, 0)
+}
+
+func (g *Group) requestLeadershipTransferExpected(target uint64, expected *MembershipCut, term uint64) error {
 	return g.mutate(func() error {
 		status := g.raw.Status()
 		if status.RaftState != etcdraft.StateLeader {
 			return fmt.Errorf("leadership transfer requires Group leader; current leader is %d", status.Lead)
+		}
+		if expected != nil {
+			cut, err := g.membershipCutLocked()
+			if err != nil {
+				return err
+			}
+			if status.GetTerm() != term || cut.Index != expected.Index || !proto.Equal(cut.Conf, expected.Conf) {
+				return ErrMembershipChanged
+			}
+			if len(cut.Conf.GetVotersOutgoing()) != 0 || len(cut.Conf.GetLearnersNext()) != 0 || cut.Conf.GetAutoLeave() {
+				return errors.New("fenced transfer requires stable membership")
+			}
 		}
 		if !containsVoter(g.state.ConfState(), target) {
 			return fmt.Errorf("RaftID %d is not a voting Group member", target)
@@ -396,15 +485,31 @@ func (g *Group) requestLeadershipTransfer(target uint64) error {
 }
 
 func (g *Group) proposeMembership(raftID uint64, changeType raftpb.ConfChangeType) error {
+	return g.proposeMembershipExpected(raftID, changeType, nil)
+}
+
+func (g *Group) proposeMembershipExpected(raftID uint64, changeType raftpb.ConfChangeType, expected *MembershipCut) error {
 	if raftID == 0 {
 		return errors.New("member RaftID must not be zero")
 	}
 	return g.mutate(func() error {
+		if err := g.admitProposal(); err != nil {
+			return err
+		}
 		status := g.raw.Status()
 		if status.RaftState != etcdraft.StateLeader {
 			return fmt.Errorf("member change requires Group leader; current leader is %d", status.Lead)
 		}
 		conf := g.state.ConfState()
+		if expected != nil {
+			cut, err := g.membershipCutLocked()
+			if err != nil {
+				return err
+			}
+			if cut.Index != expected.Index || !proto.Equal(cut.Conf, expected.Conf) {
+				return ErrMembershipChanged
+			}
+		}
 		if len(conf.GetVotersOutgoing()) != 0 || len(conf.GetLearnersNext()) != 0 {
 			return errors.New("member change is already in joint consensus")
 		}
@@ -418,7 +523,10 @@ func (g *Group) proposeMembership(raftID uint64, changeType raftpb.ConfChangeTyp
 				return fmt.Errorf("RaftID %d must first join as a learner", raftID)
 			}
 			progress, found := status.Progress[raftID]
-			if !found || progress.Match < status.GetCommit() {
+			if !found || !progress.RecentActive {
+				return fmt.Errorf("learner %d has no recent Raft activity", raftID)
+			}
+			if progress.Match < status.GetCommit() {
 				return fmt.Errorf("learner %d has not caught up to committed index %d", raftID, status.GetCommit())
 			}
 		case raftpb.ConfChangeType_ConfChangeRemoveNode:
@@ -448,7 +556,17 @@ func (g *Group) Step(message *raftpb.Message) error {
 	if message == nil {
 		return errors.New("Raft message must not be nil")
 	}
-	return g.mutate(func() error { return g.raw.Step(message) })
+	return g.mutate(func() error {
+		// Forwarded proposals must pass the leader's own admission. Replication,
+		// ReadIndex, election traffic and committed snapshot installation must
+		// still make progress using the reserved headroom.
+		if message.GetType() == raftpb.MessageType_MsgProp {
+			if err := g.admitProposal(); err != nil {
+				return err
+			}
+		}
+		return g.raw.Step(message)
+	})
 }
 
 // ReportUnreachable informs Raft that an asynchronous peer delivery failed.
@@ -499,6 +617,15 @@ func (g *Group) CreateSnapshot() (uint64, error) {
 	if err := g.checkLocked(); err != nil {
 		return 0, err
 	}
+	if err := g.admitProposal(); err != nil {
+		return 0, err
+	}
+	if g.snapshotting {
+		return 0, ErrSnapshotBusy
+	}
+	if preparer, ok := g.state.(SnapshotPreparer); ok {
+		return g.createPreparedSnapshotLocked(preparer)
+	}
 	snapshotter, ok := g.state.(Snapshotter)
 	if !ok {
 		return 0, errors.New("Raft StateMachine does not implement Snapshotter")
@@ -523,7 +650,79 @@ func (g *Group) CreateSnapshot() (uint64, error) {
 	}
 	snapshot := &raftpb.Snapshot{Data: data, Metadata: &raftpb.SnapshotMetadata{
 		Index: proto.Uint64(index), Term: proto.Uint64(term), ConfState: conf}}
-	if err := g.storage.Save(nil, nil, snapshot); err != nil {
+	if err := g.storage.SaveLocalSnapshot(snapshot); err != nil {
+		return 0, g.failLocked(err)
+	}
+	return index, nil
+}
+
+// Entered and returned with g.mu held. Exactly one builder per Group holds a
+// shutdown lease; any concurrent Apply/ReadIndex/tick may run during Build.
+func (g *Group) createPreparedSnapshotLocked(preparer SnapshotPreparer) (uint64, error) {
+	prepared, err := preparer.PrepareSnapshot()
+	if err != nil {
+		if prepared != nil && prepared.Close != nil {
+			err = errors.Join(err, prepared.Close())
+		}
+		return 0, err
+	}
+	if prepared == nil || prepared.Close == nil {
+		return 0, errors.New("invalid snapshot preparation")
+	}
+	if prepared.Build == nil || prepared.Index == 0 || prepared.Index != g.state.AppliedIndex() ||
+		prepared.Conf == nil || !proto.Equal(prepared.Conf, g.state.ConfState()) {
+		return 0, errors.Join(errors.New("prepared snapshot does not match captured Raft state"), prepared.Close())
+	}
+	index, conf := prepared.Index, proto.Clone(prepared.Conf).(*raftpb.ConfState)
+	current, err := g.storage.Snapshot()
+	if err != nil {
+		return 0, errors.Join(err, prepared.Close())
+	}
+	if index <= current.GetMetadata().GetIndex() {
+		return current.GetMetadata().GetIndex(), prepared.Close()
+	}
+	term, err := g.storage.Term(index)
+	if err != nil {
+		return 0, errors.Join(err, prepared.Close())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	g.snapshotting, g.snapshotCancel = true, cancel
+	g.snapshotWG.Add(1)
+	// Reacquire before the outer deferred unlock even on unexpected panics.
+	data, buildErr := func() ([]byte, error) {
+		g.mu.Unlock()
+		defer g.mu.Lock()
+		defer cancel()
+		defer g.snapshotWG.Done()
+		var data []byte
+		var err error
+		func() {
+			defer func() { err = errors.Join(err, prepared.Close()) }()
+			data, err = prepared.Build(ctx)
+		}()
+		return data, err
+	}()
+	g.snapshotting, g.snapshotCancel = false, nil
+	if buildErr != nil {
+		return 0, buildErr
+	}
+	if err := g.checkLocked(); err != nil {
+		return 0, err
+	}
+	current, err = g.storage.Snapshot()
+	if err != nil {
+		return 0, err
+	}
+	// A received newer snapshot can supersede this local immutable cut while
+	// its file was being built. Retain the unused artifact for later safe GC.
+	if index <= current.GetMetadata().GetIndex() {
+		return current.GetMetadata().GetIndex(), nil
+	}
+	if index > g.state.AppliedIndex() {
+		return 0, errors.New("prepared snapshot is ahead of applied state")
+	}
+	snapshot := &raftpb.Snapshot{Data: data, Metadata: &raftpb.SnapshotMetadata{Index: proto.Uint64(index), Term: proto.Uint64(term), ConfState: conf}}
+	if err := g.storage.SaveLocalSnapshot(snapshot); err != nil {
 		return 0, g.failLocked(err)
 	}
 	return index, nil
@@ -558,6 +757,13 @@ func (g *Group) mutate(operation func() error) error {
 		return err
 	}
 	g.dispatch(messages)
+	return nil
+}
+
+func (g *Group) admitProposal() error {
+	if g.proposalGuard != nil {
+		return g.proposalGuard()
+	}
 	return nil
 }
 
@@ -696,11 +902,23 @@ func (g *Group) failLocked(err error) error {
 
 func (g *Group) Close() error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if g.closed {
-		return nil
+		done := g.closeDone
+		g.mu.Unlock()
+		<-done
+		return g.closeErr
 	}
 	g.closed = true
 	g.failReadsLocked(errors.New("Raft Group is closed"))
-	return errors.Join(g.state.Close(), g.storage.Close())
+	if g.snapshotCancel != nil {
+		g.snapshotCancel()
+	}
+	g.mu.Unlock()
+	g.snapshotWG.Wait()
+	err := errors.Join(g.state.Close(), g.storage.Close())
+	g.mu.Lock()
+	g.closeErr = err
+	close(g.closeDone)
+	g.mu.Unlock()
+	return err
 }

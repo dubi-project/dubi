@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -58,7 +60,7 @@ func (server *GroupServer) Submit(
 		return nil, status.Error(codes.ResourceExhausted, "Group command exceeds size limit")
 	}
 	if err := server.backend.Submit(request.GetGroupId(), request.GetCommand()); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "submit Group command: %v", err)
+		return nil, mutationError("submit Group command", err, codes.Unavailable)
 	}
 	index, err := server.backend.ReadIndex(ctx, request.GetGroupId())
 	if err != nil {
@@ -118,13 +120,18 @@ type groupPeer struct {
 	ranges       raftwire.RangeControlServiceClient
 	capabilities raftwire.CapabilityServiceClient
 	memberships  raftwire.GroupMembershipServiceClient
+	recordConn   *grpc.ClientConn
+	recordNodeID string
 }
 
 type GroupClient struct {
-	mu      sync.Mutex
-	options GroupClientOptions
-	peers   map[uint64]*groupPeer
-	closed  bool
+	mu            sync.Mutex
+	options       GroupClientOptions
+	peers         map[uint64]*groupPeer
+	closed        bool
+	recordSlots   chan struct{}
+	recordReaders chan struct{}
+	recordBuffers *resource.ByteBudget
 }
 
 func NewGroupClient(options GroupClientOptions) (*GroupClient, error) {
@@ -135,7 +142,7 @@ func NewGroupClient(options GroupClientOptions) (*GroupClient, error) {
 	if options.MaxSize <= 0 {
 		options.MaxSize = DefaultMaxMessageSize
 	}
-	return &GroupClient{options: options, peers: make(map[uint64]*groupPeer)}, nil
+	return &GroupClient{options: options, peers: make(map[uint64]*groupPeer), recordSlots: make(chan struct{}, recordTransferConcurrency), recordReaders: make(chan struct{}, recordTransferConcurrency), recordBuffers: resource.NewByteBudget(recordTransferBufferBytes)}, nil
 }
 
 func (client *GroupClient) Submit(ctx context.Context, target uint64, groupID string, command []byte) (uint64, error) {
@@ -175,6 +182,18 @@ func (client *GroupClient) ReadIndex(ctx context.Context, target uint64, groupID
 	return response.GetConfirmedIndex(), nil
 }
 
+// MirrorGeo submits the platform-owned Geo metadata checkpoint through the
+// destination capability Group. The routed capability endpoint waits for the
+// destination StateMachine Result, so a successful return means the command
+// is durably applied (or has a durable rejection), not merely queued.
+func (client *GroupClient) MirrorGeo(ctx context.Context, target uint64, groupID string, encoded []byte) (capstate.Result, error) {
+	capability, err := client.Capability(target, groupID)
+	if err != nil {
+		return capstate.Result{}, err
+	}
+	return capability.MirrorGeo(ctx, encoded)
+}
+
 func (client *GroupClient) observeLeader(groupID string, leader uint64) {
 	if client.options.GroupRoutes != nil {
 		client.options.GroupRoutes.ObserveLeader(groupID, leader)
@@ -200,6 +219,9 @@ func (client *GroupClient) peer(raftID uint64) (raftwire.GroupServiceClient, err
 	}
 	if peer != nil {
 		_ = peer.conn.Close()
+		if peer.recordConn != nil {
+			_ = peer.recordConn.Close()
+		}
 	}
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(client.options.Credentials),
 		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(client.options.MaxSize+1024)))
@@ -223,6 +245,9 @@ func (client *GroupClient) Close() error {
 	var failures []error
 	for _, peer := range client.peers {
 		failures = append(failures, peer.conn.Close())
+		if peer.recordConn != nil {
+			failures = append(failures, peer.recordConn.Close())
+		}
 	}
 	return errors.Join(failures...)
 }

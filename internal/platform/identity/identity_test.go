@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func TestLoadDoesNotInitializeMissingOrMalformedStore(t *testing.T) {
+	for _, malformed := range []bool{false, true} {
+		root := t.TempDir()
+		want := 0
+		if malformed {
+			if err := os.WriteFile(filepath.Join(root, filename), []byte("{"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			want = 1
+		}
+		if _, err := Load(root); err == nil {
+			t.Fatal("invalid Store identity accepted")
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != want {
+			t.Fatal("Load initialized an unmanaged Store", entries, err)
+		}
+	}
+}
+
 func TestBootstrapIsPersistentAndIdempotent(t *testing.T) {
 	root := t.TempDir()
 	first, err := Bootstrap(root)
@@ -54,6 +74,12 @@ func TestJoinIdentityCanBindExactlyOneCluster(t *testing.T) {
 	}
 	if _, err := BindCluster(root, cluster.ClusterID); err != nil {
 		t.Fatalf("idempotent binding: %v", err)
+	}
+	if bound.Origin != OriginJoin {
+		t.Fatal("binding lost the join origin")
+	}
+	if _, err := Bootstrap(root); err == nil {
+		t.Fatal("bound join identity was allowed to bootstrap")
 	}
 	other, err := Bootstrap(t.TempDir())
 	if err != nil {

@@ -233,7 +233,10 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	}
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", CapabilityID: "record",
 		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// This deadline covers the whole multi-RPC scenario, including creation and
+	// fsync of another Root Host below. It is not a per-RPC latency assertion;
+	// concurrent race-enabled package tests can take more than one second.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	proof, err := remote.EnsureInitialRange(ctx, descriptor)
 	if err != nil || proof.RequestID != rangebootstrap.OwnerRequestID(descriptor) || proof.AppliedIndex == 0 {

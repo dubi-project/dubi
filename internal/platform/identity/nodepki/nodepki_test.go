@@ -2,7 +2,10 @@ package nodepki
 
 import (
 	"bytes"
+	"crypto/ecdh"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +14,55 @@ import (
 
 	"github.com/dubi-project/dubi/internal/platform/identity"
 )
+
+func TestSignerTransferBindsTargetAndAuthorityEpoch(t *testing.T) {
+	sourceStore := filepath.Join(t.TempDir(), "source")
+	source := mustBootstrap(t, sourceStore)
+	now := time.Now().UTC()
+	if _, err := Ensure(sourceStore, source, DefaultServerName, now); err != nil {
+		t.Fatal(err)
+	}
+	signer, err := OpenSigner(sourceStore, source, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustBootstrap(t, filepath.Join(t.TempDir(), "target"))
+	target.ClusterID = source.ClusterID
+	wrapper, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := signer.SealFor(target, wrapper.PublicKey().Bytes(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "DUBI SIGNER WRAPPING PRIVATE KEY", Bytes: wrapper.Bytes()})
+	recovered, err := OpenTransferredSigner(target, signer.CACertificatePEM(), privatePEM, envelope, 7, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(recovered.CACertificatePEM(), signer.CACertificatePEM()) {
+		t.Fatal("transferred signer changed the Cluster CA")
+	}
+	if _, err := OpenTransferredSigner(target, signer.CACertificatePEM(), privatePEM, envelope, 8, now); err == nil {
+		t.Fatal("transferred signer accepted the wrong authority epoch")
+	}
+	sourceWrapping, err := SignerWrappingPublicKey(sourceStore, source, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceEnvelope, err := signer.SealFor(source, sourceWrapping, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallTransferredSigner(sourceStore, source, 7, sourceEnvelope, now); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := OpenSigner(sourceStore, source, now)
+	if err != nil || installed.AuthorityEpoch() != 7 {
+		t.Fatalf("persisted signer epoch = %d, err %v", installed.AuthorityEpoch(), err)
+	}
+}
 
 func TestEnsureCreatesAndReopensBootstrapPKI(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "node")

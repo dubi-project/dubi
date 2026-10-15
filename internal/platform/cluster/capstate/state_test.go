@@ -115,7 +115,7 @@ func TestCapabilityStateAtomicallyFencesAndAppliesMutation(t *testing.T) {
 	if err != nil || !found || !result.Applied || string(result.Value) != "one" {
 		t.Fatalf("mutation result = %+v, %v, %v", result, found, err)
 	}
-	if value, found, err := state.Value("record", []byte("item/key")); err != nil || !found || string(value) != "one" {
+	if value, found, err := state.Value(target.Keyspace, []byte("item/key")); err != nil || !found || string(value) != "one" {
 		t.Fatalf("capability value = %q, %v, %v", value, found, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -142,7 +142,7 @@ func TestCapabilityStateAtomicallyFencesAndAppliesMutation(t *testing.T) {
 		rejected.Applied || rejected.Error != router.ErrRouteFenced.Error() {
 		t.Fatalf("stale result = %+v, %v, %v", rejected, found, err)
 	}
-	if _, found, err := state.Value("record", []byte("item/stale")); err != nil || found {
+	if _, found, err := state.Value(target.Keyspace, []byte("item/stale")); err != nil || found {
 		t.Fatalf("stale write escaped Fence: found=%v err=%v", found, err)
 	}
 	if handler.calls != 1 {
@@ -183,7 +183,7 @@ func TestCapabilityStateDiscardsRejectedWritesAndDeduplicates(t *testing.T) {
 	if result, found, err := state.Result("rejected"); err != nil || !found || result.Applied || result.Error != "quota exceeded" {
 		t.Fatalf("rejected result = %+v, %v, %v", result, found, err)
 	}
-	if _, found, err := state.Value("record", []byte("item/rejected")); err != nil || found {
+	if _, found, err := state.Value(target.Keyspace, []byte("item/rejected")); err != nil || found {
 		t.Fatalf("rejected staged write persisted: found=%v err=%v", found, err)
 	}
 
@@ -194,7 +194,7 @@ func TestCapabilityStateDiscardsRejectedWritesAndDeduplicates(t *testing.T) {
 	if err := state.ApplyRouted(4, "increment", target, payload); err != nil {
 		t.Fatal(err)
 	}
-	if value, found, err := state.Value("record", []byte("counter")); err != nil || !found || string(value) != "0+1" {
+	if value, found, err := state.Value(target.Keyspace, []byte("counter")); err != nil || !found || string(value) != "0+1" {
 		t.Fatalf("deduplicated counter = %q, %v, %v", value, found, err)
 	}
 	changed := encodeTestMutation(t, testMutation{Key: "counter", Value: "reused"})
@@ -243,7 +243,7 @@ func TestCapabilityStateSnapshotRestoresFenceDataAndResults(t *testing.T) {
 	if err := targetState.Restore(index, image, snapshotConf); err != nil {
 		t.Fatal(err)
 	}
-	if value, found, err := targetState.Value("record", []byte("item")); err != nil || !found || !bytes.Equal(value, []byte("restored")) {
+	if value, found, err := targetState.Value(target.Keyspace, []byte("item")); err != nil || !found || !bytes.Equal(value, []byte("restored")) {
 		t.Fatalf("restored value = %q, %v, %v", value, found, err)
 	}
 	if fence, found, err := targetState.Range("range-a"); err != nil || !found || fence.Epoch != 1 {

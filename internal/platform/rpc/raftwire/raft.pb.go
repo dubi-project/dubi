@@ -713,11 +713,17 @@ func (x *GroupMembershipRequest) GetToRaftId() uint64 {
 }
 
 type GroupMembershipResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ConfState     []byte                 `protobuf:"bytes,1,opt,name=conf_state,json=confState,proto3" json:"conf_state,omitempty"`
-	LeaderRaftId  uint64                 `protobuf:"varint,2,opt,name=leader_raft_id,json=leaderRaftId,proto3" json:"leader_raft_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ConfState       []byte                 `protobuf:"bytes,1,opt,name=conf_state,json=confState,proto3" json:"conf_state,omitempty"`
+	LeaderRaftId    uint64                 `protobuf:"varint,2,opt,name=leader_raft_id,json=leaderRaftId,proto3" json:"leader_raft_id,omitempty"`
+	MembershipIndex uint64                 `protobuf:"varint,3,opt,name=membership_index,json=membershipIndex,proto3" json:"membership_index,omitempty"`
+	ClusterId       string                 `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId         string                 `protobuf:"bytes,5,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	RaftId          uint64                 `protobuf:"varint,6,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	ConfirmedIndex  uint64                 `protobuf:"varint,7,opt,name=confirmed_index,json=confirmedIndex,proto3" json:"confirmed_index,omitempty"`
+	LeaderTerm      uint64                 `protobuf:"varint,8,opt,name=leader_term,json=leaderTerm,proto3" json:"leader_term,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GroupMembershipResponse) Reset() {
@@ -764,16 +770,62 @@ func (x *GroupMembershipResponse) GetLeaderRaftId() uint64 {
 	return 0
 }
 
+func (x *GroupMembershipResponse) GetMembershipIndex() uint64 {
+	if x != nil {
+		return x.MembershipIndex
+	}
+	return 0
+}
+
+func (x *GroupMembershipResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *GroupMembershipResponse) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *GroupMembershipResponse) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *GroupMembershipResponse) GetConfirmedIndex() uint64 {
+	if x != nil {
+		return x.ConfirmedIndex
+	}
+	return 0
+}
+
+func (x *GroupMembershipResponse) GetLeaderTerm() uint64 {
+	if x != nil {
+		return x.LeaderTerm
+	}
+	return 0
+}
+
 type GroupMembershipChangeRequest struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	ClusterId     string                   `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	GroupId       string                   `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
-	FromRaftId    uint64                   `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
-	ToRaftId      uint64                   `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
-	Operation     GroupMembershipOperation `protobuf:"varint,5,opt,name=operation,proto3,enum=dubi.internal.raft.v1.GroupMembershipOperation" json:"operation,omitempty"`
-	MemberRaftId  uint64                   `protobuf:"varint,6,opt,name=member_raft_id,json=memberRaftId,proto3" json:"member_raft_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState   `protogen:"open.v1"`
+	ClusterId               string                   `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId                 string                   `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId              uint64                   `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId                uint64                   `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	Operation               GroupMembershipOperation `protobuf:"varint,5,opt,name=operation,proto3,enum=dubi.internal.raft.v1.GroupMembershipOperation" json:"operation,omitempty"`
+	MemberRaftId            uint64                   `protobuf:"varint,6,opt,name=member_raft_id,json=memberRaftId,proto3" json:"member_raft_id,omitempty"`
+	ChangeId                string                   `protobuf:"bytes,7,opt,name=change_id,json=changeId,proto3" json:"change_id,omitempty"`
+	ExpectedEpoch           uint64                   `protobuf:"varint,8,opt,name=expected_epoch,json=expectedEpoch,proto3" json:"expected_epoch,omitempty"`
+	ExpectedMembershipIndex uint64                   `protobuf:"varint,9,opt,name=expected_membership_index,json=expectedMembershipIndex,proto3" json:"expected_membership_index,omitempty"`
+	ExpectedConfState       []byte                   `protobuf:"bytes,10,opt,name=expected_conf_state,json=expectedConfState,proto3" json:"expected_conf_state,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *GroupMembershipChangeRequest) Reset() {
@@ -848,15 +900,48 @@ func (x *GroupMembershipChangeRequest) GetMemberRaftId() uint64 {
 	return 0
 }
 
+func (x *GroupMembershipChangeRequest) GetChangeId() string {
+	if x != nil {
+		return x.ChangeId
+	}
+	return ""
+}
+
+func (x *GroupMembershipChangeRequest) GetExpectedEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedEpoch
+	}
+	return 0
+}
+
+func (x *GroupMembershipChangeRequest) GetExpectedMembershipIndex() uint64 {
+	if x != nil {
+		return x.ExpectedMembershipIndex
+	}
+	return 0
+}
+
+func (x *GroupMembershipChangeRequest) GetExpectedConfState() []byte {
+	if x != nil {
+		return x.ExpectedConfState
+	}
+	return nil
+}
+
 type GroupLeadershipTransferRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
-	FromRaftId    uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
-	ToRaftId      uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
-	TargetRaftId  uint64                 `protobuf:"varint,5,opt,name=target_raft_id,json=targetRaftId,proto3" json:"target_raft_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId               string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId                 string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId              uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId                uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	TargetRaftId            uint64                 `protobuf:"varint,5,opt,name=target_raft_id,json=targetRaftId,proto3" json:"target_raft_id,omitempty"`
+	ChangeId                string                 `protobuf:"bytes,6,opt,name=change_id,json=changeId,proto3" json:"change_id,omitempty"`
+	ExpectedEpoch           uint64                 `protobuf:"varint,7,opt,name=expected_epoch,json=expectedEpoch,proto3" json:"expected_epoch,omitempty"`
+	ExpectedMembershipIndex uint64                 `protobuf:"varint,8,opt,name=expected_membership_index,json=expectedMembershipIndex,proto3" json:"expected_membership_index,omitempty"`
+	ExpectedConfState       []byte                 `protobuf:"bytes,9,opt,name=expected_conf_state,json=expectedConfState,proto3" json:"expected_conf_state,omitempty"`
+	ExpectedLeaderTerm      uint64                 `protobuf:"varint,10,opt,name=expected_leader_term,json=expectedLeaderTerm,proto3" json:"expected_leader_term,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *GroupLeadershipTransferRequest) Reset() {
@@ -924,9 +1009,49 @@ func (x *GroupLeadershipTransferRequest) GetTargetRaftId() uint64 {
 	return 0
 }
 
+func (x *GroupLeadershipTransferRequest) GetChangeId() string {
+	if x != nil {
+		return x.ChangeId
+	}
+	return ""
+}
+
+func (x *GroupLeadershipTransferRequest) GetExpectedEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedEpoch
+	}
+	return 0
+}
+
+func (x *GroupLeadershipTransferRequest) GetExpectedMembershipIndex() uint64 {
+	if x != nil {
+		return x.ExpectedMembershipIndex
+	}
+	return 0
+}
+
+func (x *GroupLeadershipTransferRequest) GetExpectedConfState() []byte {
+	if x != nil {
+		return x.ExpectedConfState
+	}
+	return nil
+}
+
+func (x *GroupLeadershipTransferRequest) GetExpectedLeaderTerm() uint64 {
+	if x != nil {
+		return x.ExpectedLeaderTerm
+	}
+	return 0
+}
+
 type GroupLeadershipTransferResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	LeaderRaftId  uint64                 `protobuf:"varint,1,opt,name=leader_raft_id,json=leaderRaftId,proto3" json:"leader_raft_id,omitempty"`
+	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId       string                 `protobuf:"bytes,3,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	RaftId        uint64                 `protobuf:"varint,4,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	ChangeId      string                 `protobuf:"bytes,5,opt,name=change_id,json=changeId,proto3" json:"change_id,omitempty"`
+	ExpectedEpoch uint64                 `protobuf:"varint,6,opt,name=expected_epoch,json=expectedEpoch,proto3" json:"expected_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -968,12 +1093,49 @@ func (x *GroupLeadershipTransferResponse) GetLeaderRaftId() uint64 {
 	return 0
 }
 
+func (x *GroupLeadershipTransferResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *GroupLeadershipTransferResponse) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *GroupLeadershipTransferResponse) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *GroupLeadershipTransferResponse) GetChangeId() string {
+	if x != nil {
+		return x.ChangeId
+	}
+	return ""
+}
+
+func (x *GroupLeadershipTransferResponse) GetExpectedEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedEpoch
+	}
+	return 0
+}
+
 type PrepareJoiningGroupRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	FromRaftId    uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
 	ToRaftId      uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	ChangeId      string                 `protobuf:"bytes,5,opt,name=change_id,json=changeId,proto3" json:"change_id,omitempty"`
+	ExpectedEpoch uint64                 `protobuf:"varint,6,opt,name=expected_epoch,json=expectedEpoch,proto3" json:"expected_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1036,8 +1198,27 @@ func (x *PrepareJoiningGroupRequest) GetToRaftId() uint64 {
 	return 0
 }
 
+func (x *PrepareJoiningGroupRequest) GetChangeId() string {
+	if x != nil {
+		return x.ChangeId
+	}
+	return ""
+}
+
+func (x *PrepareJoiningGroupRequest) GetExpectedEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedEpoch
+	}
+	return 0
+}
+
 type PrepareJoiningGroupResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	RaftId        uint64                 `protobuf:"varint,3,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	ChangeId      string                 `protobuf:"bytes,4,opt,name=change_id,json=changeId,proto3" json:"change_id,omitempty"`
+	ExpectedEpoch uint64                 `protobuf:"varint,5,opt,name=expected_epoch,json=expectedEpoch,proto3" json:"expected_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1072,6 +1253,243 @@ func (*PrepareJoiningGroupResponse) Descriptor() ([]byte, []int) {
 	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{15}
 }
 
+func (x *PrepareJoiningGroupResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *PrepareJoiningGroupResponse) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *PrepareJoiningGroupResponse) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *PrepareJoiningGroupResponse) GetChangeId() string {
+	if x != nil {
+		return x.ChangeId
+	}
+	return ""
+}
+
+func (x *PrepareJoiningGroupResponse) GetExpectedEpoch() uint64 {
+	if x != nil {
+		return x.ExpectedEpoch
+	}
+	return 0
+}
+
+// Capability-neutral local application evidence. Not a business durability
+// receipt and not authorization to change the cohort's durable denominator.
+type ObserveRegionFenceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId      uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObserveRegionFenceRequest) Reset() {
+	*x = ObserveRegionFenceRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObserveRegionFenceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObserveRegionFenceRequest) ProtoMessage() {}
+
+func (x *ObserveRegionFenceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObserveRegionFenceRequest.ProtoReflect.Descriptor instead.
+func (*ObserveRegionFenceRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ObserveRegionFenceRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ObserveRegionFenceRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *ObserveRegionFenceRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *ObserveRegionFenceRequest) GetToRaftId() uint64 {
+	if x != nil {
+		return x.ToRaftId
+	}
+	return 0
+}
+
+type ObserveRegionFenceResponse struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId           string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId             string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	RaftId              uint64                 `protobuf:"varint,3,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	RootConfirmedIndex  uint64                 `protobuf:"varint,4,opt,name=root_confirmed_index,json=rootConfirmedIndex,proto3" json:"root_confirmed_index,omitempty"`
+	GroupConfirmedIndex uint64                 `protobuf:"varint,5,opt,name=group_confirmed_index,json=groupConfirmedIndex,proto3" json:"group_confirmed_index,omitempty"`
+	AppliedIndex        uint64                 `protobuf:"varint,6,opt,name=applied_index,json=appliedIndex,proto3" json:"applied_index,omitempty"`
+	MembershipIndex     uint64                 `protobuf:"varint,7,opt,name=membership_index,json=membershipIndex,proto3" json:"membership_index,omitempty"`
+	ConfState           []byte                 `protobuf:"bytes,8,opt,name=conf_state,json=confState,proto3" json:"conf_state,omitempty"`
+	FenceRecord         []byte                 `protobuf:"bytes,9,opt,name=fence_record,json=fenceRecord,proto3" json:"fence_record,omitempty"`
+	Active              bool                   `protobuf:"varint,10,opt,name=active,proto3" json:"active,omitempty"`
+	StateFormat         uint32                 `protobuf:"varint,11,opt,name=state_format,json=stateFormat,proto3" json:"state_format,omitempty"`
+	HandoffRecord       []byte                 `protobuf:"bytes,12,opt,name=handoff_record,json=handoffRecord,proto3" json:"handoff_record,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ObserveRegionFenceResponse) Reset() {
+	*x = ObserveRegionFenceResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObserveRegionFenceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObserveRegionFenceResponse) ProtoMessage() {}
+
+func (x *ObserveRegionFenceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObserveRegionFenceResponse.ProtoReflect.Descriptor instead.
+func (*ObserveRegionFenceResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ObserveRegionFenceResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ObserveRegionFenceResponse) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *ObserveRegionFenceResponse) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *ObserveRegionFenceResponse) GetRootConfirmedIndex() uint64 {
+	if x != nil {
+		return x.RootConfirmedIndex
+	}
+	return 0
+}
+
+func (x *ObserveRegionFenceResponse) GetGroupConfirmedIndex() uint64 {
+	if x != nil {
+		return x.GroupConfirmedIndex
+	}
+	return 0
+}
+
+func (x *ObserveRegionFenceResponse) GetAppliedIndex() uint64 {
+	if x != nil {
+		return x.AppliedIndex
+	}
+	return 0
+}
+
+func (x *ObserveRegionFenceResponse) GetMembershipIndex() uint64 {
+	if x != nil {
+		return x.MembershipIndex
+	}
+	return 0
+}
+
+func (x *ObserveRegionFenceResponse) GetConfState() []byte {
+	if x != nil {
+		return x.ConfState
+	}
+	return nil
+}
+
+func (x *ObserveRegionFenceResponse) GetFenceRecord() []byte {
+	if x != nil {
+		return x.FenceRecord
+	}
+	return nil
+}
+
+func (x *ObserveRegionFenceResponse) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+func (x *ObserveRegionFenceResponse) GetStateFormat() uint32 {
+	if x != nil {
+		return x.StateFormat
+	}
+	return 0
+}
+
+func (x *ObserveRegionFenceResponse) GetHandoffRecord() []byte {
+	if x != nil {
+		return x.HandoffRecord
+	}
+	return nil
+}
+
 type EnsureInitialRangeRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId       string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
@@ -1085,7 +1503,7 @@ type EnsureInitialRangeRequest struct {
 
 func (x *EnsureInitialRangeRequest) Reset() {
 	*x = EnsureInitialRangeRequest{}
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[16]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1097,7 +1515,7 @@ func (x *EnsureInitialRangeRequest) String() string {
 func (*EnsureInitialRangeRequest) ProtoMessage() {}
 
 func (x *EnsureInitialRangeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[16]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1110,7 +1528,7 @@ func (x *EnsureInitialRangeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnsureInitialRangeRequest.ProtoReflect.Descriptor instead.
 func (*EnsureInitialRangeRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{16}
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *EnsureInitialRangeRequest) GetClusterId() string {
@@ -1158,7 +1576,7 @@ type EnsureInitialRangeResponse struct {
 
 func (x *EnsureInitialRangeResponse) Reset() {
 	*x = EnsureInitialRangeResponse{}
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[17]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1170,7 +1588,7 @@ func (x *EnsureInitialRangeResponse) String() string {
 func (*EnsureInitialRangeResponse) ProtoMessage() {}
 
 func (x *EnsureInitialRangeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[17]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1183,7 +1601,7 @@ func (x *EnsureInitialRangeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnsureInitialRangeResponse.ProtoReflect.Descriptor instead.
 func (*EnsureInitialRangeResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{17}
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *EnsureInitialRangeResponse) GetOwnerRequestId() string {
@@ -1213,7 +1631,7 @@ type CapabilityMutateRequest struct {
 
 func (x *CapabilityMutateRequest) Reset() {
 	*x = CapabilityMutateRequest{}
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[18]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1225,7 +1643,7 @@ func (x *CapabilityMutateRequest) String() string {
 func (*CapabilityMutateRequest) ProtoMessage() {}
 
 func (x *CapabilityMutateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[18]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1238,7 +1656,7 @@ func (x *CapabilityMutateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityMutateRequest.ProtoReflect.Descriptor instead.
 func (*CapabilityMutateRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{18}
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CapabilityMutateRequest) GetClusterId() string {
@@ -1289,7 +1707,7 @@ type CapabilityResult struct {
 
 func (x *CapabilityResult) Reset() {
 	*x = CapabilityResult{}
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[19]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1301,7 +1719,7 @@ func (x *CapabilityResult) String() string {
 func (*CapabilityResult) ProtoMessage() {}
 
 func (x *CapabilityResult) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[19]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1314,7 +1732,7 @@ func (x *CapabilityResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityResult.ProtoReflect.Descriptor instead.
 func (*CapabilityResult) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{19}
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CapabilityResult) GetApplied() bool {
@@ -1366,7 +1784,7 @@ type CapabilityReadRequest struct {
 
 func (x *CapabilityReadRequest) Reset() {
 	*x = CapabilityReadRequest{}
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[20]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1378,7 +1796,7 @@ func (x *CapabilityReadRequest) String() string {
 func (*CapabilityReadRequest) ProtoMessage() {}
 
 func (x *CapabilityReadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[20]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1391,7 +1809,7 @@ func (x *CapabilityReadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityReadRequest.ProtoReflect.Descriptor instead.
 func (*CapabilityReadRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{20}
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CapabilityReadRequest) GetClusterId() string {
@@ -1448,7 +1866,7 @@ type CapabilityReadResponse struct {
 
 func (x *CapabilityReadResponse) Reset() {
 	*x = CapabilityReadResponse{}
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[21]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1460,7 +1878,7 @@ func (x *CapabilityReadResponse) String() string {
 func (*CapabilityReadResponse) ProtoMessage() {}
 
 func (x *CapabilityReadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[21]
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1473,7 +1891,7 @@ func (x *CapabilityReadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityReadResponse.ProtoReflect.Descriptor instead.
 func (*CapabilityReadResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{21}
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CapabilityReadResponse) GetError() string {
@@ -1502,6 +1920,1396 @@ func (x *CapabilityReadResponse) GetLeaderRaftId() uint64 {
 		return x.LeaderRaftId
 	}
 	return 0
+}
+
+// Gateway-to-Owner immutable data operations. The receiving Owner member
+// executes the full physical-majority and committed-confirmation protocol;
+// neither a forwarded request nor a completed body stream is LocalReady.
+type CapabilityDataWriteHeader struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId        string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId          string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId       uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId         uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	RouteTarget      []byte                 `protobuf:"bytes,5,opt,name=route_target,json=routeTarget,proto3" json:"route_target,omitempty"`
+	RequestId        string                 `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	RecordDescriptor []byte                 `protobuf:"bytes,7,opt,name=record_descriptor,json=recordDescriptor,proto3" json:"record_descriptor,omitempty"`
+	MutationPayload  []byte                 `protobuf:"bytes,8,opt,name=mutation_payload,json=mutationPayload,proto3" json:"mutation_payload,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CapabilityDataWriteHeader) Reset() {
+	*x = CapabilityDataWriteHeader{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityDataWriteHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityDataWriteHeader) ProtoMessage() {}
+
+func (x *CapabilityDataWriteHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityDataWriteHeader.ProtoReflect.Descriptor instead.
+func (*CapabilityDataWriteHeader) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *CapabilityDataWriteHeader) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *CapabilityDataWriteHeader) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *CapabilityDataWriteHeader) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *CapabilityDataWriteHeader) GetToRaftId() uint64 {
+	if x != nil {
+		return x.ToRaftId
+	}
+	return 0
+}
+
+func (x *CapabilityDataWriteHeader) GetRouteTarget() []byte {
+	if x != nil {
+		return x.RouteTarget
+	}
+	return nil
+}
+
+func (x *CapabilityDataWriteHeader) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CapabilityDataWriteHeader) GetRecordDescriptor() []byte {
+	if x != nil {
+		return x.RecordDescriptor
+	}
+	return nil
+}
+
+func (x *CapabilityDataWriteHeader) GetMutationPayload() []byte {
+	if x != nil {
+		return x.MutationPayload
+	}
+	return nil
+}
+
+type CapabilityDataWriteRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*CapabilityDataWriteRequest_Header
+	//	*CapabilityDataWriteRequest_Data
+	Payload       isCapabilityDataWriteRequest_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapabilityDataWriteRequest) Reset() {
+	*x = CapabilityDataWriteRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityDataWriteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityDataWriteRequest) ProtoMessage() {}
+
+func (x *CapabilityDataWriteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityDataWriteRequest.ProtoReflect.Descriptor instead.
+func (*CapabilityDataWriteRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *CapabilityDataWriteRequest) GetPayload() isCapabilityDataWriteRequest_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *CapabilityDataWriteRequest) GetHeader() *CapabilityDataWriteHeader {
+	if x != nil {
+		if x, ok := x.Payload.(*CapabilityDataWriteRequest_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *CapabilityDataWriteRequest) GetData() []byte {
+	if x != nil {
+		if x, ok := x.Payload.(*CapabilityDataWriteRequest_Data); ok {
+			return x.Data
+		}
+	}
+	return nil
+}
+
+type isCapabilityDataWriteRequest_Payload interface {
+	isCapabilityDataWriteRequest_Payload()
+}
+
+type CapabilityDataWriteRequest_Header struct {
+	Header *CapabilityDataWriteHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type CapabilityDataWriteRequest_Data struct {
+	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"`
+}
+
+func (*CapabilityDataWriteRequest_Header) isCapabilityDataWriteRequest_Payload() {}
+
+func (*CapabilityDataWriteRequest_Data) isCapabilityDataWriteRequest_Payload() {}
+
+type CapabilityDataWriteResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	State             string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	Reference         []byte                 `protobuf:"bytes,2,opt,name=reference,proto3" json:"reference,omitempty"`
+	ConfirmationIndex uint64                 `protobuf:"varint,3,opt,name=confirmation_index,json=confirmationIndex,proto3" json:"confirmation_index,omitempty"`
+	RegionGeneration  uint64                 `protobuf:"varint,4,opt,name=region_generation,json=regionGeneration,proto3" json:"region_generation,omitempty"`
+	Error             string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *CapabilityDataWriteResponse) Reset() {
+	*x = CapabilityDataWriteResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityDataWriteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityDataWriteResponse) ProtoMessage() {}
+
+func (x *CapabilityDataWriteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityDataWriteResponse.ProtoReflect.Descriptor instead.
+func (*CapabilityDataWriteResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *CapabilityDataWriteResponse) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *CapabilityDataWriteResponse) GetReference() []byte {
+	if x != nil {
+		return x.Reference
+	}
+	return nil
+}
+
+func (x *CapabilityDataWriteResponse) GetConfirmationIndex() uint64 {
+	if x != nil {
+		return x.ConfirmationIndex
+	}
+	return 0
+}
+
+func (x *CapabilityDataWriteResponse) GetRegionGeneration() uint64 {
+	if x != nil {
+		return x.RegionGeneration
+	}
+	return 0
+}
+
+func (x *CapabilityDataWriteResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type CapabilityDataReadRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId      uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	RouteTarget   []byte                 `protobuf:"bytes,5,opt,name=route_target,json=routeTarget,proto3" json:"route_target,omitempty"`
+	Key           []byte                 `protobuf:"bytes,6,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapabilityDataReadRequest) Reset() {
+	*x = CapabilityDataReadRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityDataReadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityDataReadRequest) ProtoMessage() {}
+
+func (x *CapabilityDataReadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityDataReadRequest.ProtoReflect.Descriptor instead.
+func (*CapabilityDataReadRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *CapabilityDataReadRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *CapabilityDataReadRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *CapabilityDataReadRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *CapabilityDataReadRequest) GetToRaftId() uint64 {
+	if x != nil {
+		return x.ToRaftId
+	}
+	return 0
+}
+
+func (x *CapabilityDataReadRequest) GetRouteTarget() []byte {
+	if x != nil {
+		return x.RouteTarget
+	}
+	return nil
+}
+
+func (x *CapabilityDataReadRequest) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+type CapabilityDataReadHeader struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Reference        []byte                 `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
+	RegionGeneration uint64                 `protobuf:"varint,2,opt,name=region_generation,json=regionGeneration,proto3" json:"region_generation,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CapabilityDataReadHeader) Reset() {
+	*x = CapabilityDataReadHeader{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityDataReadHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityDataReadHeader) ProtoMessage() {}
+
+func (x *CapabilityDataReadHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityDataReadHeader.ProtoReflect.Descriptor instead.
+func (*CapabilityDataReadHeader) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *CapabilityDataReadHeader) GetReference() []byte {
+	if x != nil {
+		return x.Reference
+	}
+	return nil
+}
+
+func (x *CapabilityDataReadHeader) GetRegionGeneration() uint64 {
+	if x != nil {
+		return x.RegionGeneration
+	}
+	return 0
+}
+
+type CapabilityDataReadResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*CapabilityDataReadResponse_Header
+	//	*CapabilityDataReadResponse_Data
+	Payload       isCapabilityDataReadResponse_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CapabilityDataReadResponse) Reset() {
+	*x = CapabilityDataReadResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityDataReadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityDataReadResponse) ProtoMessage() {}
+
+func (x *CapabilityDataReadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityDataReadResponse.ProtoReflect.Descriptor instead.
+func (*CapabilityDataReadResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *CapabilityDataReadResponse) GetPayload() isCapabilityDataReadResponse_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *CapabilityDataReadResponse) GetHeader() *CapabilityDataReadHeader {
+	if x != nil {
+		if x, ok := x.Payload.(*CapabilityDataReadResponse_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *CapabilityDataReadResponse) GetData() []byte {
+	if x != nil {
+		if x, ok := x.Payload.(*CapabilityDataReadResponse_Data); ok {
+			return x.Data
+		}
+	}
+	return nil
+}
+
+type isCapabilityDataReadResponse_Payload interface {
+	isCapabilityDataReadResponse_Payload()
+}
+
+type CapabilityDataReadResponse_Header struct {
+	Header *CapabilityDataReadHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type CapabilityDataReadResponse_Data struct {
+	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"`
+}
+
+func (*CapabilityDataReadResponse_Header) isCapabilityDataReadResponse_Payload() {}
+
+func (*CapabilityDataReadResponse_Data) isCapabilityDataReadResponse_Payload() {}
+
+// Physical observation on ONE authenticated Node. No payload is transferred;
+// this is not logical authority, a Region-generation receipt, or a quorum.
+type ObserveRecordHoldingRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId        string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId       uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId         uint64                 `protobuf:"varint,3,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	RecordDescriptor []byte                 `protobuf:"bytes,4,opt,name=record_descriptor,json=recordDescriptor,proto3" json:"record_descriptor,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ObserveRecordHoldingRequest) Reset() {
+	*x = ObserveRecordHoldingRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObserveRecordHoldingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObserveRecordHoldingRequest) ProtoMessage() {}
+
+func (x *ObserveRecordHoldingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObserveRecordHoldingRequest.ProtoReflect.Descriptor instead.
+func (*ObserveRecordHoldingRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ObserveRecordHoldingRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ObserveRecordHoldingRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *ObserveRecordHoldingRequest) GetToRaftId() uint64 {
+	if x != nil {
+		return x.ToRaftId
+	}
+	return 0
+}
+
+func (x *ObserveRecordHoldingRequest) GetRecordDescriptor() []byte {
+	if x != nil {
+		return x.RecordDescriptor
+	}
+	return nil
+}
+
+type ObserveRecordHoldingResponse struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Version            uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	ClusterId          string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	RaftId             uint64                 `protobuf:"varint,3,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	NodeId             string                 `protobuf:"bytes,4,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RootConfirmedIndex uint64                 `protobuf:"varint,5,opt,name=root_confirmed_index,json=rootConfirmedIndex,proto3" json:"root_confirmed_index,omitempty"`
+	RecordDescriptor   []byte                 `protobuf:"bytes,6,opt,name=record_descriptor,json=recordDescriptor,proto3" json:"record_descriptor,omitempty"`
+	RecordId           string                 `protobuf:"bytes,7,opt,name=record_id,json=recordId,proto3" json:"record_id,omitempty"`
+	StoreId            string                 `protobuf:"bytes,8,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
+	VolumeId           string                 `protobuf:"bytes,9,opt,name=volume_id,json=volumeId,proto3" json:"volume_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ObserveRecordHoldingResponse) Reset() {
+	*x = ObserveRecordHoldingResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObserveRecordHoldingResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObserveRecordHoldingResponse) ProtoMessage() {}
+
+func (x *ObserveRecordHoldingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObserveRecordHoldingResponse.ProtoReflect.Descriptor instead.
+func (*ObserveRecordHoldingResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ObserveRecordHoldingResponse) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *ObserveRecordHoldingResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ObserveRecordHoldingResponse) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *ObserveRecordHoldingResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *ObserveRecordHoldingResponse) GetRootConfirmedIndex() uint64 {
+	if x != nil {
+		return x.RootConfirmedIndex
+	}
+	return 0
+}
+
+func (x *ObserveRecordHoldingResponse) GetRecordDescriptor() []byte {
+	if x != nil {
+		return x.RecordDescriptor
+	}
+	return nil
+}
+
+func (x *ObserveRecordHoldingResponse) GetRecordId() string {
+	if x != nil {
+		return x.RecordId
+	}
+	return ""
+}
+
+func (x *ObserveRecordHoldingResponse) GetStoreId() string {
+	if x != nil {
+		return x.StoreId
+	}
+	return ""
+}
+
+func (x *ObserveRecordHoldingResponse) GetVolumeId() string {
+	if x != nil {
+		return x.VolumeId
+	}
+	return ""
+}
+
+// Exactly one header, then nonempty bounded data frames, then client EOF.
+// EOF is required even for an empty record. No local Pack/Volume locator is
+// accepted. The response reports durable physical holding, NOT a quorum.
+type PutRecordRequest struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Header        *ObserveRecordHoldingRequest `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
+	Data          []byte                       `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutRecordRequest) Reset() {
+	*x = PutRecordRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutRecordRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutRecordRequest) ProtoMessage() {}
+
+func (x *PutRecordRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutRecordRequest.ProtoReflect.Descriptor instead.
+func (*PutRecordRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *PutRecordRequest) GetHeader() *ObserveRecordHoldingRequest {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
+func (x *PutRecordRequest) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// The caller specifies the exact sealed handoff it expects. The responder
+// builds a fresh, read-barriered immutable reference cut and streams its
+// complete artifact; a digest or a prefix is never a coverage receipt.
+type GetRecordCutRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId      uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	SealRecord    []byte                 `protobuf:"bytes,5,opt,name=seal_record,json=sealRecord,proto3" json:"seal_record,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRecordCutRequest) Reset() {
+	*x = GetRecordCutRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRecordCutRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRecordCutRequest) ProtoMessage() {}
+
+func (x *GetRecordCutRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRecordCutRequest.ProtoReflect.Descriptor instead.
+func (*GetRecordCutRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *GetRecordCutRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *GetRecordCutRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *GetRecordCutRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *GetRecordCutRequest) GetToRaftId() uint64 {
+	if x != nil {
+		return x.ToRaftId
+	}
+	return 0
+}
+
+func (x *GetRecordCutRequest) GetSealRecord() []byte {
+	if x != nil {
+		return x.SealRecord
+	}
+	return nil
+}
+
+type RecordCutHeader struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId          string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	RaftId             uint64                 `protobuf:"varint,2,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	NodeId             string                 `protobuf:"bytes,3,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RootConfirmedIndex uint64                 `protobuf:"varint,4,opt,name=root_confirmed_index,json=rootConfirmedIndex,proto3" json:"root_confirmed_index,omitempty"`
+	CutDescriptor      []byte                 `protobuf:"bytes,5,opt,name=cut_descriptor,json=cutDescriptor,proto3" json:"cut_descriptor,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *RecordCutHeader) Reset() {
+	*x = RecordCutHeader{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordCutHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordCutHeader) ProtoMessage() {}
+
+func (x *RecordCutHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordCutHeader.ProtoReflect.Descriptor instead.
+func (*RecordCutHeader) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *RecordCutHeader) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *RecordCutHeader) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *RecordCutHeader) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *RecordCutHeader) GetRootConfirmedIndex() uint64 {
+	if x != nil {
+		return x.RootConfirmedIndex
+	}
+	return 0
+}
+
+func (x *RecordCutHeader) GetCutDescriptor() []byte {
+	if x != nil {
+		return x.CutDescriptor
+	}
+	return nil
+}
+
+type GetRecordCutResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*GetRecordCutResponse_Header
+	//	*GetRecordCutResponse_Data
+	Payload       isGetRecordCutResponse_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRecordCutResponse) Reset() {
+	*x = GetRecordCutResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRecordCutResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRecordCutResponse) ProtoMessage() {}
+
+func (x *GetRecordCutResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRecordCutResponse.ProtoReflect.Descriptor instead.
+func (*GetRecordCutResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *GetRecordCutResponse) GetPayload() isGetRecordCutResponse_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *GetRecordCutResponse) GetHeader() *RecordCutHeader {
+	if x != nil {
+		if x, ok := x.Payload.(*GetRecordCutResponse_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *GetRecordCutResponse) GetData() []byte {
+	if x != nil {
+		if x, ok := x.Payload.(*GetRecordCutResponse_Data); ok {
+			return x.Data
+		}
+	}
+	return nil
+}
+
+type isGetRecordCutResponse_Payload interface {
+	isGetRecordCutResponse_Payload()
+}
+
+type GetRecordCutResponse_Header struct {
+	Header *RecordCutHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type GetRecordCutResponse_Data struct {
+	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"`
+}
+
+func (*GetRecordCutResponse_Header) isGetRecordCutResponse_Payload() {}
+
+func (*GetRecordCutResponse_Data) isGetRecordCutResponse_Payload() {}
+
+// The Root leader asks a newly added Node to fill one exact pending seal, or
+// to perform a fresh candidate-majority check after all new Nodes are filled.
+// Neither response is a durable retention vote.
+type FillRecordCutRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId  string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId    string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId   uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	SealRecord []byte                 `protobuf:"bytes,5,opt,name=seal_record,json=sealRecord,proto3" json:"seal_record,omitempty"`
+	// After all new members have been filled, also verify every sealed
+	// reference against a strict physical majority of the pending cohort.
+	VerifyCandidate bool `protobuf:"varint,6,opt,name=verify_candidate,json=verifyCandidate,proto3" json:"verify_candidate,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FillRecordCutRequest) Reset() {
+	*x = FillRecordCutRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FillRecordCutRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FillRecordCutRequest) ProtoMessage() {}
+
+func (x *FillRecordCutRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FillRecordCutRequest.ProtoReflect.Descriptor instead.
+func (*FillRecordCutRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *FillRecordCutRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *FillRecordCutRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *FillRecordCutRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *FillRecordCutRequest) GetToRaftId() uint64 {
+	if x != nil {
+		return x.ToRaftId
+	}
+	return 0
+}
+
+func (x *FillRecordCutRequest) GetSealRecord() []byte {
+	if x != nil {
+		return x.SealRecord
+	}
+	return nil
+}
+
+func (x *FillRecordCutRequest) GetVerifyCandidate() bool {
+	if x != nil {
+		return x.VerifyCandidate
+	}
+	return false
+}
+
+type FillRecordCutResponse struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId          string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	RaftId             uint64                 `protobuf:"varint,2,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	NodeId             string                 `protobuf:"bytes,3,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RootConfirmedIndex uint64                 `protobuf:"varint,4,opt,name=root_confirmed_index,json=rootConfirmedIndex,proto3" json:"root_confirmed_index,omitempty"`
+	References         uint64                 `protobuf:"varint,5,opt,name=references,proto3" json:"references,omitempty"`
+	AlreadyHeld        uint64                 `protobuf:"varint,6,opt,name=already_held,json=alreadyHeld,proto3" json:"already_held,omitempty"`
+	Fetched            uint64                 `protobuf:"varint,7,opt,name=fetched,proto3" json:"fetched,omitempty"`
+	ReferencedBytes    uint64                 `protobuf:"varint,8,opt,name=referenced_bytes,json=referencedBytes,proto3" json:"referenced_bytes,omitempty"`
+	// True only after a full candidate-majority scan, never after fill alone.
+	CandidateVerified bool `protobuf:"varint,9,opt,name=candidate_verified,json=candidateVerified,proto3" json:"candidate_verified,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *FillRecordCutResponse) Reset() {
+	*x = FillRecordCutResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FillRecordCutResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FillRecordCutResponse) ProtoMessage() {}
+
+func (x *FillRecordCutResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FillRecordCutResponse.ProtoReflect.Descriptor instead.
+func (*FillRecordCutResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *FillRecordCutResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *FillRecordCutResponse) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *FillRecordCutResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *FillRecordCutResponse) GetRootConfirmedIndex() uint64 {
+	if x != nil {
+		return x.RootConfirmedIndex
+	}
+	return 0
+}
+
+func (x *FillRecordCutResponse) GetReferences() uint64 {
+	if x != nil {
+		return x.References
+	}
+	return 0
+}
+
+func (x *FillRecordCutResponse) GetAlreadyHeld() uint64 {
+	if x != nil {
+		return x.AlreadyHeld
+	}
+	return 0
+}
+
+func (x *FillRecordCutResponse) GetFetched() uint64 {
+	if x != nil {
+		return x.Fetched
+	}
+	return 0
+}
+
+func (x *FillRecordCutResponse) GetReferencedBytes() uint64 {
+	if x != nil {
+		return x.ReferencedBytes
+	}
+	return 0
+}
+
+func (x *FillRecordCutResponse) GetCandidateVerified() bool {
+	if x != nil {
+		return x.CandidateVerified
+	}
+	return false
+}
+
+// A current Root member asks one target Node to repair one exact immutable
+// record from one authenticated source Node. The target owns the destination
+// Pack write; this RPC never accepts a caller-supplied Volume or Location.
+type RepairRecordRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId        string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	GroupId          string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FromRaftId       uint64                 `protobuf:"varint,3,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	ToRaftId         uint64                 `protobuf:"varint,4,opt,name=to_raft_id,json=toRaftId,proto3" json:"to_raft_id,omitempty"`
+	SourceRaftId     uint64                 `protobuf:"varint,5,opt,name=source_raft_id,json=sourceRaftId,proto3" json:"source_raft_id,omitempty"`
+	RecordDescriptor []byte                 `protobuf:"bytes,6,opt,name=record_descriptor,json=recordDescriptor,proto3" json:"record_descriptor,omitempty"`
+	// False writes a missing logical index; true replaces an existing unreadable
+	// Pack location while preserving the index identity.
+	ReplaceExisting bool `protobuf:"varint,7,opt,name=replace_existing,json=replaceExisting,proto3" json:"replace_existing,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RepairRecordRequest) Reset() {
+	*x = RepairRecordRequest{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepairRecordRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepairRecordRequest) ProtoMessage() {}
+
+func (x *RepairRecordRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepairRecordRequest.ProtoReflect.Descriptor instead.
+func (*RepairRecordRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *RepairRecordRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *RepairRecordRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *RepairRecordRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *RepairRecordRequest) GetToRaftId() uint64 {
+	if x != nil {
+		return x.ToRaftId
+	}
+	return 0
+}
+
+func (x *RepairRecordRequest) GetSourceRaftId() uint64 {
+	if x != nil {
+		return x.SourceRaftId
+	}
+	return 0
+}
+
+func (x *RepairRecordRequest) GetRecordDescriptor() []byte {
+	if x != nil {
+		return x.RecordDescriptor
+	}
+	return nil
+}
+
+func (x *RepairRecordRequest) GetReplaceExisting() bool {
+	if x != nil {
+		return x.ReplaceExisting
+	}
+	return false
+}
+
+type RepairRecordResponse struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId          string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	RaftId             uint64                 `protobuf:"varint,2,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	NodeId             string                 `protobuf:"bytes,3,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RootConfirmedIndex uint64                 `protobuf:"varint,4,opt,name=root_confirmed_index,json=rootConfirmedIndex,proto3" json:"root_confirmed_index,omitempty"`
+	RecordId           string                 `protobuf:"bytes,5,opt,name=record_id,json=recordId,proto3" json:"record_id,omitempty"`
+	StoreId            string                 `protobuf:"bytes,6,opt,name=store_id,json=storeId,proto3" json:"store_id,omitempty"`
+	VolumeId           string                 `protobuf:"bytes,7,opt,name=volume_id,json=volumeId,proto3" json:"volume_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *RepairRecordResponse) Reset() {
+	*x = RepairRecordResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepairRecordResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepairRecordResponse) ProtoMessage() {}
+
+func (x *RepairRecordResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepairRecordResponse.ProtoReflect.Descriptor instead.
+func (*RepairRecordResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *RepairRecordResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *RepairRecordResponse) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *RepairRecordResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *RepairRecordResponse) GetRootConfirmedIndex() uint64 {
+	if x != nil {
+		return x.RootConfirmedIndex
+	}
+	return 0
+}
+
+func (x *RepairRecordResponse) GetRecordId() string {
+	if x != nil {
+		return x.RecordId
+	}
+	return ""
+}
+
+func (x *RepairRecordResponse) GetStoreId() string {
+	if x != nil {
+		return x.StoreId
+	}
+	return ""
+}
+
+func (x *RepairRecordResponse) GetVolumeId() string {
+	if x != nil {
+		return x.VolumeId
+	}
+	return ""
+}
+
+// One verified physical holding header, followed by nonempty bounded data
+// frames and successful gRPC EOF. Bytes without the final status are incomplete.
+type GetRecordResponse struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	Header        *ObserveRecordHoldingResponse `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
+	Data          []byte                        `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRecordResponse) Reset() {
+	*x = GetRecordResponse{}
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRecordResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRecordResponse) ProtoMessage() {}
+
+func (x *GetRecordResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_raftwire_raft_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRecordResponse.ProtoReflect.Descriptor instead.
+func (*GetRecordResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *GetRecordResponse) GetHeader() *ObserveRecordHoldingResponse {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
+func (x *GetRecordResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
 }
 
 var File_internal_platform_rpc_raftwire_raft_proto protoreflect.FileDescriptor
@@ -1565,11 +3373,19 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
 	"fromRaftId\x12\x1c\n" +
 	"\n" +
-	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\"^\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\"\xa6\x02\n" +
 	"\x17GroupMembershipResponse\x12\x1d\n" +
 	"\n" +
 	"conf_state\x18\x01 \x01(\fR\tconfState\x12$\n" +
-	"\x0eleader_raft_id\x18\x02 \x01(\x04R\fleaderRaftId\"\x8d\x02\n" +
+	"\x0eleader_raft_id\x18\x02 \x01(\x04R\fleaderRaftId\x12)\n" +
+	"\x10membership_index\x18\x03 \x01(\x04R\x0fmembershipIndex\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x04 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x05 \x01(\tR\agroupId\x12\x17\n" +
+	"\araft_id\x18\x06 \x01(\x04R\x06raftId\x12'\n" +
+	"\x0fconfirmed_index\x18\a \x01(\x04R\x0econfirmedIndex\x12\x1f\n" +
+	"\vleader_term\x18\b \x01(\x04R\n" +
+	"leaderTerm\"\xbd\x03\n" +
 	"\x1cGroupMembershipChangeRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
@@ -1579,7 +3395,12 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"\n" +
 	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12M\n" +
 	"\toperation\x18\x05 \x01(\x0e2/.dubi.internal.raft.v1.GroupMembershipOperationR\toperation\x12$\n" +
-	"\x0emember_raft_id\x18\x06 \x01(\x04R\fmemberRaftId\"\xc0\x01\n" +
+	"\x0emember_raft_id\x18\x06 \x01(\x04R\fmemberRaftId\x12\x1b\n" +
+	"\tchange_id\x18\a \x01(\tR\bchangeId\x12%\n" +
+	"\x0eexpected_epoch\x18\b \x01(\x04R\rexpectedEpoch\x12:\n" +
+	"\x19expected_membership_index\x18\t \x01(\x04R\x17expectedMembershipIndex\x12.\n" +
+	"\x13expected_conf_state\x18\n" +
+	" \x01(\fR\x11expectedConfState\"\xa2\x03\n" +
 	"\x1eGroupLeadershipTransferRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
@@ -1588,9 +3409,21 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"fromRaftId\x12\x1c\n" +
 	"\n" +
 	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12$\n" +
-	"\x0etarget_raft_id\x18\x05 \x01(\x04R\ftargetRaftId\"G\n" +
+	"\x0etarget_raft_id\x18\x05 \x01(\x04R\ftargetRaftId\x12\x1b\n" +
+	"\tchange_id\x18\x06 \x01(\tR\bchangeId\x12%\n" +
+	"\x0eexpected_epoch\x18\a \x01(\x04R\rexpectedEpoch\x12:\n" +
+	"\x19expected_membership_index\x18\b \x01(\x04R\x17expectedMembershipIndex\x12.\n" +
+	"\x13expected_conf_state\x18\t \x01(\fR\x11expectedConfState\x120\n" +
+	"\x14expected_leader_term\x18\n" +
+	" \x01(\x04R\x12expectedLeaderTerm\"\xde\x01\n" +
 	"\x1fGroupLeadershipTransferResponse\x12$\n" +
-	"\x0eleader_raft_id\x18\x01 \x01(\x04R\fleaderRaftId\"\x96\x01\n" +
+	"\x0eleader_raft_id\x18\x01 \x01(\x04R\fleaderRaftId\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x03 \x01(\tR\agroupId\x12\x17\n" +
+	"\araft_id\x18\x04 \x01(\x04R\x06raftId\x12\x1b\n" +
+	"\tchange_id\x18\x05 \x01(\tR\bchangeId\x12%\n" +
+	"\x0eexpected_epoch\x18\x06 \x01(\x04R\rexpectedEpoch\"\xda\x01\n" +
 	"\x1aPrepareJoiningGroupRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
@@ -1598,8 +3431,40 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
 	"fromRaftId\x12\x1c\n" +
 	"\n" +
-	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\"\x1d\n" +
-	"\x1bPrepareJoiningGroupResponse\"\xc0\x01\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12\x1b\n" +
+	"\tchange_id\x18\x05 \x01(\tR\bchangeId\x12%\n" +
+	"\x0eexpected_epoch\x18\x06 \x01(\x04R\rexpectedEpoch\"\xb4\x01\n" +
+	"\x1bPrepareJoiningGroupResponse\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x17\n" +
+	"\araft_id\x18\x03 \x01(\x04R\x06raftId\x12\x1b\n" +
+	"\tchange_id\x18\x04 \x01(\tR\bchangeId\x12%\n" +
+	"\x0eexpected_epoch\x18\x05 \x01(\x04R\rexpectedEpoch\"\x95\x01\n" +
+	"\x19ObserveRegionFenceRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12 \n" +
+	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
+	"fromRaftId\x12\x1c\n" +
+	"\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\"\xc9\x03\n" +
+	"\x1aObserveRegionFenceResponse\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x17\n" +
+	"\araft_id\x18\x03 \x01(\x04R\x06raftId\x120\n" +
+	"\x14root_confirmed_index\x18\x04 \x01(\x04R\x12rootConfirmedIndex\x122\n" +
+	"\x15group_confirmed_index\x18\x05 \x01(\x04R\x13groupConfirmedIndex\x12#\n" +
+	"\rapplied_index\x18\x06 \x01(\x04R\fappliedIndex\x12)\n" +
+	"\x10membership_index\x18\a \x01(\x04R\x0fmembershipIndex\x12\x1d\n" +
+	"\n" +
+	"conf_state\x18\b \x01(\fR\tconfState\x12!\n" +
+	"\ffence_record\x18\t \x01(\fR\vfenceRecord\x12\x16\n" +
+	"\x06active\x18\n" +
+	" \x01(\bR\x06active\x12!\n" +
+	"\fstate_format\x18\v \x01(\rR\vstateFormat\x12%\n" +
+	"\x0ehandoff_record\x18\f \x01(\fR\rhandoffRecord\"\xc0\x01\n" +
 	"\x19EnsureInitialRangeRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
@@ -1641,7 +3506,137 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"\x05error\x18\x01 \x01(\tR\x05error\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12'\n" +
 	"\x0fconfirmed_index\x18\x03 \x01(\x04R\x0econfirmedIndex\x12$\n" +
-	"\x0eleader_raft_id\x18\x04 \x01(\x04R\fleaderRaftId*\xd0\x01\n" +
+	"\x0eleader_raft_id\x18\x04 \x01(\x04R\fleaderRaftId\"\xaf\x02\n" +
+	"\x19CapabilityDataWriteHeader\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12 \n" +
+	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
+	"fromRaftId\x12\x1c\n" +
+	"\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12!\n" +
+	"\froute_target\x18\x05 \x01(\fR\vrouteTarget\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestId\x12+\n" +
+	"\x11record_descriptor\x18\a \x01(\fR\x10recordDescriptor\x12)\n" +
+	"\x10mutation_payload\x18\b \x01(\fR\x0fmutationPayload\"\x89\x01\n" +
+	"\x1aCapabilityDataWriteRequest\x12J\n" +
+	"\x06header\x18\x01 \x01(\v20.dubi.internal.raft.v1.CapabilityDataWriteHeaderH\x00R\x06header\x12\x14\n" +
+	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
+	"\apayload\"\xc3\x01\n" +
+	"\x1bCapabilityDataWriteResponse\x12\x14\n" +
+	"\x05state\x18\x01 \x01(\tR\x05state\x12\x1c\n" +
+	"\treference\x18\x02 \x01(\fR\treference\x12-\n" +
+	"\x12confirmation_index\x18\x03 \x01(\x04R\x11confirmationIndex\x12+\n" +
+	"\x11region_generation\x18\x04 \x01(\x04R\x10regionGeneration\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\"\xca\x01\n" +
+	"\x19CapabilityDataReadRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12 \n" +
+	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
+	"fromRaftId\x12\x1c\n" +
+	"\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12!\n" +
+	"\froute_target\x18\x05 \x01(\fR\vrouteTarget\x12\x10\n" +
+	"\x03key\x18\x06 \x01(\fR\x03key\"e\n" +
+	"\x18CapabilityDataReadHeader\x12\x1c\n" +
+	"\treference\x18\x01 \x01(\fR\treference\x12+\n" +
+	"\x11region_generation\x18\x02 \x01(\x04R\x10regionGeneration\"\x88\x01\n" +
+	"\x1aCapabilityDataReadResponse\x12I\n" +
+	"\x06header\x18\x01 \x01(\v2/.dubi.internal.raft.v1.CapabilityDataReadHeaderH\x00R\x06header\x12\x14\n" +
+	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
+	"\apayload\"\xa9\x01\n" +
+	"\x1bObserveRecordHoldingRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1c\n" +
+	"\n" +
+	"to_raft_id\x18\x03 \x01(\x04R\btoRaftId\x12+\n" +
+	"\x11record_descriptor\x18\x04 \x01(\fR\x10recordDescriptor\"\xbd\x02\n" +
+	"\x1cObserveRecordHoldingResponse\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12\x17\n" +
+	"\araft_id\x18\x03 \x01(\x04R\x06raftId\x12\x17\n" +
+	"\anode_id\x18\x04 \x01(\tR\x06nodeId\x120\n" +
+	"\x14root_confirmed_index\x18\x05 \x01(\x04R\x12rootConfirmedIndex\x12+\n" +
+	"\x11record_descriptor\x18\x06 \x01(\fR\x10recordDescriptor\x12\x1b\n" +
+	"\trecord_id\x18\a \x01(\tR\brecordId\x12\x19\n" +
+	"\bstore_id\x18\b \x01(\tR\astoreId\x12\x1b\n" +
+	"\tvolume_id\x18\t \x01(\tR\bvolumeId\"r\n" +
+	"\x10PutRecordRequest\x12J\n" +
+	"\x06header\x18\x01 \x01(\v22.dubi.internal.raft.v1.ObserveRecordHoldingRequestR\x06header\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\xb0\x01\n" +
+	"\x13GetRecordCutRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12 \n" +
+	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
+	"fromRaftId\x12\x1c\n" +
+	"\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12\x1f\n" +
+	"\vseal_record\x18\x05 \x01(\fR\n" +
+	"sealRecord\"\xbb\x01\n" +
+	"\x0fRecordCutHeader\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x17\n" +
+	"\araft_id\x18\x02 \x01(\x04R\x06raftId\x12\x17\n" +
+	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x120\n" +
+	"\x14root_confirmed_index\x18\x04 \x01(\x04R\x12rootConfirmedIndex\x12%\n" +
+	"\x0ecut_descriptor\x18\x05 \x01(\fR\rcutDescriptor\"y\n" +
+	"\x14GetRecordCutResponse\x12@\n" +
+	"\x06header\x18\x01 \x01(\v2&.dubi.internal.raft.v1.RecordCutHeaderH\x00R\x06header\x12\x14\n" +
+	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
+	"\apayload\"\xdc\x01\n" +
+	"\x14FillRecordCutRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12 \n" +
+	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
+	"fromRaftId\x12\x1c\n" +
+	"\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12\x1f\n" +
+	"\vseal_record\x18\x05 \x01(\fR\n" +
+	"sealRecord\x12)\n" +
+	"\x10verify_candidate\x18\x06 \x01(\bR\x0fverifyCandidate\"\xd1\x02\n" +
+	"\x15FillRecordCutResponse\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x17\n" +
+	"\araft_id\x18\x02 \x01(\x04R\x06raftId\x12\x17\n" +
+	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x120\n" +
+	"\x14root_confirmed_index\x18\x04 \x01(\x04R\x12rootConfirmedIndex\x12\x1e\n" +
+	"\n" +
+	"references\x18\x05 \x01(\x04R\n" +
+	"references\x12!\n" +
+	"\falready_held\x18\x06 \x01(\x04R\valreadyHeld\x12\x18\n" +
+	"\afetched\x18\a \x01(\x04R\afetched\x12)\n" +
+	"\x10referenced_bytes\x18\b \x01(\x04R\x0freferencedBytes\x12-\n" +
+	"\x12candidate_verified\x18\t \x01(\bR\x11candidateVerified\"\x8d\x02\n" +
+	"\x13RepairRecordRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12 \n" +
+	"\ffrom_raft_id\x18\x03 \x01(\x04R\n" +
+	"fromRaftId\x12\x1c\n" +
+	"\n" +
+	"to_raft_id\x18\x04 \x01(\x04R\btoRaftId\x12$\n" +
+	"\x0esource_raft_id\x18\x05 \x01(\x04R\fsourceRaftId\x12+\n" +
+	"\x11record_descriptor\x18\x06 \x01(\fR\x10recordDescriptor\x12)\n" +
+	"\x10replace_existing\x18\a \x01(\bR\x0freplaceExisting\"\xee\x01\n" +
+	"\x14RepairRecordResponse\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x17\n" +
+	"\araft_id\x18\x02 \x01(\x04R\x06raftId\x12\x17\n" +
+	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x120\n" +
+	"\x14root_confirmed_index\x18\x04 \x01(\x04R\x12rootConfirmedIndex\x12\x1b\n" +
+	"\trecord_id\x18\x05 \x01(\tR\brecordId\x12\x19\n" +
+	"\bstore_id\x18\x06 \x01(\tR\astoreId\x12\x1b\n" +
+	"\tvolume_id\x18\a \x01(\tR\bvolumeId\"t\n" +
+	"\x11GetRecordResponse\x12K\n" +
+	"\x06header\x18\x01 \x01(\v23.dubi.internal.raft.v1.ObserveRecordHoldingResponseR\x06header\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data*\xd0\x01\n" +
 	"\x18GroupMembershipOperation\x12*\n" +
 	"&GROUP_MEMBERSHIP_OPERATION_UNSPECIFIED\x10\x00\x12*\n" +
 	"&GROUP_MEMBERSHIP_OPERATION_ADD_LEARNER\x10\x01\x12.\n" +
@@ -1662,7 +3657,22 @@ const file_internal_platform_rpc_raftwire_raft_proto_rawDesc = "" +
 	"\x12EnsureInitialRange\x120.dubi.internal.raft.v1.EnsureInitialRangeRequest\x1a1.dubi.internal.raft.v1.EnsureInitialRangeResponse2\xdb\x01\n" +
 	"\x11CapabilityService\x12a\n" +
 	"\x06Mutate\x12..dubi.internal.raft.v1.CapabilityMutateRequest\x1a'.dubi.internal.raft.v1.CapabilityResult\x12c\n" +
-	"\x04Read\x12,.dubi.internal.raft.v1.CapabilityReadRequest\x1a-.dubi.internal.raft.v1.CapabilityReadResponseB=Z;github.com/dubi-project/dubi/internal/platform/rpc/raftwireb\x06proto3"
+	"\x04Read\x12,.dubi.internal.raft.v1.CapabilityReadRequest\x1a-.dubi.internal.raft.v1.CapabilityReadResponse2\xf8\x01\n" +
+	"\x15CapabilityDataService\x12p\n" +
+	"\x05Write\x121.dubi.internal.raft.v1.CapabilityDataWriteRequest\x1a2.dubi.internal.raft.v1.CapabilityDataWriteResponse(\x01\x12m\n" +
+	"\x04Read\x120.dubi.internal.raft.v1.CapabilityDataReadRequest\x1a1.dubi.internal.raft.v1.CapabilityDataReadResponse0\x012\x84\x01\n" +
+	"\x12RegionFenceService\x12n\n" +
+	"\aObserve\x120.dubi.internal.raft.v1.ObserveRegionFenceRequest\x1a1.dubi.internal.raft.v1.ObserveRegionFenceResponse2\x8a\x01\n" +
+	"\x14RecordHoldingService\x12r\n" +
+	"\aObserve\x122.dubi.internal.raft.v1.ObserveRecordHoldingRequest\x1a3.dubi.internal.raft.v1.ObserveRecordHoldingResponse2\xe5\x01\n" +
+	"\x15RecordTransferService\x12e\n" +
+	"\x03Put\x12'.dubi.internal.raft.v1.PutRecordRequest\x1a3.dubi.internal.raft.v1.ObserveRecordHoldingResponse(\x01\x12e\n" +
+	"\x03Get\x122.dubi.internal.raft.v1.ObserveRecordHoldingRequest\x1a(.dubi.internal.raft.v1.GetRecordResponse0\x012t\n" +
+	"\x10RecordCutService\x12`\n" +
+	"\x03Get\x12*.dubi.internal.raft.v1.GetRecordCutRequest\x1a+.dubi.internal.raft.v1.GetRecordCutResponse0\x012\xdb\x01\n" +
+	"\x13RecordRepairService\x12a\n" +
+	"\x04Fill\x12+.dubi.internal.raft.v1.FillRecordCutRequest\x1a,.dubi.internal.raft.v1.FillRecordCutResponse\x12a\n" +
+	"\x06Repair\x12*.dubi.internal.raft.v1.RepairRecordRequest\x1a+.dubi.internal.raft.v1.RepairRecordResponseB=Z;github.com/dubi-project/dubi/internal/platform/rpc/raftwireb\x06proto3"
 
 var (
 	file_internal_platform_rpc_raftwire_raft_proto_rawDescOnce sync.Once
@@ -1677,7 +3687,7 @@ func file_internal_platform_rpc_raftwire_raft_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_platform_rpc_raftwire_raft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_platform_rpc_raftwire_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_internal_platform_rpc_raftwire_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_internal_platform_rpc_raftwire_raft_proto_goTypes = []any{
 	(GroupMembershipOperation)(0),           // 0: dubi.internal.raft.v1.GroupMembershipOperation
 	(*StepRequest)(nil),                     // 1: dubi.internal.raft.v1.StepRequest
@@ -1696,43 +3706,85 @@ var file_internal_platform_rpc_raftwire_raft_proto_goTypes = []any{
 	(*GroupLeadershipTransferResponse)(nil), // 14: dubi.internal.raft.v1.GroupLeadershipTransferResponse
 	(*PrepareJoiningGroupRequest)(nil),      // 15: dubi.internal.raft.v1.PrepareJoiningGroupRequest
 	(*PrepareJoiningGroupResponse)(nil),     // 16: dubi.internal.raft.v1.PrepareJoiningGroupResponse
-	(*EnsureInitialRangeRequest)(nil),       // 17: dubi.internal.raft.v1.EnsureInitialRangeRequest
-	(*EnsureInitialRangeResponse)(nil),      // 18: dubi.internal.raft.v1.EnsureInitialRangeResponse
-	(*CapabilityMutateRequest)(nil),         // 19: dubi.internal.raft.v1.CapabilityMutateRequest
-	(*CapabilityResult)(nil),                // 20: dubi.internal.raft.v1.CapabilityResult
-	(*CapabilityReadRequest)(nil),           // 21: dubi.internal.raft.v1.CapabilityReadRequest
-	(*CapabilityReadResponse)(nil),          // 22: dubi.internal.raft.v1.CapabilityReadResponse
+	(*ObserveRegionFenceRequest)(nil),       // 17: dubi.internal.raft.v1.ObserveRegionFenceRequest
+	(*ObserveRegionFenceResponse)(nil),      // 18: dubi.internal.raft.v1.ObserveRegionFenceResponse
+	(*EnsureInitialRangeRequest)(nil),       // 19: dubi.internal.raft.v1.EnsureInitialRangeRequest
+	(*EnsureInitialRangeResponse)(nil),      // 20: dubi.internal.raft.v1.EnsureInitialRangeResponse
+	(*CapabilityMutateRequest)(nil),         // 21: dubi.internal.raft.v1.CapabilityMutateRequest
+	(*CapabilityResult)(nil),                // 22: dubi.internal.raft.v1.CapabilityResult
+	(*CapabilityReadRequest)(nil),           // 23: dubi.internal.raft.v1.CapabilityReadRequest
+	(*CapabilityReadResponse)(nil),          // 24: dubi.internal.raft.v1.CapabilityReadResponse
+	(*CapabilityDataWriteHeader)(nil),       // 25: dubi.internal.raft.v1.CapabilityDataWriteHeader
+	(*CapabilityDataWriteRequest)(nil),      // 26: dubi.internal.raft.v1.CapabilityDataWriteRequest
+	(*CapabilityDataWriteResponse)(nil),     // 27: dubi.internal.raft.v1.CapabilityDataWriteResponse
+	(*CapabilityDataReadRequest)(nil),       // 28: dubi.internal.raft.v1.CapabilityDataReadRequest
+	(*CapabilityDataReadHeader)(nil),        // 29: dubi.internal.raft.v1.CapabilityDataReadHeader
+	(*CapabilityDataReadResponse)(nil),      // 30: dubi.internal.raft.v1.CapabilityDataReadResponse
+	(*ObserveRecordHoldingRequest)(nil),     // 31: dubi.internal.raft.v1.ObserveRecordHoldingRequest
+	(*ObserveRecordHoldingResponse)(nil),    // 32: dubi.internal.raft.v1.ObserveRecordHoldingResponse
+	(*PutRecordRequest)(nil),                // 33: dubi.internal.raft.v1.PutRecordRequest
+	(*GetRecordCutRequest)(nil),             // 34: dubi.internal.raft.v1.GetRecordCutRequest
+	(*RecordCutHeader)(nil),                 // 35: dubi.internal.raft.v1.RecordCutHeader
+	(*GetRecordCutResponse)(nil),            // 36: dubi.internal.raft.v1.GetRecordCutResponse
+	(*FillRecordCutRequest)(nil),            // 37: dubi.internal.raft.v1.FillRecordCutRequest
+	(*FillRecordCutResponse)(nil),           // 38: dubi.internal.raft.v1.FillRecordCutResponse
+	(*RepairRecordRequest)(nil),             // 39: dubi.internal.raft.v1.RepairRecordRequest
+	(*RepairRecordResponse)(nil),            // 40: dubi.internal.raft.v1.RepairRecordResponse
+	(*GetRecordResponse)(nil),               // 41: dubi.internal.raft.v1.GetRecordResponse
 }
 var file_internal_platform_rpc_raftwire_raft_proto_depIdxs = []int32{
 	3,  // 0: dubi.internal.raft.v1.InstallSnapshotRequest.header:type_name -> dubi.internal.raft.v1.SnapshotHeader
 	0,  // 1: dubi.internal.raft.v1.GroupMembershipChangeRequest.operation:type_name -> dubi.internal.raft.v1.GroupMembershipOperation
-	1,  // 2: dubi.internal.raft.v1.RaftService.Step:input_type -> dubi.internal.raft.v1.StepRequest
-	4,  // 3: dubi.internal.raft.v1.RaftService.InstallSnapshot:input_type -> dubi.internal.raft.v1.InstallSnapshotRequest
-	6,  // 4: dubi.internal.raft.v1.GroupService.Submit:input_type -> dubi.internal.raft.v1.GroupSubmitRequest
-	8,  // 5: dubi.internal.raft.v1.GroupService.ReadIndex:input_type -> dubi.internal.raft.v1.GroupReadIndexRequest
-	15, // 6: dubi.internal.raft.v1.GroupMembershipService.PrepareJoining:input_type -> dubi.internal.raft.v1.PrepareJoiningGroupRequest
-	10, // 7: dubi.internal.raft.v1.GroupMembershipService.Inspect:input_type -> dubi.internal.raft.v1.GroupMembershipRequest
-	12, // 8: dubi.internal.raft.v1.GroupMembershipService.Change:input_type -> dubi.internal.raft.v1.GroupMembershipChangeRequest
-	13, // 9: dubi.internal.raft.v1.GroupMembershipService.TransferLeadership:input_type -> dubi.internal.raft.v1.GroupLeadershipTransferRequest
-	17, // 10: dubi.internal.raft.v1.RangeControlService.EnsureInitialRange:input_type -> dubi.internal.raft.v1.EnsureInitialRangeRequest
-	19, // 11: dubi.internal.raft.v1.CapabilityService.Mutate:input_type -> dubi.internal.raft.v1.CapabilityMutateRequest
-	21, // 12: dubi.internal.raft.v1.CapabilityService.Read:input_type -> dubi.internal.raft.v1.CapabilityReadRequest
-	2,  // 13: dubi.internal.raft.v1.RaftService.Step:output_type -> dubi.internal.raft.v1.StepResponse
-	5,  // 14: dubi.internal.raft.v1.RaftService.InstallSnapshot:output_type -> dubi.internal.raft.v1.InstallSnapshotResponse
-	7,  // 15: dubi.internal.raft.v1.GroupService.Submit:output_type -> dubi.internal.raft.v1.GroupSubmitResponse
-	9,  // 16: dubi.internal.raft.v1.GroupService.ReadIndex:output_type -> dubi.internal.raft.v1.GroupReadIndexResponse
-	16, // 17: dubi.internal.raft.v1.GroupMembershipService.PrepareJoining:output_type -> dubi.internal.raft.v1.PrepareJoiningGroupResponse
-	11, // 18: dubi.internal.raft.v1.GroupMembershipService.Inspect:output_type -> dubi.internal.raft.v1.GroupMembershipResponse
-	11, // 19: dubi.internal.raft.v1.GroupMembershipService.Change:output_type -> dubi.internal.raft.v1.GroupMembershipResponse
-	14, // 20: dubi.internal.raft.v1.GroupMembershipService.TransferLeadership:output_type -> dubi.internal.raft.v1.GroupLeadershipTransferResponse
-	18, // 21: dubi.internal.raft.v1.RangeControlService.EnsureInitialRange:output_type -> dubi.internal.raft.v1.EnsureInitialRangeResponse
-	20, // 22: dubi.internal.raft.v1.CapabilityService.Mutate:output_type -> dubi.internal.raft.v1.CapabilityResult
-	22, // 23: dubi.internal.raft.v1.CapabilityService.Read:output_type -> dubi.internal.raft.v1.CapabilityReadResponse
-	13, // [13:24] is the sub-list for method output_type
-	2,  // [2:13] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	25, // 2: dubi.internal.raft.v1.CapabilityDataWriteRequest.header:type_name -> dubi.internal.raft.v1.CapabilityDataWriteHeader
+	29, // 3: dubi.internal.raft.v1.CapabilityDataReadResponse.header:type_name -> dubi.internal.raft.v1.CapabilityDataReadHeader
+	31, // 4: dubi.internal.raft.v1.PutRecordRequest.header:type_name -> dubi.internal.raft.v1.ObserveRecordHoldingRequest
+	35, // 5: dubi.internal.raft.v1.GetRecordCutResponse.header:type_name -> dubi.internal.raft.v1.RecordCutHeader
+	32, // 6: dubi.internal.raft.v1.GetRecordResponse.header:type_name -> dubi.internal.raft.v1.ObserveRecordHoldingResponse
+	1,  // 7: dubi.internal.raft.v1.RaftService.Step:input_type -> dubi.internal.raft.v1.StepRequest
+	4,  // 8: dubi.internal.raft.v1.RaftService.InstallSnapshot:input_type -> dubi.internal.raft.v1.InstallSnapshotRequest
+	6,  // 9: dubi.internal.raft.v1.GroupService.Submit:input_type -> dubi.internal.raft.v1.GroupSubmitRequest
+	8,  // 10: dubi.internal.raft.v1.GroupService.ReadIndex:input_type -> dubi.internal.raft.v1.GroupReadIndexRequest
+	15, // 11: dubi.internal.raft.v1.GroupMembershipService.PrepareJoining:input_type -> dubi.internal.raft.v1.PrepareJoiningGroupRequest
+	10, // 12: dubi.internal.raft.v1.GroupMembershipService.Inspect:input_type -> dubi.internal.raft.v1.GroupMembershipRequest
+	12, // 13: dubi.internal.raft.v1.GroupMembershipService.Change:input_type -> dubi.internal.raft.v1.GroupMembershipChangeRequest
+	13, // 14: dubi.internal.raft.v1.GroupMembershipService.TransferLeadership:input_type -> dubi.internal.raft.v1.GroupLeadershipTransferRequest
+	19, // 15: dubi.internal.raft.v1.RangeControlService.EnsureInitialRange:input_type -> dubi.internal.raft.v1.EnsureInitialRangeRequest
+	21, // 16: dubi.internal.raft.v1.CapabilityService.Mutate:input_type -> dubi.internal.raft.v1.CapabilityMutateRequest
+	23, // 17: dubi.internal.raft.v1.CapabilityService.Read:input_type -> dubi.internal.raft.v1.CapabilityReadRequest
+	26, // 18: dubi.internal.raft.v1.CapabilityDataService.Write:input_type -> dubi.internal.raft.v1.CapabilityDataWriteRequest
+	28, // 19: dubi.internal.raft.v1.CapabilityDataService.Read:input_type -> dubi.internal.raft.v1.CapabilityDataReadRequest
+	17, // 20: dubi.internal.raft.v1.RegionFenceService.Observe:input_type -> dubi.internal.raft.v1.ObserveRegionFenceRequest
+	31, // 21: dubi.internal.raft.v1.RecordHoldingService.Observe:input_type -> dubi.internal.raft.v1.ObserveRecordHoldingRequest
+	33, // 22: dubi.internal.raft.v1.RecordTransferService.Put:input_type -> dubi.internal.raft.v1.PutRecordRequest
+	31, // 23: dubi.internal.raft.v1.RecordTransferService.Get:input_type -> dubi.internal.raft.v1.ObserveRecordHoldingRequest
+	34, // 24: dubi.internal.raft.v1.RecordCutService.Get:input_type -> dubi.internal.raft.v1.GetRecordCutRequest
+	37, // 25: dubi.internal.raft.v1.RecordRepairService.Fill:input_type -> dubi.internal.raft.v1.FillRecordCutRequest
+	39, // 26: dubi.internal.raft.v1.RecordRepairService.Repair:input_type -> dubi.internal.raft.v1.RepairRecordRequest
+	2,  // 27: dubi.internal.raft.v1.RaftService.Step:output_type -> dubi.internal.raft.v1.StepResponse
+	5,  // 28: dubi.internal.raft.v1.RaftService.InstallSnapshot:output_type -> dubi.internal.raft.v1.InstallSnapshotResponse
+	7,  // 29: dubi.internal.raft.v1.GroupService.Submit:output_type -> dubi.internal.raft.v1.GroupSubmitResponse
+	9,  // 30: dubi.internal.raft.v1.GroupService.ReadIndex:output_type -> dubi.internal.raft.v1.GroupReadIndexResponse
+	16, // 31: dubi.internal.raft.v1.GroupMembershipService.PrepareJoining:output_type -> dubi.internal.raft.v1.PrepareJoiningGroupResponse
+	11, // 32: dubi.internal.raft.v1.GroupMembershipService.Inspect:output_type -> dubi.internal.raft.v1.GroupMembershipResponse
+	11, // 33: dubi.internal.raft.v1.GroupMembershipService.Change:output_type -> dubi.internal.raft.v1.GroupMembershipResponse
+	14, // 34: dubi.internal.raft.v1.GroupMembershipService.TransferLeadership:output_type -> dubi.internal.raft.v1.GroupLeadershipTransferResponse
+	20, // 35: dubi.internal.raft.v1.RangeControlService.EnsureInitialRange:output_type -> dubi.internal.raft.v1.EnsureInitialRangeResponse
+	22, // 36: dubi.internal.raft.v1.CapabilityService.Mutate:output_type -> dubi.internal.raft.v1.CapabilityResult
+	24, // 37: dubi.internal.raft.v1.CapabilityService.Read:output_type -> dubi.internal.raft.v1.CapabilityReadResponse
+	27, // 38: dubi.internal.raft.v1.CapabilityDataService.Write:output_type -> dubi.internal.raft.v1.CapabilityDataWriteResponse
+	30, // 39: dubi.internal.raft.v1.CapabilityDataService.Read:output_type -> dubi.internal.raft.v1.CapabilityDataReadResponse
+	18, // 40: dubi.internal.raft.v1.RegionFenceService.Observe:output_type -> dubi.internal.raft.v1.ObserveRegionFenceResponse
+	32, // 41: dubi.internal.raft.v1.RecordHoldingService.Observe:output_type -> dubi.internal.raft.v1.ObserveRecordHoldingResponse
+	32, // 42: dubi.internal.raft.v1.RecordTransferService.Put:output_type -> dubi.internal.raft.v1.ObserveRecordHoldingResponse
+	41, // 43: dubi.internal.raft.v1.RecordTransferService.Get:output_type -> dubi.internal.raft.v1.GetRecordResponse
+	36, // 44: dubi.internal.raft.v1.RecordCutService.Get:output_type -> dubi.internal.raft.v1.GetRecordCutResponse
+	38, // 45: dubi.internal.raft.v1.RecordRepairService.Fill:output_type -> dubi.internal.raft.v1.FillRecordCutResponse
+	40, // 46: dubi.internal.raft.v1.RecordRepairService.Repair:output_type -> dubi.internal.raft.v1.RepairRecordResponse
+	27, // [27:47] is the sub-list for method output_type
+	7,  // [7:27] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_internal_platform_rpc_raftwire_raft_proto_init() }
@@ -1744,15 +3796,27 @@ func file_internal_platform_rpc_raftwire_raft_proto_init() {
 		(*InstallSnapshotRequest_Header)(nil),
 		(*InstallSnapshotRequest_Data)(nil),
 	}
+	file_internal_platform_rpc_raftwire_raft_proto_msgTypes[25].OneofWrappers = []any{
+		(*CapabilityDataWriteRequest_Header)(nil),
+		(*CapabilityDataWriteRequest_Data)(nil),
+	}
+	file_internal_platform_rpc_raftwire_raft_proto_msgTypes[29].OneofWrappers = []any{
+		(*CapabilityDataReadResponse_Header)(nil),
+		(*CapabilityDataReadResponse_Data)(nil),
+	}
+	file_internal_platform_rpc_raftwire_raft_proto_msgTypes[35].OneofWrappers = []any{
+		(*GetRecordCutResponse_Header)(nil),
+		(*GetRecordCutResponse_Data)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_platform_rpc_raftwire_raft_proto_rawDesc), len(file_internal_platform_rpc_raftwire_raft_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   22,
+			NumMessages:   41,
 			NumExtensions: 0,
-			NumServices:   5,
+			NumServices:   11,
 		},
 		GoTypes:           file_internal_platform_rpc_raftwire_raft_proto_goTypes,
 		DependencyIndexes: file_internal_platform_rpc_raftwire_raft_proto_depIdxs,

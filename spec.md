@@ -1,6 +1,6 @@
 # DUBI 集群底座概念规范
 
-本文定义 DUBI 自己的集群与存储底座。它约束后续模块的命名和职责；公开 API、磁盘编码等实现参数另行版本化。DUBI 的底座负责身份、路由、放置、均衡、资源与故障恢复，各模块负责自己的数据语义和格式。持久数据按节点与 Region 的多数派自动放置，不向用户提供副本数或最小确认数配置。所有运维入口默认采用可安全推导的最少参数；内部证书名、路径、超时和调度阈值等实现细节不得成为普通部署的必填项。确有外部 PKI、特殊网络或容量治理需求时才进入显式专家模式，且专家配置不能改变默认安全不变量。
+本文定义 DUBI 自己的集群与存储底座。它约束后续模块的命名和职责；公开 API、磁盘编码等实现参数另行版本化。DUBI 的底座负责身份、路由、放置、均衡、资源与故障恢复，各模块负责自己的数据语义和格式。持久数据按节点与 Region 的多数派自动放置，不向用户提供副本数或最小确认数配置。所有运维入口采用可安全推导的最少参数。ClusterID、NodeID、RaftID、GroupID、内部证书名、证书路径和成员列表由系统生成、持久化和维护，不提供用户覆盖或专家模式。用户仅表达数据目录、加入凭据、网络地址、Region 等实际部署意图；新增节点不能增加手工编排内部身份的工作。启动不需要 YAML。
 
 ## 1. 总体关系
 
@@ -23,7 +23,7 @@ Volume → Pack（节点底座提供）→ 多条本地记录
 | Cluster | 独立的部署、信任和版本管理边界。 | `ClusterID` 持久不变；成员、根证书、路由目录和集群协议属于它。 |
 | Tenant | 集群内的数据归属、授权与资源计量边界；一个 Cluster 可服务多个 Tenant。 | `TenantID` 持久标识租户；其 Dataset 和数据不能被其他 Tenant 默认访问。 |
 | Region | 节点所在的单层地理故障域。 | 一个 Node 归属一个 Region；Region 本身不保存数据，也不是共识组。 |
-| Node | 运行同一 `dubi server` 程序的成员，可接入请求、承载共识组和保存数据。 | `NodeID` 持久不变；重启不生成新身份。节点不是“专用元数据机”或“专用数据机”。 |
+| Node | 运行同一 `dubi server` 程序的成员，可接入请求、承载共识组和保存数据。 | `NodeID` 持久不变；重启不生成新身份。可选 `Name` 是集群内唯一的管理员显示标签，可为空、可修改，不参与身份、路由或授权；正式移除的旧节点名称可由新节点复用。节点不是“专用元数据机”或“专用数据机”。 |
 | Store | Node 对集群暴露的可放置存储资源。 | `StoreID` 归属 `NodeID`；报告容量、预留、健康和负载。一个 Node 可管理多个 Store。 |
 | Volume | Store 管理的本地磁盘或持久目录。 | `VolumeID` 只标识本地介质；多 Volume 不等于跨 Node 副本。 |
 | Capability | Record、Cache、Message、Search、File、Log、Metric、Trace 等数据能力。 | 能力注册路由键、权威/可重建/易失类型、资源指标和本地存储适配；其数据格式由能力拥有，不自定义副本数。 |
@@ -72,11 +72,19 @@ Dataset 创建采用两阶段可恢复流程：Root 先持久化 `Pending` Range
 
 普通能力跨节点请求使用独立的 Capability RPC，而不是暴露 Pebble key。Mutation 携带完整 Routed Command；Owner 节点严格解码 Target 与 RequestID、提交所属 Group、完成 ReadIndex，再按完整命令核对持久 Result 后返回。Read 携带 Route Target 和能力自定义的不透明 payload；Owner 节点完成 ReadIndex，在同一受保护状态视图中核对 Fence，再调用能力的只读 Handler。平台只负责身份、路由代际、一致性和结果边界，不解释 Record、Cache、Message、Search、File 等能力的业务载荷。能力拒绝作为稳定结果返回；路由/Fence/身份或状态完整性错误则失败关闭。Tenant 授权必须在进入内部转发前完成，内部 RPC 的节点身份认证不能替代租户权限判断。
 
-`StateKind=capability` 使用通用 Mux 按 Route Target 中已验证的 `CapabilityID` 分派 Handler；Mux 的注册集合必须在节点启动装配期封存，运行中不能增删，避免同一节点上先后打开的 Group 得到不同实现集合。未注册 Capability、或对未实现只读接口的 Capability 发起 Read，返回可持久/可重试的稳定拒绝，不得使已提交日志毒化状态机。Handler 看到的是 Capability 本地逻辑键；底座在物理键前加入 `CapabilityID` 命名空间，因此同一 Group 中 Record、File、Search 等能力使用相同逻辑键也不会碰撞。该命名空间只隔离存储，不替代 Tenant/Keyspace Range Fence：每次读写仍须先通过完整 Route Target 校验。
+不可变数据的进程内能力入口遵守同一个“任意 Node 接入、当前 Owner 执行”边界：入口从 Root 解析 Owner，本机不托管时通过节点认证的独立流式 RPC 向 Owner 成员转送逻辑请求和分帧 Body；Owner 执行物理多数、引用发布和代际确认，入口验证完整引用与确认信息后才返回 `LocalReady`。流式传输成功本身不构成数据多数或写入成功。路由代际变化或结果不确定时调用方使用同一 RequestID 重新解析和重试；此内部入口并非已授权的 Tenant 公共 API。实现边界见[能力数据入口](docs/architecture/capability-data-entry.md)。
+
+`StateKind=capability` 使用通用 Mux 按 Route Target 中已验证的 `CapabilityID` 分派 Handler；Mux 的注册集合必须在节点启动装配期封存，运行中不能增删，避免同一节点上先后打开的 Group 得到不同实现集合。未注册 Capability、或对未实现只读接口的 Capability 发起 Read，返回可持久/可重试的稳定拒绝，不得使已提交日志毒化状态机。Handler 看到的是 Keyspace 本地逻辑键；底座将 Transaction/ReadView 绑定到 `(TenantID, CapabilityID, DatasetID)`，自动加入完整命名空间。同一 Group 中不同 Tenant、Capability 或 Dataset 使用同名逻辑键都不会碰撞，不由业务方补写隔离前缀。业务项目可在同一 Tenant/Dataset 的键内自用前缀，共享内容也不需要 Project 资源。存储隔离不替代入口授权和 Range Fence：每次读写仍须通过完整 Route Target 校验。当前 capability 状态/快照为 v7，保持完整 Keyspace 归属，包含[区域代际/成员位置栅栏](docs/architecture/region-fences.md)、持久交接门禁、[不可变记录权威引用和本地多数确认记录](docs/architecture/immutable-records.md)；旧 v6 及更早开发格式明确拒绝自动迁移，滚动协商和迁移工具未完成。
+
+不可变记录的逻辑权威和物理持有分开：事务可原子发布/覆盖/显式删除某 Keyspace/Key 对应的完整数据描述及发布位置，与 Result/applied 同步；普通 KV 删除不隐式删除该引用。引用禁止带本地物理位置，两种 Raft 快照只恢复引用元数据、不据此宣告数据已持有。来源 Group 不等于当前 Owner，历史成功 Result 不等于当前引用，当前引用也不等于 LocalReady/GeoReady；认证持有与稳定多数确认必须独立实现。此接口不强制上层模块改变载荷格式，不增加部署参数。
+
+内部 Node 现可直接核验指定节点是否实际持有精确不可变记录：重新读取 Pack，前后确认 Root 成员及 TLS 身份，客户端另绑定真实服务端证书，返回 Node/Store 观察。观察接口不复制载荷；另有有界主动发送和远端拉取接口，在 TLS 握手阶段绑定指定 Node 后传递精确描述和实际字节，完整 EOF/摘要校验、目标 Pack 与索引同步并重新读验后确认。拉取必须收到正常最终状态才写本地 Store，完整字节后的错误也拒绝发布；只返回来源观察与本地持有，不把大缓冲交给调用方长期保留。上述接口均不要求本机托管来源 Group，不证明当前逻辑引用、Region 代际或数据保留；Root 读屏障不能当作数据提交位置，多 Volume 不能算多个 Node。后续必须另实现数据补齐、代际绑定与稳定多数确认，不能把物理观察或传输成功当作 LocalReady/GeoReady。
+
+封口代际已有本地固定引用清单原语：Group ReadIndex 后在同一 Pebble 快照核对未激活 seal、当前引用及 Range/Keyspace/Result 关联，流式生成与 seal 绑定的完整集合。Artifact 摘要绑定精确文件切点，集合摘要绑定有序完整引用，避免无关 applied 推进影响集合比较；末尾及整个文件校验前不能宣称扫描完成。清单无物理位置、载荷或 ConfState，不是数据覆盖、保留承诺、Raft 快照或完整备份；认证清单传输与区域增长时新增节点的一次自动补齐已接通，但持久覆盖记录和多数确认未完成。捕获不会阻止实时激活，使用时须重新核对当前代际资格。详见[不可变记录](docs/architecture/immutable-records.md)。
 
 Owner 指拥有 Range 的 Group，不是某一台固定 Node。Root 持久保存 Group 的 `GroupEpoch` 以及由已登记 Node RaftID 组成的 `Voter` / `Learner` 成员集合；成员描述符以期望 Epoch 做 CAS 更新，必须含至少一个 Voter，且不能引用未知 Node。这条 Root 更新是对已确认 Raft `ConfState` 的**发布**，不是执行成员变更的捷径：控制器必须先通过受控的 Learner 加入、追平、提升或移除流程确认实际成员状态，再发布新描述符；失败或中途状态不能冒充当前路由事实。
 
-成员调整先在 Root 创建唯一的持久 `GroupChange`，记录 ChangeID、期望 GroupEpoch 和最终 Voter/Learner 集合；同一 Group 同时只允许一个 Pending 任务，任务存在时禁止旁路发布成员描述符。协调器每次都从 Root 任务和目标 Group 已持久应用的 `ConfState` 重新推导下一步，按“目标节点根据 Root 持久 `StateKind` 选择已注册状态机工厂，打开空的 Joining Group → 新增节点作为 Learner → 确认成员变更 → 追平后提升 Voter → 删除多余 Learner/Voter → 实际集合完全匹配后原子发布 Root 描述符并完成任务”的顺序执行。Joining Group 不带 Bootstrap peers，不能自行形成另一套日志；只有现有 Leader 提交加入后才从合法 Group 追平。工厂选择前必须完成 Root ReadIndex，未知 StateKind、未登记 Group 或工厂构造失败都应失败关闭。工厂由节点运行时注册，可构造通用能力状态机及其 Handler/Mux；Raft 层不能猜测 Record、File、Search 等模块的持久格式。新增和提升必须先于删除，避免为了达到目标集合而提前降低当前法定人数。若要删除本地 Leader，先把领导权转给仍保留的 Voter，再由新 Leader 所在节点续跑任务。控制器崩溃不丢进度，重复执行只观察或推进尚未完成的一步；Voter 不能原地降级为 Learner，如确有需要必须拆成先移除、后重新加入的两个受控任务。
+成员调整先在 Root 创建唯一的持久 `GroupChange`，记录 ChangeID、期望 GroupEpoch 和最终 Voter/Learner 集合；同一 Group 同时只允许一个 Pending 任务，任务存在时禁止旁路发布成员描述符。协调器每次都从 Root 任务和目标 Group 已持久应用的 `ConfState` 重新推导下一步，按“目标节点根据 Root 持久 `StateKind` 选择已注册状态机工厂，打开空的 Joining Group → 新增节点作为 Learner → 确认成员变更 → 追平后提升 Voter → 删除多余 Learner/Voter → 实际集合完全匹配后原子发布 Root 描述符并完成任务”的顺序执行。Joining Group 不带 Bootstrap peers，不能自行形成另一套日志；只有现有 Leader 提交加入后才从合法 Group 追平。工厂选择前必须完成 Root ReadIndex，未知 StateKind、未登记 Group 或工厂构造失败都应失败关闭。工厂由节点运行时注册，可构造通用能力状态机及其 Handler/Mux；Raft 层不能猜测 Record、File、Search 等模块的持久格式。新增和提升必须先于删除，避免为了达到目标集合而提前降低当前法定人数；管理员节点移除使用显式维护任务，只允许删除现有成员并保留当前 voter 严格多数，不增加新成员。若要删除本地 Leader，先把领导权转给仍保留的 Voter，再由新 Leader 所在节点续跑任务。控制器崩溃不丢进度，重复执行只观察或推进尚未完成的一步；Voter 不能原地降级为 Learner，如确有需要必须拆成先移除、后重新加入的两个受控任务。
 
 跨节点成员控制使用独立的内部 mTLS RPC 准备目标 Joining Group、查询线性确认后的 `ConfState`、执行单步成员操作和转移领导权；它不复用普通能力接口，也不允许客户端直接提交任意 `ConfChange`。变更只在目标 Group 当前 Leader 上接受，Follower 返回可重试的不可用状态，协调器按候选成员寻找 Leader；追平不足、状态机无法构造、非法角色转换等稳定拒绝不得换节点掩盖。任务执行期间，成员控制候选是“Root 已发布成员 ∪ Pending GroupChange 的目标成员”，因为领导权可能已经转给刚提升但尚未最终发布的新 Voter；普通数据路由仍以已发布描述符为准。
 
@@ -84,13 +92,21 @@ Owner 指拥有 Range 的 Group，不是某一台固定 Node。Root 持久保存
 
 Node 进程启动分成两个阶段。第一阶段只加载稳定身份、打开 Root 状态与 Root Group、封存 Capability Mux，并注册带证书身份校验的内部 Raft、Group、Range、Capability 和 Membership RPC；任一步失败都按逆序关闭已取得的状态与 Store 锁。第二阶段必须先通过 Root ReadIndex，再从已确认的 Group 描述符恢复包含本 RaftID 的 Group，并恢复 Pending GroupChange 中以本节点为目标、但尚未发布的 Joining Group。不能只扫描磁盘目录并自动打开所有旧 Group，因为已被移除的本地目录不再代表合法成员身份。RPC 监听与第二阶段恢复由 server 入口协调，使 Root 能先参与选举和收发消息；Capability Group 关闭时必须同步从本地 RPC 状态目录注销，避免请求命中已关闭状态。
 
-内部 server 只接受 TLS 1.3 双向认证配置：服务端必须强制验证客户端证书，客户端必须验证服务端证书，且每个 RPC 仍由 `AuthorizePeer` 将已验证证书绑定到请求声明的 RaftID。TLS 握手成功不等于节点有权冒充任意 RaftID。出站 Raft Transport 和 Group Client 共用经 Root 目录确认的地址；多节点 Root 首次启动时，由于 Root 尚未保存 Node 地址，必须额外提供显式 bootstrap 地址目录，Root 中的正式地址一旦存在就优先于 bootstrap 值。server 在本地 Group 恢复完成后才发布 Ready，并启动仅限 Root Leader 执行的成员任务调度器；关闭顺序为停止 RPC/后台循环、关闭出站客户端和 Transport、最后关闭 Raft Host 与全部状态机。
+内部 server 只接受 TLS 1.3 双向认证配置：服务端必须强制验证客户端证书，客户端必须验证服务端证书，且每个 RPC 仍由 `AuthorizePeer` 将已验证证书绑定到请求声明的 RaftID。TLS 握手成功不等于节点有权冒充任意 RaftID。出站 Raft Transport 和 Group Client 共用经 Root 目录确认的地址。集群采用首节点初始化、其他节点受控加入的流程，禁止要求用户配置初始 RaftID/peer 列表。底层测试与内部装配仍可传入 bootstrap peers；生产入口不能把这些参数暴露为配置。后续远端加入通道须自动取得并持久保存首次联络信息，且不能覆盖 Root 权威成员状态。server 在本地 Group 恢复完成后才发布 Ready，并启动仅限 Root Leader 执行的成员任务调度器；关闭顺序为停止 RPC/后台循环、关闭出站客户端和 Transport、最后关闭 Raft Host 与全部状态机。
 
-Node 证书的身份 URI 固定为 `spiffe://dubi/<ClusterID>/node/<NodeID>/<RaftID>`，Subject Common Name 必须等于 NodeID，且叶证书同时具备 ServerAuth/ClientAuth。内置 PKI 的全部节点证书共享虚拟 DNS SAN `dubi.internal`；客户端连接 Root 目录给出的真实 advertise 地址，但固定用该名称验证证书，因此节点换 IP、主机名或端口不触发重签。虚拟名称不参与寻址，也不要求 DNS 可解析。进程启动时证书 URI 必须与 Store 中的持久身份完全相等，服务端处理内部 RPC 时再将对端 URI 与请求声明的 RaftID 比较。新集群初始化必须先原子持久化稳定身份，再将 Node CA、首节点私钥、叶证书和绑定该身份的配置作为一个可重复验证的 PKI 目录原子发布；Node CA 签发私钥不得以裸文件保存，当前使用节点本地 X25519 包装密钥和认证加密信封，并将 ClusterID/NodeID/RaftID/CA 指纹绑定到附加认证数据。包装密钥与信封同盘并不构成独立 HSM/KMS 安全边界，Store 目录权限和受控备份仍是当前静态保护；加入已有集群只分发节点叶证书和信任根，不能复制 CA 签发材料。进程 YAML 只保存监听地址、可选专家 TLS 覆盖、资源上限和首次 Root 引导地址等本地启动参数，未知字段必须拒绝；TLS 字段省略时使用 Store 中的托管 PKI 和 `dubi.internal`。外部 PKI 可显式覆盖证书、私钥、CA 和验证名，但它不是成员、路由或 Placement 的权威配置。尚未注册具体 Capability 时允许以封存的空 Mux 启动控制面，但所有能力请求必须返回“未注册”拒绝，不能把空实现宣传为对应能力可用。
+Node 证书的身份 URI 固定为 `spiffe://dubi/<ClusterID>/node/<NodeID>/<RaftID>`，Subject Common Name 必须等于 NodeID，且叶证书同时具备 ServerAuth/ClientAuth。内置 PKI 的全部节点证书共享虚拟 DNS SAN `dubi.internal`；客户端连接 Root 目录给出的真实 advertise 地址，但固定用该名称验证证书，因此节点换 IP、主机名或端口不触发重签。虚拟名称不参与寻址，也不要求 DNS 可解析。进程启动时证书 URI 必须与 Store 中的持久身份完全相等，服务端处理内部 RPC 时再将对端 URI 与请求声明的 RaftID 比较。新集群初始化必须先原子持久化稳定身份，再将 Node CA、首节点私钥、叶证书和绑定该身份的配置作为一个可重复验证的 PKI 目录原子发布；Node CA 签发私钥不得以裸文件保存，当前使用节点本地 X25519 包装密钥和认证加密信封，并将 ClusterID/NodeID/RaftID/CA 指纹绑定到附加认证数据。包装密钥与信封同盘并不构成独立 HSM/KMS 安全边界，Store 目录权限和受控备份仍是当前静态保护；加入已有集群只分发节点叶证书和信任根，不能复制 CA 签发材料。`dubi init` 自动生成身份及 PKI，并在 Store 排他锁内建立首节点的持久 Root 成员状态；重复初始化保留已有成员和日志。`dubi server` 只恢复已有 Root，不会因为缺少配置、日志或尚未完成加入而自动建立新 Root。节点身份持久记录由初始化还是加入产生，加入来源在绑定 Cluster 后保持不变，不能转为新集群首节点；旧版无来源字段的身份仅在验证已有 bootstrap 签发器后允许继续初始化。进程默认从 `/var/lib/dubi` 读取 Store，可用 `DUBI_STORE` 或 `--store` 指定，监听地址默认为 `0.0.0.0:7443`，可用 `--listen` 调整。托管 PKI 路径和 `dubi.internal` 固定，CLI 不接受 YAML、ID、peer 列表或 TLS 覆盖。尚未注册具体 Capability 时允许以封存的空 Mux 启动控制面，但所有能力请求必须返回“未注册”拒绝，不能把空实现宣传为对应能力可用。当前签发器仍由 bootstrap Node 持有；在集群级 enrollment authority 完成前，移除该 Node 后只保证已有成员继续运行，不保证新 Node 可立即加入。
 
-Enrollment 的新节点先持久生成未绑定 Cluster 的 NodeID/RaftID、Ed25519 私钥和 CSR；CSR 身份 URI 为 `spiffe://dubi/join/node/<NodeID>/<RaftID>`，内置 PKI 自动覆盖 `dubi.internal`，普通加入只需提供 Region 和 advertise 地址。签发协调器必须先验证与请求绑定、可安全重试的 admission proof，再完成 Root ReadIndex，以确定性 RequestID 提交并确认 Node 描述符；只有 Root 中的 NodeID、RaftID、RegionID 和 advertise 地址与申请完全一致后才能调用 Node CA 签发。返回 bundle 只含 ClusterID、集群级 `spiffe://dubi/<ClusterID>/node-ca` 信任根和叶证书，不含 CA 签发材料。安装端必须在绑定 ClusterID 前重新验证 CSR 私钥、CA 自签名与身份、完整证书链、NodeID/RaftID、虚拟 TLS 名称和有效期，并原子发布 leaf-only PKI；中途崩溃和响应丢失后的相同请求必须可恢复，不得用同一身份静默改变 Region、地址或密钥。加入节点尚无 Node 证书，远端 enrollment 因而必须走独立的服务端认证通道和持久一次性 admission 凭据，不能降低现有内部 mTLS RPC 的客户端证书要求；该传输和凭据未完成前，不开放生产远端加入。
+Enrollment 的新节点先持久生成未绑定 Cluster 的 NodeID/RaftID、Ed25519 私钥和 CSR；CSR 身份 URI 为 `spiffe://dubi/join/node/<NodeID>/<RaftID>`，内置 PKI 自动覆盖 `dubi.internal`。普通加入使用 `dubi join --ticket-file <私密文件>`；默认自动按到签发器的路由推导联络地址，Region 默认 `default`，不同故障域和特殊网络可显式提供 Region/advertise。签发协调器先验证与完整规范请求绑定的持久一次性 admission proof，再完成 Root ReadIndex，以确定性 RequestID 提交并确认 Node 描述符；只有 Root 中的 NodeID、RaftID、RegionID 和地址与申请完全一致后才能调用 Node CA 签发。返回 bundle 只含 ClusterID、集群级 `spiffe://dubi/<ClusterID>/node-ca` 信任根和叶证书，不含 CA 签发材料。安装端在绑定 ClusterID 前验证 CSR 私钥、CA 自签名与身份、完整证书链、Node/Raft 身份、虚拟 TLS 名称和有效期，原子发布 leaf-only PKI。临时加入证书仅有 enrollment 角色，不能降低或冒充 Node mTLS 授权。公有回执持久化后无需原 bearer 即可恢复；Root 接纳记录先于空 learner 启动，只有本地追赶和 ReadIndex 确认后的持久激活才允许 Ready。已接纳节点冷启动不依赖原签发器或新凭证；已有资源但缺失/损坏加入记录时拒绝重新初始化，不能静默更换 Region、地址、密钥或身份。自动 voter 晋升、跨 Region 多数策略、证书生命周期与真实环境资格仍须独立完成，加入 CLI 可运行不代表生产资格通过。
 
 Group 路由目录直接投影 Root 的成员描述符和 Node 地址，并可缓存运行时观察到的 Leader；Leader hint 只能在当前成员中调整优先顺序，不能自行扩大成员集合。请求优先发往最近 Leader，也可发往其他成员由 Raft 转交。带稳定 RequestID 的 Mutation 和线性一致读在目标节点 `Unavailable` 或不承载该 Group 时，可在同一次调用 deadline 内换另一个已知成员重试；Mutation 的状态机去重负责处理响应丢失后的重复提交。权限、参数、资源限制、Fence/Epoch、业务拒绝和数据完整性错误不得自动换节点重试。成员被移除后，即使易失 Leader hint 尚未清理，也必须因不在当前描述符中而失效；目录为空或只剩本机而本地路径不可用时应明确失败，不能猜测节点。
+
+上述加入后的独立控制能力已有阶段性落地：正式托管进程自动选择 Root voter，按当前已接纳节点/Region 形成目标，先验证旧/新 voter 活跃且追平，再用 ConfState CAS 和联合共识切换；角色调整不删除 Node，也不由健康观察缩小目标。普通叶证书已有本地/远端自动续期、双向热加载及连接生命周期管理；CA 轮换/吊销仍未完成。Root 票数与数据 Placement 的本地/区域多数分别证明，不能混为一谈。详细限制见[自动 Root 拓扑](docs/architecture/root-topology.md)与[节点加入](docs/architecture/node-enrollment.md)。
+
+区域数据参与集合已有 Root 持久目录：计划与已确认代际分离，历史集合不可变，不按离线观察缩小多数分母。Root/Placement 结构允许描述单节点或双节点小 Region，但当前自动建组仍等待至少三个 Node；至少三个 Node 的集合才提供本地 `LocalReady`，小 Region 的跨 Region 同步策略已在 Placement/Geo 层定义。初始形成会等待计划参与者的读屏障/成员检查，不能把仍在加入的 Root learner 提前写进初始集合；随后正式后台提交持久代际栅栏、逐节点核验完全相同的应用记录，再经 Root 计划/epoch/成员任务及当前成员资格复验确认集合，不增加用户配置。后继代际当前只允许同 Group 增加节点，自动增长交接已接通；节点移除统一走受控成员变更，新节点走普通加入和自动 Repair，不设置替换任务。整区域节点全部被管理员明确移除后，底层可以自动开启同名 Region 的新内部代际，隔离旧身份并让新节点重新形成集合；用户不需要执行额外的 Region 重建操作。初始确认是历史建组断言，不是永续写权限或业务数据已达到 LocalReady/GeoReady；数据耐久回执仍按本地或跨 Region 策略判断。详见[区域集合与建组](docs/architecture/region-cohorts.md)。
+
+后继增长已具备数据 Group 内的持久交接原语：先封口旧代际业务写入，再建立精确候选，最后通过匹配 Root 确认的内部断言激活；重启和快照保留封口，成员位置失效不能继续写入。Root 增长授权将旧 seal 断言、代际计划与唯一成员任务原子绑定，禁止已确认区域通过普通任务或直接发布绕过；只有该任务完成且候选晚于封口才允许确认新代际。正式增长协调器按固定旧集合的严格多数核验精确封口，执行授权任务；新增节点可在旧成员离线时先补齐 Pack，再核验全部新参与者的候选，并对封口清单的每条记录取得新集合严格多数的认证物理持有观察，然后才发布/激活。持久状态驱动换主、丢响应和重启续跑；逐条物理复核目前仍是一次性操作，尚无可恢复的分页覆盖进度。没有自动缩容或健康过滤，新节点追赶后晋升 voter，不增加用户配置。永久离线旧节点仍会阻止候选全员确认，手动移除后的自动再平衡尚未完成。这不代表每笔数据多数确认或生产资格已完成。详见[区域代际交接](docs/architecture/region-handoff.md)。
+
+当前签发能力已由 Root authority epoch/member 记录、稳定 Root voter 多数调度和本地密封 envelope 边界覆盖；旧 Node Fence 后立即失去签发资格。bootstrap 移除后的真实跨节点 envelope 传输与新 Node 加入闭环仍需联测，暂不宣称该场景已完成验收。
 
 ## 4. 统一放置与均衡
 
@@ -119,15 +135,31 @@ Root Group 只保存目录与控制状态。逐项数据副本记录由相应能
 
 ## 5. Store、Volume 和 Pack
 
+Store/Volume 元数据当前为 v2，既有 Store 清单还必须登记不可变记录索引的稳定资源 ID 和创建/激活阶段。正式 Node 自动建立/恢复并拥有该索引；父级已激活后丢失子索引不能按新资源重建。v1 开发目录拒绝打开，不自动迁移。capstate 权威引用和认证逐条传输已独立接通，但引用存在或跨节点传输成功不代表 LocalReady/GeoReady。详见[不可变数据记录](docs/architecture/immutable-records.md)。
+
+节点的 `--store` / `StoreRoot` 表示节点持久数据根目录，默认 `/var/lib/dubi`；它是本地路径，不等于集群放置资源的 `StoreID`。身份、PKI、Root/共识状态和卷登记由节点管理。首次初始化未指定数据卷时，只自动创建并登记一个默认 Volume，路径为 `<store>/volume`（默认 `/var/lib/dubi/volume`）；首次显式指定一个或多个外部卷时，仅登记指定卷，不创建、不启用 `<store>/volume`。VolumeID 始终由系统生成并持久保存，用户只提供路径。
+
+当前已实现模块无关的 Volume 登记、状态查询和节点启动恢复，通用 Pack 的追加、读取/扫描、持久封存及崩溃恢复，以及按 Volume 统一、跨 Capability 混写的持久集合清单和自动滚动也已实现；Pack 的多卷选址和进程内字节预约已接入 Node Runtime；其它存储引擎的统一准入、节点内均衡与安全移除尚未实现。单盘部署不要求用户指定两个根目录；后续增加外部 Volume 是对持久卷集合的追加，已有 `<store>/volume` 保持 Active。后续数据层须让其与新增卷一起参与存储和节点内均衡，不能因为加盘而自动停用、替换或删除。节点身份始终保持在原 StoreRoot。
+
+卷集合及默认卷是否已被移除由持久登记决定。只有首次未指定卷时才创建默认卷；重启未传卷路径、默认目录不存在、或曾显式移除默认卷，都不能触发重新创建。登记过的卷缺失或挂载失效时按故障处理，不能自动创建空卷或回退到节点所在盘继续写入。同一文件系统内的节点状态与 Volume 共用空间预留，不能将子目录重复计为独立磁盘容量或故障域。
+
+当前本地登记保存在 `<store>/DUBI_VOLUMES`，独立的 `DUBI_STORAGE_ID` 绑定自动生成的 StoreID、NodeID 和 RaftID；卷内 `DUBI_VOLUME` 标记再绑定 VolumeID。登记不绑定尚未取得的 ClusterID，因此可在 join prepare 时完成并在之后绑定集群时保留。注册先同步发布 Registered 意图，再排他发布并同步介质标记，最后同步发布 Active；重复初始化和重复加卷恢复同一意图及 ID。待激活卷额外记录目录的设备号/inode，防止中断后误认被替换的目录；完成激活后不依赖跨重启可能变化的设备号作为持久身份。活动卷缺失/损坏只改变健康观察，不重建目录、不篡改生命周期。节点可保持控制面启动以便观察故障；Pack 通过 Volume 访问门禁拒绝访问缺失/被替换的卷，不自动补建；尚无具体能力写入器，不能据此宣称损坏卷仍可承载数据。
+
+Store 运行锁、卷登记锁及介质标记锁分别保护进程、登记变更和实际卷的排他占用。路径须存在且首次登记时为空，拒绝符号链接卷、重叠路径和侵入节点元数据目录。容量查询按文件系统设备去重；它仅为物理观测值，不包含进程内预约。新增 Registry.Reserve 和 Pack Pool 负责 Pack 写入的字节准入，但尚未统一接管其它存储引擎。CLI 已提供 `init/join prepare --volume`（可重复）、`volume list`、`volume add`、`volume drain` 和 `volume remove`；Drain/Remove 都是管理员显式操作，运行中的 Node 通过本地认证 RPC 执行。底层 Registry/Pack Pool 已提供可恢复的 `BeginDrain → RemoveDrained` 写入停止边界：Drain 保留读取并拒绝新 Pack 写入；路径仍在且有 Pack 时最终移除会拒绝，管理员明确确认永久丢盘后即使旧路径不可读也可以移除其元数据，不会删除可见数据或把新盘认成旧 Volume。
+
+默认卷和外部卷采用相同的安全移除流程：先预检本节点其他活动卷的可用容量与迁移预算，将目标卷置为 Draining 并停止向其分配新写入，再由当前节点将必需的活数据迁到本节点其他卷、同步并校验目标数据、原子更新本地位置索引。待在途写入及读取引用安全收敛，并满足快照/备份保护条件、确认源卷不再承载必需数据后，才持久标记 Removed 并注销卷。迁出任务须可中断续跑；容量不足或没有可用目标卷时不得丢弃数据或宣布移除完成。这个过程不改变 NodeID、RaftID、Group 成员或 Range 所有权，也不能因其他节点有数据拷贝而省略本节点内的迁移。
+
 Store 是集群可以选择的资源；Volume 是本地介质；Pack 是节点底座**必须提供**的聚合存储能力。平台统一提供空间预约、磁盘安全预留、健康上报、IO 配额、故障隔离及本地文件生命周期。File BlockStore 默认把 Block 写入 Pack，避免一块一个小文件。Record、Message、Search 等能力可按自身读写模式使用 Pack、Pebble/SST、顺序日志段或索引段；不强迫每种数据都进入 Pack。
 
 一个 Node 可以挂载多个 Volume，通过加盘在线扩容；新增 Volume 先登记介质身份、校验可用空间和健康，再加入 Store 的可放置容量，最后由限速均衡逐步利用。加盘提高该 Node 的容量和本地 IO 并行度，但不会增加独立 Node/Region 的故障容忍度，也不能替代缺失节点上的数据拷贝。均衡和修复须预留 Pack Compaction、快照及故障重建所需空间，不能把新增盘立即填满。
 
-Pack 的初始目标大小定为 **512 MiB**，节点配置可调整；建议调节范围为 **256 MiB–1 GiB**。这些是目标值，写入完整记录时允许超过目标后封存；具体硬上限要在实现前结合恢复与 Compaction 成本确定。Pack 使用 `Active → Sealed → Compacting → Obsolete` 生命周期，并提供追加、校验、同步、封存、崩溃恢复和安全回收。
+Pack 的初始目标大小定为 **512 MiB**，节点配置可调整；建议调节范围为 **256 MiB–1 GiB**。这些是目标值，写入完整记录时允许超过目标后封存。第一阶段内部 API 将目标硬上限设为 1 GiB，单条 Payload 上限 64 MiB、Key 上限 64 KiB、Tenant 标记上限 256 字节、Capability 标记上限 128 字节；Pack 数据文件上限为目标加一条最大编码记录，超大对象由能力切分。Pack 使用 `Active → Sealed → Compacting → Obsolete` 生命周期，并提供追加、校验、同步、封存、崩溃恢复和安全回收。
 
-每个 Pack 归属一个 Capability 和一个 Volume，但可以容纳该能力多个 Range 的记录。Pack 的完整本地位置由 `StoreID / VolumeID / CapabilityID / PackID` 确定。使用 Pack 的能力维护逻辑索引 `记录键 → VolumeID / PackID / Offset / Length / 校验信息`；每条记录必须能追溯 Tenant 归属，以支持隔离、计量和安全回收。记录载荷、索引键、压缩、保留、过期和 GC 由能力定义。Range 搬迁按活记录复制和能力校验进行，不能仅复制整个 Pack；Pack Compaction 只更新本地索引，不改变集群 Range 路由。
+每个 Pack 归属一个 Volume，不归属某个 Capability；可以混放不同能力、Tenant 和 Range 的记录。每个 Volume 统一使用一个 `packs/` 目录、一份集合清单和一个当前写入 Pack，不按能力划分目录或 Pack。Pack 的完整本地位置由 `StoreID / VolumeID / PackID` 确定。使用 Pack 的能力维护逻辑索引 `记录键 → VolumeID / PackID / Offset / Length / 校验信息`；每条记录必须显式保存 CapabilityID 和 TenantID 归属，并纳入记录完整性校验，以支持隔离、计量和安全回收。记录载荷、索引键、压缩、保留、过期和 GC 由能力定义。Range 搬迁按活记录复制和能力校验进行，不能仅复制整个 Pack；Pack Compaction 只更新本地索引，不改变集群 Range 路由。
 
-Pack 是底座提供的容器机制，不要求所有模块采用同一种记录编码。跨能力不混写同一个 Pack，以免不同能力的保留、校验和回收规则互相影响。
+Pack 是底座提供的容器机制，统一外层记录封装但不要求所有模块采用相同的载荷编码。能力只是记录归属，不是物理文件边界；不同能力按写入到达顺序追加到同一个当前 Pack。保留、过期和活数据判定按记录处理；未来 Compaction/GC 必须核对所有记录的引用及备份/快照保护，不能因为某一能力的数据过期就删除整个混合 Pack。授权仍由路由与能力层实施，物理 Location 不授予对其它能力或 Tenant 的读取权限。
+
+当前单 Pack 实现将不透明 Key/Payload 与 Capability/Tenant 归属聚合进一个数据文件，并用一个原子检查点保存已提交边界及封存状态；数据、检查点和目录同步后才返回本地追加确认。启动先逐条校验全部已提交数据，再仅截掉未封存 Pack 的未提交尾部；已提交损坏、短文件或检查点丢失均拒绝打开，不静默截断。到达目标时自动封存；单 Pack API 的后续追加返回 ErrSealed，Collection API 则通过持久创建意图自动建立并发布下一 Pack 后再接收记录。集合清单保存已发布 Pack 顺序、目标大小和 Pending ID，Volume 根目录另存身份标记；重启完整验证清单和已提交数据，恢复同 ID 的未完成初始化。清单或整个集合目录丢失不重建空集合，未列入清单的文件不自动导入/删除。当前最多 16,384 个 Pack、清单上限 1 MiB，句柄数量不随已封存 Pack 数量增长。集合管理和带预约的多卷 Pool 已由 Node Runtime 持有；通用 capstate 已接入大值 Raft Apply：先同步 Pack，再同批发布本地引用、Result 和 applied；快照传递逻辑值，接收节点重建位置。64 KiB 为内部外置阈值，节点不增加配置；具体业务索引、能力写入器和物理回收仍未实现。提交、崩溃及快照兼容边界详见 [状态机与 Pack](docs/architecture/pack-state.md)。此次实现不提供多数派耐久确认或完整快照/备份。格式、恢复边界和限制详见 [Pack 与集合管理实现](docs/architecture/pack.md)。
 
 `Chunk` 是 File 对原始文件切片的名称；`Block` 和 `CID` 是 File 内容寻址模型的名称。它们不是 DUBI 集群底座要求其他能力采用的最小存储单位。File 的 Block 默认存入 Pack；Message 的追加记录或 Search 的索引段不因共用集群就改叫 Chunk 或 Block。
 
@@ -149,13 +181,15 @@ Backup Repository 是独立于源集群故障域的备份目标；Recovery Point
 
 导入/导出是另一条业务数据路径，由各能力按自身格式定义：File 可导入/导出文件或对象，Log 可导入/导出日志，Search 可导入/导出索引数据。它们可按业务对象或范围选择，不属于 Cluster Backup/Restore，不得以一次业务导出冒充可恢复的集群备份。
 
-Node Snapshot 在本地固定视图时要协调 Checkpoint、WAL、Pack、GC、Compaction 和密钥轮换；完成后才发布清单，不能按 Tenant 或能力裁剪。正常重启可继续使用原节点稳定存储；从快照替换丢失节点时则生成新节点/共识身份，经认证加入并追平，不让旧副本与新副本同时合法服务。Cluster Restore 先执行只读 Plan、格式/版本/密钥/容量预检与完整校验，再进入明确支持的整集群恢复模式；不能把旧 Raft 日志直接作为新集群的共识历史，也不能默认复制旧 CA 或应用私钥。恢复后需由 Placement/Repair 补齐耐久副本，并验证各注册存储资源可打开、权威 Group 可服务；业务级校验可作为更高层验收，但不要求底座解析每种记录。
+Node Snapshot 在本地固定视图时要协调 Checkpoint、WAL、Pack、GC、Compaction 和密钥轮换；完成后才发布清单，不能按 Tenant 或能力裁剪。正常重启可继续使用原节点稳定存储；从快照重建丢失节点时则生成新节点/共识身份，经认证加入并追平，不让旧副本与新副本同时合法服务。Cluster Restore 先执行只读 Plan、格式/版本/密钥/容量预检与完整校验，再进入明确支持的整集群恢复模式；不能把旧 Raft 日志直接作为新集群的共识历史，也不能默认复制旧 CA 或应用私钥。恢复后需由 Placement/Repair 补齐耐久副本，并验证各注册存储资源可打开、权威 Group 可服务；业务级校验可作为更高层验收，但不要求底座解析每种记录。
 
-备份、节点快照与普通 GC、Compaction、迁移、升级共享资源预算和维护门禁，避免长任务饿死前台流量或在保留保护解除前删除所需数据。生产验收必须定期从真实目标恢复到隔离环境，覆盖损坏对象、Leader/Worker 中断、容量不足、节点替换与版本升级，并记录 RPO、RTO、恢复吞吐及各能力的可服务水位。
+备份、节点快照与普通 GC、Compaction、迁移、升级共享资源预算和维护门禁，避免长任务饿死前台流量或在保留保护解除前删除所需数据。生产验收必须定期从真实目标恢复到隔离环境，覆盖损坏对象、Leader/Worker 中断、容量不足、节点移除/重新加入与版本升级，并记录 RPO、RTO、恢复吞吐及各能力的可服务水位。
 
 ## 7. Node、Store 与 Volume 生命周期
 
-生命周期状态是控制面的**持久意图**，健康状态是监测得到的**当前观察**；二者不能混用。Node 心跳超时只表示 `Unavailable`，不能自动当作永久 `Lost` 并复用其身份。Node 正常重启保留 NodeID、RaftID 和受管 Store 身份；丢盘后的替换节点取得新 NodeID/RaftID，旧身份必须完成 Fence 和成员变更后才能退役。StoreID 与 VolumeID 也不得因路径重用而指向不同物理介质。
+生命周期状态是控制面的**持久意图**，健康状态是监测得到的**当前观察**；二者不能混用。Node 心跳超时只表示 `Unavailable`，不能自动移除或复用其身份。Node 正常重启保留 NodeID、RaftID 和受管 Store 身份并追赶数据；管理员移除后重新加入的机器即使地址和路径相同，也必须取得全新的 NodeID、RaftID、StoreID 和 VolumeID。StoreID 与 VolumeID 也不得因路径重用而指向不同物理介质。
+
+当前内部 Root `FenceNode` 只允许没有 Root/Group 当前或待执行责任的已登记身份；它持久拒绝该身份再加入或被选为新成员。Group 层已支持显式维护移除并保留当前 voter 严格多数；跨 Root/多 Group 的管理员入口、最终 Fence 编排和新节点加入后的物理再平衡仍未完成，不能靠健康超时强行缩小多数派。见[节点故障、手动移除与自动再平衡](docs/architecture/node-replacement.md)。
 
 | 对象 | 控制面生命周期 | 关键规则 |
 | --- | --- | --- |
@@ -163,11 +197,13 @@ Node Snapshot 在本地固定视图时要协调 Checkpoint、WAL、Pack、GC、C
 | Store | `Joining → Active → Draining → Retired`；介质不可恢复时进入 `Lost` | Store 是 Placement 的放置目标；`Draining`/`Lost` 不得分配新副本。Store 故障不自动意味着同 Node 的其他 Store 或 Volume 故障。 |
 | Volume | `Registered → Active → Draining → Removed`；介质损坏是 `Failed` 健康观察 | Volume 是本地持久介质，不是独立的集群成员；迁移或删除前须证明其上已无必需的活数据，并保留必要的备份/快照保护。 |
 
-Node/Store/Volume 的 Drain 是一个由 Root 或所属权威 Group 持久记录的可恢复操作：`请求与预检 → 禁止新放置/写入 → 搬迁或重建 → 校验目标和耐久性 → 变更 Group 成员/所有权 → 验证无剩余责任 → 退役`。操作有稳定 ID、代际、进度、失败原因和重试/取消边界；控制器换 Leader 或节点强杀后必须能续跑。未达到自动多数派安全条件时不允许仅为了完成 Drain 而删除最后一份有效数据或破坏 Raft 多数派。取消只允许在不可逆成员/身份变更之前；之后应以新的补偿操作处理。
+Node/Store/Volume 的 Drain 都是持久、可恢复的操作：`请求与预检 → 禁止新放置/写入 → 搬迁或重建 → 校验目标和耐久性 → 按作用域更新位置或成员/所有权 → 验证无剩余责任 → 退役`。Node/Store 的跨节点退役由 Root 或所属权威 Group 记录；单个 Volume 的节点内迁出使用节点持久卷登记与任务记录，按第 5 节执行，只更新本地数据位置，不改变共识成员和 Range 所有权。操作有稳定 ID、代际、进度、失败原因和重试/取消边界；控制器换 Leader 或节点强杀后必须能续跑。未达到自动多数派安全条件时不允许仅为了完成 Drain 而删除最后一份有效数据或破坏 Raft 多数派。取消只允许在不可逆成员/身份变更之前；之后应以新的补偿操作处理。
 
-计划内节点替换与突发损坏走不同入口：前者先 Drain 再退出，后者先 Fence 旧身份与 Store 写入许可，再按仍可确认的副本修复。已标记 `Lost` 的旧盘重新出现时只能隔离检查，不能以旧身份自动恢复服务；若需取回其中数据，必须走受控导入/校验而非让其重新成为合法副本。扩容与缩容应同时检查 Root/各 Group 的多数派、Region 故障域、空闲容量、后台搬迁预算和正在运行的备份/升级任务。
+计划内节点迁移先 Drain 再退出；突发损坏则由健康状态标记、管理员手动移除旧成员、新节点普通加入和后台自动 Repair/再平衡组成。超时不能触发移除，已标记 `Lost` 的旧盘重新出现时只能隔离检查，不能以旧身份自动恢复服务；若需取回其中数据，必须走受控导入/校验而非让其重新成为合法副本。扩容与缩容应同时检查 Root/各 Group 的多数派、Region 故障域、空闲容量、后台搬迁预算和正在运行的备份/升级任务。
 
 ## 8. 数据安全与故障策略
+
+当前已落地跨 Region 数据多数的规划与显式写入原语：Root 在同一 applied cut 固定选定的 Region cohort、Node 集合及其 generation/Group epoch/fence，并持久化 Range→Region Group 映射；`rangeplacement` 后台协调器从稳定 confirmed cohort 自动生成确定性映射，不按在线数量缩小集合。Placement 再按每个 Region 的本地严格多数计算同一 RecordID 的物理覆盖，并按 Active Region 的严格多数判断 `GeoDataCoverage`，现已覆盖 1/2 节点小 Region。`StageGeo`/`Writer.WriteGeoFromRange` 可在显式选择时从该映射同步写入各 Region 的本地多数；目标 Region 的 `GeoMetadataMirror` 账目可保存当前引用切点和本地 fence，供来源 Region 丢失后的恢复判断；`SelectWritePolicy` 明确至少三个本地 Node 时采用本地优先，小 Region 必须等待 Region 严格多数，默认本地优先写入不被悄悄改变。覆盖可绑定到单一权威引用的 RequestID、Index、Hash、Range epoch 和路由键，防止引用替换后复用旧观察；Owner Group 还能持久保存并在两种快照中校验 `GeoCoverageRecord`，引用替换/删除会原子清除。`GeoMetadataMirror` 现在可通过经认证的 capability RPC 提交到目标 Region 的任一当前 voter，并等待目标 StateMachine 的持久 Result；`Writer.WriteGeo` 在提供该传输器时会先完成所有 Region 镜像，再发布 GeoReady 账目。该账目仍只是能力中立的物理观察，不等同于完整恢复流程；日志尾部追赶和来源 Region 丢失后的重建仍需独立协议，不能因为区域字节覆盖达到多数就提前发布 `GeoReady`。
 
 底座统一维护“按持久拓扑应达到的多数派目标”和“当前已证实的存放状态”两套状态。多数门槛由稳定参与集合、Active Region 和能力的权威持久性推导，健康观察只影响可选目标，不能自动缩小分母；用户不输入副本数。Group 成员、实际数据拷贝及其校验结果描述事实；计划、暂存或未同步的拷贝不算已确认。能力可声明权威持久、可由权威来源重建或纯易失，但不得把 Cache 或派生索引当作权威数据的多数派证明。
 
@@ -188,9 +224,13 @@ Node/Store/Volume 的 Drain 是一个由 Root 或所属权威 Group 持久记录
 
 Root Group 负责集群目录和成员变更，必须有独立的多数派与恢复预案；Root 不可用时，不得靠本地缓存目录执行新的所有权切换或放置变更。已有数据面能否短时继续服务须由路由缓存期限、Epoch 和能力一致性要求显式定义，不能一概视为可写。任何永久失联判定、降低耐久策略、强制移除最后有效副本或跨 Region 失败转移都要有明确的授权、预检和审计路径。
 
+`GeoReady` 的区域覆盖必须同时保护可恢复的权威元数据切点/日志尾部与其引用的数据，不能仅证明各区存有不可变字节。整个来源 Region 丢失后，远端仅有多个物理版本不足以判断当前逻辑引用；恢复与路由重新建立还须遵守新身份和 Fence 边界。当前清单、持有观察和逐条传输均不提供这一保证。
+
 首个验收场景以单 Region、三节点为起点，覆盖任意单节点失效、一个 Store/Volume 损坏、Leader 切换、旧节点重新出现和恢复中的再次故障。多 Region 还须覆盖 `LocalReady → GeoReady` 补齐窗口、Writer Region 整体失联和 Root 多数派丢失。用户不设置副本数；本地参与集合的形成/上限、降级读写边界及目标修复时间在故障域与性能测试后定稿。在此之前不得把实验拓扑的可用性写成产品承诺。
 
 ## 9. 统一资源治理
+
+当前首先落地 Registry 的进程内磁盘字节预约与 Node Runtime 持有的 Pack Pool：按文件系统设备共享预算，默认保留 `max(1 GiB, TotalBytes / 20)`，从健康 Active 卷中选可预约字节最多者，并列轮转。Pool 在写入前预约、完成/失败/取消后释放；读取不要求新增预约，也不为读取完成 Pending Pack 创建。写入错误不自动跨卷重试，避免不确定成功后的重复写入。该能力不是物理预分配或持久 Placement 任务；其它引擎尚未接入，外部占用与底层存储限制仍可能导致 IO 失败。CLI 容量仍是观察值，未包含预约明细；下述统一多资源治理仍是后续目标。
 
 所有能力共享一套资源准入与计量路径，而不是各自建立互不知情的限速器。底座以 `Cluster → Node → Store/Volume` 为物理资源层，以 `Tenant → Capability` 为归属层，再按工作类别分配预算。每个请求和后台任务在消耗大量内存、磁盘、IO 或网络之前先取得预算；完成、取消或失败都必须释放。无法精确预估的流式工作按有界批次续租，禁止先无限缓存再事后计量。
 
@@ -210,7 +250,7 @@ Root Group 负责集群目录和成员变更，必须有独立的多数派与恢
 | 层 | 负责 | 不负责 |
 | --- | --- | --- |
 | `platform/cluster`、`platform/router` | Cluster、Tenant 目录、内部 Keyspace/Range 路由、Epoch 和 Fence | 业务值编码与索引 |
-| `platform/node` | Node 进程底座装配与关闭、Root 先行启动、已确认本地 Group 恢复，以及后续加入、Drain、替换、退役、身份 Fence 和健康观察 | 仅凭旧磁盘目录恢复已被移除的 Group，或将短暂失联直接判为永久丢失 |
+| `platform/node` | Node 进程底座装配与关闭、Root 先行启动、已确认本地 Group 恢复，以及后续加入、Drain、成员移除、身份隔离和健康观察 | 仅凭旧磁盘目录恢复已被移除的 Group，或将短暂失联直接判为永久丢失 |
 | `platform/auth` | Tenant 身份、应用凭据、授权与审计归因 | 将业务方的键或路径前缀当作底座隔离层 |
 | `platform/raft` | Group 生命周期、成员、日志、Snapshot | 将所有能力强制写入同一 Raft Group |
 | `platform/placement` | 本地/区域多数派目标、安全预检、Repair、迁移任务与均衡 | 把尚未校验的实际拷贝当作已达到多数派 |

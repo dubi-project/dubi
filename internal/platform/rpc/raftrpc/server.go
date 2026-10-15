@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"io"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
+	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
 	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc/codes"
@@ -23,6 +25,7 @@ const (
 	DefaultMaxMessageSize  = 16 << 20
 	DefaultMaxSnapshotSize = 64 << 20
 	DefaultSnapshotFrame   = 1 << 20
+	maxSnapshotReceivers   = 2
 )
 
 type Stepper interface {
@@ -33,17 +36,30 @@ type SnapshotInstaller interface {
 	InstallSnapshot(groupID string, message *raftpb.Message) (uint64, error)
 }
 
+// SnapshotStreamInstaller must verify and durably import the complete payload
+// before handing its small reference to Raft. Returning an index certifies
+// durable state installation, not just successful artifact receipt.
+type SnapshotStreamInstaller interface {
+	InstallSnapshotStream(context.Context, string, *raftpb.Message, io.Reader) (uint64, error)
+}
+
 // AuthorizePeer must bind the authenticated TLS client certificate to the
 // claimed RaftID using the cluster's membership/PKI policy.
 type AuthorizePeer func(context.Context, uint64) error
 
 type Server struct {
 	raftwire.UnimplementedRaftServiceServer
-	clusterID string
-	raftID    uint64
-	stepper   Stepper
-	authorize AuthorizePeer
-	maxSize   int
+	clusterID             string
+	raftID                uint64
+	stepper               Stepper
+	authorize             AuthorizePeer
+	maxSize               int
+	snapshotSlots         chan struct{}
+	snapshotBudget        *resource.ByteBudget
+	snapshotHeaders       chan struct{}
+	snapshotReaders       chan struct{}
+	snapshotHeaderTimeout time.Duration                  // Internal test override; zero uses automatic default.
+	snapshotReceiveLimits func(uint64) snapshotDeadlines // Internal test clock policy only.
 }
 
 func NewServer(clusterID string, raftID uint64, stepper Stepper, authorize AuthorizePeer, maxSize int) (*Server, error) {
@@ -53,8 +69,14 @@ func NewServer(clusterID string, raftID uint64, stepper Stepper, authorize Autho
 	if maxSize <= 0 {
 		maxSize = DefaultMaxMessageSize
 	}
-	return &Server{clusterID: clusterID, raftID: raftID, stepper: stepper, authorize: authorize, maxSize: maxSize}, nil
+	return &Server{clusterID: clusterID, raftID: raftID, stepper: stepper, authorize: authorize, maxSize: maxSize,
+		snapshotSlots: make(chan struct{}, maxSnapshotReceivers), snapshotBudget: resource.NewByteBudget(snapshotBudgetBytes),
+		snapshotHeaders: make(chan struct{}, maxSnapshotHeaders), snapshotReaders: make(chan struct{}, maxSnapshotHeaders+maxSnapshotReceivers)}, nil
 }
+
+// SnapshotResources accounts for encoded snapshot buffers held through durable
+// installation. It is not a bound on protobuf/state-machine decoded memory.
+func (s *Server) SnapshotResources() resource.BudgetStatus { return s.snapshotBudget.Status() }
 
 func (s *Server) Step(ctx context.Context, request *raftwire.StepRequest) (*raftwire.StepResponse, error) {
 	if request == nil || request.GetClusterId() != s.clusterID {
@@ -83,7 +105,7 @@ func (s *Server) Step(ctx context.Context, request *raftwire.StepRequest) (*raft
 		return nil, status.Error(codes.FailedPrecondition, "Raft snapshot requires the streamed RPC")
 	}
 	if err := s.stepper.Step(request.GetGroupId(), &message); err != nil {
-		return nil, status.Error(codes.Unavailable, fmt.Sprintf("apply Raft message: %v", err))
+		return nil, mutationError("apply Raft message", err, codes.Unavailable)
 	}
 	return &raftwire.StepResponse{}, nil
 }
@@ -94,7 +116,7 @@ func (s *Server) authorizeSender(ctx context.Context, raftID uint64) error {
 
 func authorizeSender(ctx context.Context, raftID uint64, authorize AuthorizePeer) error {
 	remote, ok := peer.FromContext(ctx)
-	if !ok {
+	if !ok || remote == nil {
 		return status.Error(codes.Unauthenticated, "Raft peer has no TLS identity")
 	}
 	tlsInfo, ok := remote.AuthInfo.(credentials.TLSInfo)
@@ -108,8 +130,11 @@ func authorizeSender(ctx context.Context, raftID uint64, authorize AuthorizePeer
 }
 
 func (s *Server) InstallSnapshot(stream raftwire.RaftService_InstallSnapshotServer) error {
-	first, err := stream.Recv()
+	first, err := s.receiveSnapshotHeader(stream)
 	if err != nil {
+		if code := status.Code(err); code != codes.Unknown && code != codes.OK {
+			return err
+		}
 		return status.Error(codes.InvalidArgument, "snapshot stream requires a header")
 	}
 	header := first.GetHeader()
@@ -126,39 +151,78 @@ func (s *Server) InstallSnapshot(stream raftwire.RaftService_InstallSnapshotServ
 	if !ok {
 		return status.Error(codes.Unimplemented, "Raft snapshot installer is unavailable")
 	}
-	if header.GetEncodedSize() == 0 || header.GetEncodedSize() > DefaultMaxSnapshotSize || len(header.GetSha256Digest()) != sha256.Size {
+	if header.GetEncodedSize() == 0 || header.GetEncodedSize() > snapshot.MaxStreamBytes+uint64(maxSnapshotEnvelope+snapshotWirePrefixSize) || len(header.GetSha256Digest()) != sha256.Size {
 		return status.Error(codes.ResourceExhausted, "Raft snapshot size or digest is invalid")
 	}
-	var encoded bytes.Buffer
-	encoded.Grow(int(header.GetEncodedSize()))
-	for {
-		frame, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
+	limits := deadlinesForSnapshot(header.GetEncodedSize())
+	if s.snapshotReceiveLimits != nil {
+		limits = s.snapshotReceiveLimits(header.GetEncodedSize())
+	}
+	ctx, cancel := context.WithTimeout(stream.Context(), limits.total)
+	defer cancel()
+	from := header.GetFromRaftId()
+	stream = &boundedSnapshotServer{RaftService_InstallSnapshotServer: stream, ctx: ctx, idle: limits.idle, workers: s.snapshotReaders}
+	stream = &authorizedSnapshotServer{RaftService_InstallSnapshotServer: stream,
+		authorize: func() error { return s.authorizeSender(ctx, from) }}
+	// Reject rather than queue more memory-intensive installs. These limits are
+	// shared by all groups and senders; ordinary Step RPCs need neither lease.
+	select {
+	case s.snapshotSlots <- struct{}{}:
+		defer func() { <-s.snapshotSlots }()
+	default:
+		return status.Error(codes.ResourceExhausted, "Raft snapshot receiver is busy")
+	}
+	// Reserve bounded framing space first. A legacy image acquires the rest
+	// of its whole-message lease after format detection and before allocation.
+	reserved := min(header.GetEncodedSize(), uint64(snapshotWireBufferBytes))
+	release, err := s.snapshotBudget.TryAcquire(reserved)
+	if err != nil {
+		return status.Error(codes.ResourceExhausted, err.Error())
+	}
+	defer release()
+	reader := &snapshotFrameReader{stream: stream, remaining: header.GetEncodedSize()}
+	prefix := make([]byte, min(header.GetEncodedSize(), uint64(snapshotWirePrefixSize)))
+	if _, err := io.ReadFull(reader, prefix); err != nil {
+		return err
+	}
+	if len(prefix) == snapshotWirePrefixSize && string(prefix[:len(snapshotWireMagic)]) == snapshotWireMagic {
+		return s.installFileSnapshot(stream, header, reader, prefix)
+	}
+	if header.GetEncodedSize() > DefaultMaxSnapshotSize {
+		return status.Error(codes.ResourceExhausted, "legacy Raft snapshot exceeds inline bound")
+	}
+	if header.GetEncodedSize() > reserved {
+		extra, err := s.snapshotBudget.TryAcquire(header.GetEncodedSize() - reserved)
 		if err != nil {
-			return err
+			return status.Error(codes.ResourceExhausted, err.Error())
 		}
-		chunk := frame.GetData()
-		if len(chunk) == 0 || len(chunk) > DefaultSnapshotFrame || uint64(len(chunk)) > header.GetEncodedSize()-uint64(encoded.Len()) {
-			return status.Error(codes.InvalidArgument, "invalid Raft snapshot frame")
-		}
-		_, _ = encoded.Write(chunk)
+		defer extra()
 	}
-	if uint64(encoded.Len()) != header.GetEncodedSize() {
-		return status.Error(codes.InvalidArgument, "incomplete Raft snapshot stream")
+	encoded := make([]byte, int(header.GetEncodedSize()))
+	copy(encoded, prefix)
+	if _, err := io.ReadFull(reader, encoded[len(prefix):]); err != nil {
+		return err
 	}
-	digest := sha256.Sum256(encoded.Bytes())
+	if err := reader.finish(); err != nil {
+		return err
+	}
+	digest := sha256.Sum256(encoded)
 	if !bytes.Equal(digest[:], header.GetSha256Digest()) {
 		return status.Error(codes.DataLoss, "Raft snapshot SHA-256 mismatch")
 	}
 	var message raftpb.Message
-	if err := proto.Unmarshal(encoded.Bytes(), &message); err != nil {
+	if err := proto.Unmarshal(encoded, &message); err != nil {
 		return status.Errorf(codes.InvalidArgument, "decode Raft snapshot: %v", err)
 	}
 	if message.GetType() != raftpb.MessageType_MsgSnap || etcdraft.IsEmptySnap(message.GetSnapshot()) ||
 		message.GetFrom() != header.GetFromRaftId() || message.GetTo() != header.GetToRaftId() {
 		return status.Error(codes.InvalidArgument, "snapshot header does not match MsgSnap")
+	}
+	if _, recognized, err := snapshot.DecodeReference(message.GetSnapshot().GetData()); recognized || err != nil {
+		return status.Error(codes.InvalidArgument, "file snapshot reference requires its streamed artifact")
+	}
+	if err := s.authorizeSender(ctx, from); err != nil {
+		return err
 	}
 	index, err := installer.InstallSnapshot(header.GetGroupId(), &message)
 	if err != nil {

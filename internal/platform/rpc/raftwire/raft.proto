@@ -70,6 +70,12 @@ message GroupMembershipRequest {
 message GroupMembershipResponse {
   bytes conf_state = 1;
   uint64 leader_raft_id = 2;
+  uint64 membership_index = 3;
+  string cluster_id = 4;
+  string group_id = 5;
+  uint64 raft_id = 6;
+  uint64 confirmed_index = 7;
+  uint64 leader_term = 8;
 }
 
 enum GroupMembershipOperation {
@@ -86,6 +92,10 @@ message GroupMembershipChangeRequest {
   uint64 to_raft_id = 4;
   GroupMembershipOperation operation = 5;
   uint64 member_raft_id = 6;
+  string change_id = 7;
+  uint64 expected_epoch = 8;
+  uint64 expected_membership_index = 9;
+  bytes expected_conf_state = 10;
 }
 
 message GroupLeadershipTransferRequest {
@@ -94,10 +104,20 @@ message GroupLeadershipTransferRequest {
   uint64 from_raft_id = 3;
   uint64 to_raft_id = 4;
   uint64 target_raft_id = 5;
+  string change_id = 6;
+  uint64 expected_epoch = 7;
+  uint64 expected_membership_index = 8;
+  bytes expected_conf_state = 9;
+  uint64 expected_leader_term = 10;
 }
 
 message GroupLeadershipTransferResponse {
   uint64 leader_raft_id = 1;
+  string cluster_id = 2;
+  string group_id = 3;
+  uint64 raft_id = 4;
+  string change_id = 5;
+  uint64 expected_epoch = 6;
 }
 
 message PrepareJoiningGroupRequest {
@@ -105,9 +125,41 @@ message PrepareJoiningGroupRequest {
   string group_id = 2;
   uint64 from_raft_id = 3;
   uint64 to_raft_id = 4;
+  string change_id = 5;
+  uint64 expected_epoch = 6;
 }
 
-message PrepareJoiningGroupResponse {}
+message PrepareJoiningGroupResponse {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 raft_id = 3;
+  string change_id = 4;
+  uint64 expected_epoch = 5;
+}
+
+// Capability-neutral local application evidence. Not a business durability
+// receipt and not authorization to change the cohort's durable denominator.
+message ObserveRegionFenceRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+}
+
+message ObserveRegionFenceResponse {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 raft_id = 3;
+  uint64 root_confirmed_index = 4;
+  uint64 group_confirmed_index = 5;
+  uint64 applied_index = 6;
+  uint64 membership_index = 7;
+  bytes conf_state = 8;
+  bytes fence_record = 9;
+  bool active = 10;
+  uint32 state_format = 11;
+  bytes handoff_record = 12;
+}
 
 message EnsureInitialRangeRequest {
   string cluster_id = 1;
@@ -183,4 +235,195 @@ service RangeControlService {
 service CapabilityService {
   rpc Mutate(CapabilityMutateRequest) returns (CapabilityResult);
   rpc Read(CapabilityReadRequest) returns (CapabilityReadResponse);
+}
+
+// Gateway-to-Owner immutable data operations. The receiving Owner member
+// executes the full physical-majority and committed-confirmation protocol;
+// neither a forwarded request nor a completed body stream is LocalReady.
+message CapabilityDataWriteHeader {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes route_target = 5;
+  string request_id = 6;
+  bytes record_descriptor = 7;
+  bytes mutation_payload = 8;
+}
+
+message CapabilityDataWriteRequest {
+  oneof payload {
+    CapabilityDataWriteHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+message CapabilityDataWriteResponse {
+  string state = 1;
+  bytes reference = 2;
+  uint64 confirmation_index = 3;
+  uint64 region_generation = 4;
+  string error = 5;
+}
+
+message CapabilityDataReadRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes route_target = 5;
+  bytes key = 6;
+}
+
+message CapabilityDataReadHeader {
+  bytes reference = 1;
+  uint64 region_generation = 2;
+}
+
+message CapabilityDataReadResponse {
+  oneof payload {
+    CapabilityDataReadHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+service CapabilityDataService {
+  rpc Write(stream CapabilityDataWriteRequest) returns (CapabilityDataWriteResponse);
+  rpc Read(CapabilityDataReadRequest) returns (stream CapabilityDataReadResponse);
+}
+
+service RegionFenceService {
+  rpc Observe(ObserveRegionFenceRequest) returns (ObserveRegionFenceResponse);
+}
+
+// Physical observation on ONE authenticated Node. No payload is transferred;
+// this is not logical authority, a Region-generation receipt, or a quorum.
+message ObserveRecordHoldingRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  uint64 to_raft_id = 3;
+  bytes record_descriptor = 4;
+}
+
+message ObserveRecordHoldingResponse {
+  uint32 version = 1;
+  string cluster_id = 2;
+  uint64 raft_id = 3;
+  string node_id = 4;
+  uint64 root_confirmed_index = 5;
+  bytes record_descriptor = 6;
+  string record_id = 7;
+  string store_id = 8;
+  string volume_id = 9;
+}
+
+service RecordHoldingService {
+  rpc Observe(ObserveRecordHoldingRequest) returns (ObserveRecordHoldingResponse);
+}
+
+// Exactly one header, then nonempty bounded data frames, then client EOF.
+// EOF is required even for an empty record. No local Pack/Volume locator is
+// accepted. The response reports durable physical holding, NOT a quorum.
+message PutRecordRequest {
+  ObserveRecordHoldingRequest header = 1;
+  bytes data = 2;
+}
+
+service RecordTransferService {
+  rpc Put(stream PutRecordRequest) returns (ObserveRecordHoldingResponse);
+  rpc Get(ObserveRecordHoldingRequest) returns (stream GetRecordResponse);
+}
+
+// The caller specifies the exact sealed handoff it expects. The responder
+// builds a fresh, read-barriered immutable reference cut and streams its
+// complete artifact; a digest or a prefix is never a coverage receipt.
+message GetRecordCutRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes seal_record = 5;
+}
+
+message RecordCutHeader {
+  string cluster_id = 1;
+  uint64 raft_id = 2;
+  string node_id = 3;
+  uint64 root_confirmed_index = 4;
+  bytes cut_descriptor = 5;
+}
+
+message GetRecordCutResponse {
+  oneof payload {
+    RecordCutHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+service RecordCutService {
+  rpc Get(GetRecordCutRequest) returns (stream GetRecordCutResponse);
+}
+
+// The Root leader asks a newly added Node to fill one exact pending seal, or
+// to perform a fresh candidate-majority check after all new Nodes are filled.
+// Neither response is a durable retention vote.
+message FillRecordCutRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  bytes seal_record = 5;
+  // After all new members have been filled, also verify every sealed
+  // reference against a strict physical majority of the pending cohort.
+  bool verify_candidate = 6;
+}
+
+message FillRecordCutResponse {
+  string cluster_id = 1;
+  uint64 raft_id = 2;
+  string node_id = 3;
+  uint64 root_confirmed_index = 4;
+  uint64 references = 5;
+  uint64 already_held = 6;
+  uint64 fetched = 7;
+  uint64 referenced_bytes = 8;
+  // True only after a full candidate-majority scan, never after fill alone.
+  bool candidate_verified = 9;
+}
+
+// A current Root member asks one target Node to repair one exact immutable
+// record from one authenticated source Node. The target owns the destination
+// Pack write; this RPC never accepts a caller-supplied Volume or Location.
+message RepairRecordRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  uint64 source_raft_id = 5;
+  bytes record_descriptor = 6;
+  // False writes a missing logical index; true replaces an existing unreadable
+  // Pack location while preserving the index identity.
+  bool replace_existing = 7;
+}
+
+message RepairRecordResponse {
+  string cluster_id = 1;
+  uint64 raft_id = 2;
+  string node_id = 3;
+  uint64 root_confirmed_index = 4;
+  string record_id = 5;
+  string store_id = 6;
+  string volume_id = 7;
+}
+
+service RecordRepairService {
+  rpc Fill(FillRecordCutRequest) returns (FillRecordCutResponse);
+  rpc Repair(RepairRecordRequest) returns (RepairRecordResponse);
+}
+
+// One verified physical holding header, followed by nonempty bounded data
+// frames and successful gRPC EOF. Bytes without the final status are incomplete.
+message GetRecordResponse {
+  ObserveRecordHoldingResponse header = 1;
+  bytes data = 2;
 }

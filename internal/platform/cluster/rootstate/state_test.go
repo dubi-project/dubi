@@ -46,6 +46,28 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 		Node: &Node{NodeID: "node_00000000000000000000000000000001", RaftID: 11,
 			RegionID: "us-west", Address: "127.0.0.1:10001"}}
 	submit(t, group, node)
+	rename := Command{Version: FormatVersion, RequestID: "node-rename", Type: RenameNode,
+		NodeRename: &NodeRename{NodeID: "node_00000000000000000000000000000001", RaftID: 11, Name: "sh-01"}}
+	submit(t, group, rename)
+	if registered, found, err := state.Node(11); err != nil || !found || registered.Name != "sh-01" {
+		t.Fatalf("renamed Node = %+v, %v, %v", registered, found, err)
+	}
+	duplicateName := Command{Version: FormatVersion, RequestID: "node-duplicate-name", Type: RegisterNode,
+		Node: &Node{NodeID: "node_00000000000000000000000000000002", RaftID: 14, Name: "sh-01",
+			RegionID: "us-west", Address: "127.0.0.1:10002"}}
+	submit(t, group, duplicateName)
+	if result, found, err := state.Result(duplicateName.RequestID); err != nil || !found || result.Error == "" {
+		t.Fatalf("duplicate Node name result = %+v, %v, %v", result, found, err)
+	}
+	second := duplicateName
+	second.RequestID, second.Node.Name = "node-2", "sh-02"
+	submit(t, group, second)
+	conflictingRename := Command{Version: FormatVersion, RequestID: "node-rename-conflict", Type: RenameNode,
+		NodeRename: &NodeRename{NodeID: node.Node.NodeID, RaftID: 11, Name: "sh-02"}}
+	submit(t, group, conflictingRename)
+	if result, found, err := state.Result(conflictingRename.RequestID); err != nil || !found || result.Error == "" {
+		t.Fatalf("conflicting Node rename result = %+v, %v, %v", result, found, err)
+	}
 	submit(t, group, Command{Version: FormatVersion, RequestID: "group-1", Type: RegisterGroup,
 		Group: &Group{GroupID: "data-1", StateKind: GroupStateCapability}})
 	if registered, found, err := state.Group("data-1"); err != nil || !found ||

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -105,15 +106,14 @@ func (bootstrapper *Bootstrapper) Reconcile(ctx context.Context, rangeID string)
 	if err := bootstrapper.host.Submit(raft.RootGroupID, encoded); err != nil {
 		return fmt.Errorf("submit Root Range activation: %w", err)
 	}
-	if _, err := bootstrapper.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if err := waitResult(ctx, func() (bool, string, error) {
+		if _, err := bootstrapper.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+			return false, "", err
+		}
+		result, found, err := bootstrapper.root.ResultForCommand(encoded)
+		return found, result.Error, err
+	}); err != nil {
 		return fmt.Errorf("confirm Root Range activation: %w", err)
-	}
-	result, found, err := bootstrapper.root.ResultForCommand(encoded)
-	if err != nil {
-		return err
-	}
-	if !found || result.Error != "" {
-		return fmt.Errorf("Root Range was not activated: found=%v error=%q", found, result.Error)
 	}
 	return nil
 }
@@ -142,18 +142,47 @@ func (owner *LocalOwner) EnsureInitialRange(ctx context.Context, descriptor root
 		if err := owner.host.Submit(descriptor.OwnerGroupID, command); err != nil {
 			return OwnerProof{}, fmt.Errorf("submit Owner Range Fence: %w", err)
 		}
+	}
+	var result capstate.Result
+	if err := waitResult(ctx, func() (bool, string, error) {
 		if _, err := owner.host.ReadIndex(ctx, descriptor.OwnerGroupID); err != nil {
-			return OwnerProof{}, fmt.Errorf("confirm installed Owner Range Fence: %w", err)
+			return false, "", err
 		}
-	}
-	result, found, err := owner.state.ResultForRange(requestID, descriptor)
-	if err != nil {
-		return OwnerProof{}, err
-	}
-	if !found || !result.Applied || result.Error != "" || result.Index == 0 {
-		return OwnerProof{}, fmt.Errorf("Owner Range Fence was not applied: found=%v error=%q", found, result.Error)
+		var found bool
+		var err error
+		result, found, err = owner.state.ResultForRange(requestID, descriptor)
+		if found && (!result.Applied || result.Index == 0) {
+			return true, "Owner Range Fence was not applied", err
+		}
+		return found, result.Error, err
+	}); err != nil {
+		return OwnerProof{}, fmt.Errorf("confirm installed Owner Range Fence: %w", err)
 	}
 	return OwnerProof{RequestID: requestID, AppliedIndex: result.Index}, nil
+}
+
+// ReadIndex can overtake a newly forwarded proposal. Keep the caller's
+// deadline and wait for the exact durable result, without changing RequestID.
+func waitResult(ctx context.Context, check func() (bool, string, error)) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		found, rejection, err := check()
+		if err != nil {
+			return err
+		}
+		if found {
+			if rejection != "" {
+				return errors.New(rejection)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func OwnerRequestID(descriptor rootstate.Range) string { return requestID("install", descriptor) }

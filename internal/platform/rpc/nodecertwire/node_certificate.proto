@@ -1,0 +1,19 @@
+syntax = "proto3";
+package dubi.internal.nodecertificate.v1;
+option go_package = "github.com/dubi-project/dubi/internal/platform/rpc/nodecertwire";
+
+// Private Node-only lifecycle protocol. The leaf and key to renew come from
+// verified mTLS, never a caller-provided CSR or enrollment grant.
+message RenewNodeRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+}
+message RenewNodeResponse {
+  string cluster_id = 1;
+  string node_id = 2;
+  uint64 raft_id = 3;
+  bytes certificate_pem = 4;
+}
+service NodeCertificateService {
+  rpc RenewNode(RenewNodeRequest) returns (RenewNodeResponse);
+}

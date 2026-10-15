@@ -1,0 +1,156 @@
+syntax = "proto3";
+package dubi.internal.data.v1;
+option go_package = "github.com/dubi-project/dubi/internal/platform/rpc/datawire";
+
+// This is a Node-authenticated development entry, not a tenant-facing API.
+message CreateDatasetRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string tenant_id = 4;
+  string dataset_id = 5;
+}
+message CreateDatasetResponse {
+  string range_id = 1;
+  string owner_group_id = 2;
+  uint64 root_index = 3;
+}
+message PutRecordRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string tenant_id = 4;
+  string dataset_id = 5;
+  bytes key = 6;
+  bytes value = 7;
+}
+message PutRecordResponse { uint64 applied_index = 1; }
+message GetRecordRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string tenant_id = 3;
+  string dataset_id = 4;
+  bytes key = 5;
+}
+message GetRecordResponse {
+  bool found = 1;
+  bytes value = 2;
+  uint64 confirmed_index = 3;
+}
+message CreateTenantTokenRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string tenant_id = 4;
+  uint64 ttl_seconds = 5;
+}
+message CreateTenantTokenResponse {
+  string credential_id = 1;
+  string token = 2;
+  int64 expires_unix = 3;
+}
+message RevokeTenantTokenRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string credential_id = 4;
+}
+message RevokeTenantTokenResponse { uint64 root_index = 1; }
+message AddVolumeRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string path = 3;
+}
+message AddVolumeResponse {
+  string volume_id = 1;
+  string path = 2;
+  string state = 3;
+}
+message DrainVolumeRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string volume_id = 3;
+}
+message DrainVolumeResponse {
+  string volume_id = 1;
+  string path = 2;
+  string state = 3;
+}
+message RemoveVolumeRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string volume_id = 3;
+}
+message RemoveVolumeResponse {
+  string volume_id = 1;
+  string path = 2;
+  string state = 3;
+}
+message CompactStoreRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  bool rewrite = 3;
+}
+message CompactStoreResponse {
+  uint64 scanned_packs = 1;
+  uint64 removed_packs = 2;
+  int64 reclaimed_bytes = 3;
+  bool rewritten = 4;
+}
+message LocalRepairStatusRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+}
+message LocalRepairIssue {
+  string group_id = 1;
+  string error = 2;
+}
+message LocalRepairStatusResponse {
+  bool worker_enabled = 1;
+  int64 last_check_unix = 2;
+  repeated LocalRepairIssue issues = 3;
+  uint32 total_issues = 4;
+  VolumeMigrationStatus volume_migration = 5;
+  repeated VolumeWriteIssue volume_write_errors = 6;
+  ResourceBudgetStatus maintenance_budget = 7;
+  uint64 geo_metadata_debt = 8;
+  uint64 geo_record_debt = 9;
+}
+message VolumeMigrationStatus {
+  bool active = 1;
+  string source_volume_id = 2;
+  string cursor = 3;
+  uint64 migrated = 4;
+  int64 started_unix = 5;
+  string last_error = 6;
+}
+message VolumeWriteIssue {
+  string volume_id = 1;
+  string error = 2;
+}
+message ResourceBudgetStatus {
+  uint64 limit_bytes = 1;
+  uint64 used_bytes = 2;
+  uint64 peak_bytes = 3;
+  uint64 rejected = 4;
+}
+service DataService {
+  rpc CreateDataset(CreateDatasetRequest) returns (CreateDatasetResponse);
+  rpc PutRecord(PutRecordRequest) returns (PutRecordResponse);
+  rpc GetRecord(GetRecordRequest) returns (GetRecordResponse);
+  // Node-authenticated administrative methods, never the Tenant data API.
+  rpc CreateTenantToken(CreateTenantTokenRequest) returns (CreateTenantTokenResponse);
+  rpc RevokeTenantToken(RevokeTenantTokenRequest) returns (RevokeTenantTokenResponse);
+  // Local-Node administrative mutation; the caller and endpoint identities
+  // must both match the Store whose path is being registered.
+  rpc AddVolume(AddVolumeRequest) returns (AddVolumeResponse);
+  // Drain and removal are explicit local-Node administrative mutations. Drain
+  // stops new writes but keeps reads; removal rejects any remaining Pack data.
+  rpc DrainVolume(DrainVolumeRequest) returns (DrainVolumeResponse);
+  rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
+  // Explicit local maintenance. rewrite=true relocates live records before
+  // collecting mixed Packs; both modes are bounded by the request context.
+  rpc CompactStore(CompactStoreRequest) returns (CompactStoreResponse);
+  // Last observed local repair errors, not a global coverage or durability proof.
+  rpc LocalRepairStatus(LocalRepairStatusRequest) returns (LocalRepairStatusResponse);
+}

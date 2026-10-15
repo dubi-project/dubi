@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"path/filepath"
 	"sync"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/dubi-project/dubi/internal/platform/storage/pebbleutil"
 	"go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
@@ -35,24 +33,43 @@ type Storage struct {
 	baseTerm  uint64
 	lastIndex uint64
 	closed    bool
+	release   func() error
+	identity  string
 }
 
 func Open(root string) (*Storage, error) {
-	db, err := pebbleutil.Open(filepath.Join(root, "dubi-raft"), &pebble.Options{Logger: pebbleutil.QuietLogger{}})
+	return OpenForGroup(root, "")
+}
+
+// OpenForGroup checks an already registered parent's log identity before any
+// initialization. Empty expectedIdentity delegates first-creation authorization
+// to the caller; production OpenGroup obtains it from the parent catalog.
+func OpenForGroup(root, expectedIdentity string) (*Storage, error) {
+	db, release, err := openRegisteredLog(root, expectedIdentity, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open Raft storage: %w", err)
 	}
 	storage := &Storage{
 		db:        db,
+		release:   release,
 		confState: &raftpb.ConfState{},
 		snapshot:  &raftpb.Snapshot{},
 	}
+	value, closer, err := db.Get(logIdentityKey)
+	if err != nil {
+		return nil, errors.Join(err, db.Close(), release())
+	}
+	storage.identity = string(value)
+	if err := closer.Close(); err != nil {
+		return nil, errors.Join(err, db.Close(), release())
+	}
 	if err := storage.recover(); err != nil {
-		_ = db.Close()
-		return nil, err
+		return nil, errors.Join(err, db.Close(), release())
 	}
 	return storage, nil
 }
+
+func (s *Storage) Identity() string { return s.identity }
 
 func (s *Storage) Close() error {
 	s.mu.Lock()
@@ -61,7 +78,7 @@ func (s *Storage) Close() error {
 		return nil
 	}
 	s.closed = true
-	if err := s.db.Close(); err != nil {
+	if err := errors.Join(s.db.Close(), s.release()); err != nil {
 		return fmt.Errorf("close Raft storage: %w", err)
 	}
 	return nil
@@ -103,7 +120,9 @@ func (s *Storage) Entries(lo, hi, maxSize uint64) ([]*raftpb.Entry, error) {
 	if lo == hi {
 		return nil, nil
 	}
-	entries := make([]*raftpb.Entry, 0, hi-lo)
+	// A long persisted log with a tiny maxSize must not allocate a pointer for
+	// every entry in the requested range before the byte limit is considered.
+	entries := make([]*raftpb.Entry, 0, min(hi-lo, 64))
 	var size uint64
 	for index := lo; index < hi; index++ {
 		entry := new(raftpb.Entry)
@@ -114,7 +133,7 @@ func (s *Storage) Entries(lo, hi, maxSize uint64) ([]*raftpb.Entry, error) {
 			return nil, err
 		}
 		entrySize := uint64(proto.Size(entry))
-		if len(entries) > 0 && size+entrySize > maxSize {
+		if len(entries) > 0 && (size >= maxSize || entrySize > maxSize-size) {
 			break
 		}
 		entries = append(entries, entry)
@@ -164,6 +183,37 @@ func (s *Storage) Snapshot() (*raftpb.Snapshot, error) {
 func (s *Storage) Save(hardState *raftpb.HardState, entries []*raftpb.Entry, snapshot *raftpb.Snapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.saveLocked(hardState, entries, snapshot, false)
+}
+
+// SaveLocalSnapshot compacts a captured, committed cut without rolling back
+// the current applied membership. While the image was being built, newer
+// membership entries may already have been applied and persisted. Its own
+// historical ConfState still belongs in Snapshot.Metadata for lagging peers.
+func (s *Storage) SaveLocalSnapshot(snapshot *raftpb.Snapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("Raft storage is closed")
+	}
+	if raft.IsEmptySnap(snapshot) || snapshot.GetMetadata().GetConfState() == nil {
+		return errors.New("invalid local Raft snapshot")
+	}
+	index := snapshot.GetMetadata().GetIndex()
+	if index > s.hardState.GetCommit() || index > s.lastIndex {
+		return errors.New("local snapshot cut is not durably committed")
+	}
+	term, err := s.term(index)
+	if err != nil {
+		return err
+	}
+	if term != snapshot.GetMetadata().GetTerm() {
+		return errors.New("local snapshot term differs from stored log")
+	}
+	return s.saveLocked(nil, nil, snapshot, true)
+}
+
+func (s *Storage) saveLocked(hardState *raftpb.HardState, entries []*raftpb.Entry, snapshot *raftpb.Snapshot, local bool) error {
 	if s.closed {
 		return errors.New("Raft storage is closed")
 	}
@@ -187,7 +237,9 @@ func (s *Storage) Save(hardState *raftpb.HardState, entries []*raftpb.Entry, sna
 			newLastIndex = newBaseIndex
 		}
 		newSnapshot = cloneSnapshot(snapshot)
-		newConfState = cloneConfState(metadata.GetConfState())
+		if !local {
+			newConfState = cloneConfState(metadata.GetConfState())
+		}
 	}
 
 	trimmed := entries
@@ -215,6 +267,11 @@ func (s *Storage) Save(hardState *raftpb.HardState, entries []*raftpb.Entry, sna
 
 	batch := s.db.NewBatch()
 	defer func() { _ = batch.Close() }()
+	if len(trimmed) > 0 || !raft.IsEmptySnap(snapshot) {
+		if err := batch.Set(groupStartedKey, []byte{1}, nil); err != nil {
+			return err
+		}
+	}
 	if !raft.IsEmptySnap(snapshot) {
 		if err := setProto(batch, snapshotKey, snapshot); err != nil {
 			return err

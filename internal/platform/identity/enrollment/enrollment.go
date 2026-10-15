@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +35,12 @@ const (
 )
 
 var regionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+
+// ValidateNodeMetadata lets orchestration reject deployment input before
+// allocating a Node identity. The managed TLS name remains automatic.
+func ValidateNodeMetadata(region, address string) error {
+	return validateMetadata(nodepki.DefaultServerName, region, address)
+}
 
 type Request struct {
 	Version    int    `json:"version"`
@@ -67,6 +72,25 @@ func StorePaths(store string) Paths {
 	directory := filepath.Join(store, DirectoryName)
 	return Paths{Directory: directory, Request: filepath.Join(directory, RequestName),
 		PrivateKey: filepath.Join(directory, PrivateKeyName)}
+}
+
+// LoadPrepared reads and validates an existing unbound request and its local
+// private-key binding. It never creates identities or changes metadata, and
+// returns no private material. A retry can therefore reuse its original
+// network intent without guessing today's interface or generating a new CSR.
+func LoadPrepared(store string) (identity.Identity, Request, error) {
+	value, err := identity.Load(store)
+	if err != nil {
+		return identity.Identity{}, Request{}, err
+	}
+	if value.Origin != identity.OriginJoin || value.ClusterID != "" {
+		return identity.Identity{}, Request{}, errors.New("prepared enrollment requires an unbound joining Node")
+	}
+	request, _, err := loadPrepared(store, value)
+	if err != nil {
+		return identity.Identity{}, Request{}, err
+	}
+	return value, request, nil
 }
 
 // Prepare creates a stable unbound identity and CSR, or verifies and returns
@@ -136,6 +160,17 @@ func EncodeRequest(request Request) ([]byte, error) {
 	return json.MarshalIndent(request, "", "  ")
 }
 
+// RequestPublicKey validates the complete signed request before exposing its
+// canonical public-key DER. Join transport authorization must match this key,
+// not only the NodeID/RaftID carried by a certificate.
+func RequestPublicKey(request Request) ([]byte, error) {
+	csr, err := validateRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	return x509.MarshalPKIXPublicKey(csr.PublicKey)
+}
+
 func DecodeRequest(encoded []byte) (Request, error) {
 	var request Request
 	if err := decodeStrict(encoded, &request); err != nil {
@@ -188,7 +223,13 @@ func Install(store string, bundle Bundle, now time.Time) (nodepki.Material, erro
 	if value.ClusterID != "" {
 		material, loadErr := nodepki.Load(store, value, bundle.ServerName, now)
 		if loadErr == nil {
-			_ = removePrepared(store)
+			if err := nodepki.ValidateEnrollmentRetry(material, value, bundle.ServerName,
+				[]byte(bundle.CACertificatePEM), []byte(bundle.CertificatePEM), now); err != nil {
+				return nodepki.Material{}, err
+			}
+			if err := removePrepared(store); err != nil {
+				return nodepki.Material{}, errors.Join(err, errors.New("remove completed enrollment request"))
+			}
 			return material, nil
 		}
 	}
@@ -318,12 +359,7 @@ func validateMetadata(serverName, region, address string) error {
 	if nodepki.ValidateServerName(serverName) != nil || !regionID.MatchString(region) {
 		return errors.New("enrollment requires a valid server name and RegionID")
 	}
-	host, port, err := net.SplitHostPort(address)
-	parsedPort, portErr := strconv.ParseUint(port, 10, 16)
-	if err != nil || strings.TrimSpace(host) == "" || portErr != nil || parsedPort == 0 {
-		return errors.New("enrollment advertise address must be host:port")
-	}
-	return nil
+	return ValidateNodeAddress(address)
 }
 
 func decodeStrict(encoded []byte, target any) error {

@@ -15,6 +15,9 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
+	"github.com/dubi-project/dubi/internal/platform/storage/pack"
+	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 const (
@@ -108,18 +111,43 @@ func (mux *Mux) handler(capabilityID string) capstate.Handler {
 // directory is the shared lookup boundary for Range and Capability RPCs; a
 // Group disappears from it as part of StateMachine.Close.
 type Runtime struct {
-	stateRoot string
-	mux       *Mux
+	stateRoot       string
+	mux             *Mux
+	packs           *pack.Pool
+	artifacts       *snapshot.Store
+	recoveryContext context.Context
 
 	mu     sync.RWMutex
 	states map[string]*capstate.State
 }
 
 func NewRuntime(stateRoot string, mux *Mux) (*Runtime, error) {
+	return NewRuntimeWithPacks(stateRoot, mux, nil)
+}
+
+// NewRuntimeWithPacks shares the node's mixed-capability Pool across all Groups.
+// Each Group owns its local reference index; the caller owns Pool lifetime.
+func NewRuntimeWithPacks(stateRoot string, mux *Mux, packs *pack.Pool) (*Runtime, error) {
 	if stateRoot == "" || mux == nil {
 		return nil, errors.New("capability state root and sealed Mux are required")
 	}
-	return &Runtime{stateRoot: stateRoot, mux: mux, states: make(map[string]*capstate.State)}, nil
+	return &Runtime{stateRoot: stateRoot, mux: mux, packs: packs, states: make(map[string]*capstate.State)}, nil
+}
+
+// NewRuntimeWithSnapshots enables the file-reference path only when the node
+// supplies durable shared artifacts and a lifetime context for recovery.
+// Cancel recovery on node shutdown, not on an individual client's deadline:
+// the Raft reference may already be committed when a client disconnects.
+func NewRuntimeWithSnapshots(stateRoot string, mux *Mux, packs *pack.Pool, artifacts *snapshot.Store, recoveryContext context.Context) (*Runtime, error) {
+	if artifacts == nil || recoveryContext == nil {
+		return nil, errors.New("snapshot-enabled runtime needs artifacts and recovery context")
+	}
+	runtime, err := NewRuntimeWithPacks(stateRoot, mux, packs)
+	if err != nil {
+		return nil, err
+	}
+	runtime.artifacts, runtime.recoveryContext = artifacts, recoveryContext
+	return runtime, nil
 }
 
 func (runtime *Runtime) Resolve(groupID string) (*capstate.State, bool) {
@@ -139,6 +167,11 @@ func (runtime *Runtime) NewState(ctx context.Context, descriptor rootstate.Group
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if runtime.recoveryContext != nil {
+		if err := runtime.recoveryContext.Err(); err != nil {
+			return nil, err
+		}
+	}
 	if descriptor.StateKind != rootstate.GroupStateCapability ||
 		raft.ValidateGroupID(descriptor.GroupID) != nil || descriptor.GroupID == raft.RootGroupID {
 		return nil, errors.New("invalid capability Group descriptor")
@@ -149,8 +182,8 @@ func (runtime *Runtime) NewState(ctx context.Context, descriptor rootstate.Group
 	if existing != nil {
 		return nil, fmt.Errorf("capability Group %q state is already open", descriptor.GroupID)
 	}
-	state, err := capstate.Open(filepath.Join(runtime.stateRoot, "dubi-capability-groups", descriptor.GroupID),
-		descriptor.GroupID, runtime.mux)
+	state, err := capstate.OpenWithPacks(filepath.Join(runtime.stateRoot, "dubi-capability-groups", descriptor.GroupID),
+		descriptor.GroupID, runtime.mux, runtime.packs)
 	if err != nil {
 		return nil, err
 	}
@@ -167,13 +200,45 @@ func (runtime *Runtime) NewState(ctx context.Context, descriptor rootstate.Group
 	}
 	runtime.states[descriptor.GroupID] = state
 	runtime.mu.Unlock()
-	return &managedState{Adapter: adapter, onClose: func() {
+	managed := &managedState{Adapter: adapter, onClose: func() {
 		runtime.mu.Lock()
 		if runtime.states[descriptor.GroupID] == state {
 			delete(runtime.states, descriptor.GroupID)
 		}
 		runtime.mu.Unlock()
-	}}, nil
+	}}
+	if runtime.artifacts != nil {
+		return &streamedState{managedState: managed, state: state, artifacts: runtime.artifacts, ctx: runtime.recoveryContext}, nil
+	}
+	return managed, nil
+}
+
+type streamedState struct {
+	*managedState
+	state     *capstate.State
+	artifacts *snapshot.Store
+	ctx       context.Context
+}
+
+var _ raft.SnapshotPreparer = (*streamedState)(nil)
+var _ raft.StateMachine = (*streamedState)(nil)
+
+func (state *streamedState) PrepareSnapshot() (*raft.PreparedSnapshot, error) {
+	if err := state.ctx.Err(); err != nil {
+		return nil, err
+	}
+	return state.state.PrepareSnapshotTo(state.artifacts)
+}
+
+func (state *streamedState) Restore(index uint64, data []byte, conf *raftpb.ConfState) error {
+	_, recognized, err := snapshot.DecodeReference(data)
+	if err != nil {
+		return err
+	}
+	if recognized {
+		return state.state.RestoreFrom(state.ctx, state.artifacts, index, data, conf)
+	}
+	return state.Adapter.Restore(index, data, conf)
 }
 
 func (runtime *Runtime) Register(registry *groupruntime.Registry) error {

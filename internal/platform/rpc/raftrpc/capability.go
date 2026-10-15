@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
@@ -52,8 +53,7 @@ func (server *CapabilityServer) Mutate(
 		return nil, status.Error(codes.ResourceExhausted, "routed capability command is empty or exceeds size limit")
 	}
 	command, err := routedstate.DecodeCommand(request.GetRoutedCommand())
-	if err != nil || command.Type != routedstate.Mutation || command.Target == nil ||
-		command.Target.OwnerGroupID != request.GetGroupId() {
+	if err != nil || !validCapabilityCommand(command, request.GetGroupId()) {
 		return nil, status.Error(codes.InvalidArgument, "invalid routed capability mutation")
 	}
 	state, found := server.states(request.GetGroupId())
@@ -61,17 +61,28 @@ func (server *CapabilityServer) Mutate(
 		return nil, status.Error(codes.NotFound, "capability Group is not hosted on this Node")
 	}
 	if err := server.backend.Submit(request.GetGroupId(), request.GetRoutedCommand()); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "submit capability mutation: %v", err)
+		return nil, mutationError("submit capability mutation", err, codes.Unavailable)
 	}
-	if _, err := server.backend.ReadIndex(ctx, request.GetGroupId()); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "confirm capability mutation: %v", err)
-	}
-	result, found, err := state.ResultForMutation(command.RequestID, *command.Target, command.Payload)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "read capability result: %v", err)
-	}
-	if !found {
-		return nil, status.Error(codes.Internal, "confirmed capability result is missing")
+	var result capstate.Result
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := server.backend.ReadIndex(ctx, request.GetGroupId()); err != nil {
+			return nil, status.Errorf(codes.Unavailable, "confirm capability mutation: %v", err)
+		}
+		var found bool
+		result, found, err = capabilityResult(state, command)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "read capability result: %v", err)
+		}
+		if found {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		case <-ticker.C:
+		}
 	}
 	groupStatus, err := server.backend.Status(request.GetGroupId())
 	if err != nil {
@@ -79,6 +90,33 @@ func (server *CapabilityServer) Mutate(
 	}
 	return &raftwire.CapabilityResult{Applied: result.Applied, Error: result.Error,
 		Value: result.Value, AppliedIndex: result.Index, LeaderRaftId: groupStatus.LeaderID}, nil
+}
+
+// validCapabilityCommand keeps the existing authenticated capability lane for
+// both opaque mutations and the platform-owned Geo metadata checkpoint. The
+// latter is still scoped to the destination Group and is applied by the
+// capability State's routed adapter; it cannot be used to write capability
+// data or bypass the local Region fence.
+func validCapabilityCommand(command routedstate.Command, groupID string) bool {
+	switch command.Type {
+	case routedstate.Mutation:
+		return command.Target != nil && command.Target.OwnerGroupID == groupID
+	case routedstate.MirrorGeo:
+		return command.GeoMetadata != nil && command.GeoMetadata.DestinationGroupID == groupID
+	default:
+		return false
+	}
+}
+
+func capabilityResult(state *capstate.State, command routedstate.Command) (capstate.Result, bool, error) {
+	switch command.Type {
+	case routedstate.Mutation:
+		return state.ResultForMutation(command.RequestID, *command.Target, command.Payload)
+	case routedstate.MirrorGeo:
+		return state.ResultForGeoMetadataMirror(command.RequestID, *command.GeoMetadata)
+	default:
+		return capstate.Result{}, false, errors.New("unsupported routed capability command")
+	}
 }
 
 func (server *CapabilityServer) Read(
@@ -163,6 +201,35 @@ func (capability *RemoteCapability) Mutate(ctx context.Context, encoded []byte) 
 	}
 	if response.GetAppliedIndex() == 0 {
 		return capstate.Result{}, errors.New("remote capability result has no applied index")
+	}
+	capability.client.observeLeader(capability.groupID, response.GetLeaderRaftId())
+	return capstate.Result{RequestID: command.RequestID, Index: response.GetAppliedIndex(),
+		Applied: response.GetApplied(), Error: response.GetError(), Value: response.GetValue()}, nil
+}
+
+// MirrorGeo submits one authenticated, destination-Group Geo metadata
+// checkpoint and waits until that Group has a durable Result. It uses the
+// same capability RPC transport as ordinary routed writes, but the server
+// accepts only the platform-owned MirrorGeo envelope and the local fence
+// check decides whether it is applied.
+func (capability *RemoteCapability) MirrorGeo(ctx context.Context, encoded []byte) (capstate.Result, error) {
+	command, err := routedstate.DecodeCommand(encoded)
+	if err != nil || command.Type != routedstate.MirrorGeo || command.GeoMetadata == nil ||
+		command.GeoMetadata.DestinationGroupID != capability.groupID {
+		return capstate.Result{}, errors.New("invalid remote Geo metadata mirror")
+	}
+	peer, err := capability.client.capabilityPeer(capability.target)
+	if err != nil {
+		return capstate.Result{}, err
+	}
+	response, err := peer.Mutate(ctx, &raftwire.CapabilityMutateRequest{
+		ClusterId: capability.client.options.ClusterID, GroupId: capability.groupID,
+		FromRaftId: capability.client.options.RaftID, ToRaftId: capability.target, RoutedCommand: encoded})
+	if err != nil {
+		return capstate.Result{}, err
+	}
+	if response.GetAppliedIndex() == 0 {
+		return capstate.Result{}, errors.New("remote Geo metadata result has no applied index")
 	}
 	capability.client.observeLeader(capability.groupID, response.GetLeaderRaftId())
 	return capstate.Result{RequestID: command.RequestID, Index: response.GetAppliedIndex(),

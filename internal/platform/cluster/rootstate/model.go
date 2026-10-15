@@ -8,37 +8,57 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 )
 
 const FormatVersion = 1
 
 const (
-	RegisterNode         = "register_node"
-	RegisterGroup        = "register_group"
-	RegisterTenant       = "register_tenant"
-	CreateDataset        = "create_dataset"
-	ActivateRange        = "activate_range"
-	PublishGroupMembers  = "publish_group_members"
-	PlanGroupMembers     = "plan_group_members"
-	CompleteGroupMembers = "complete_group_members"
+	RegisterNode               = "register_node"
+	RenameNode                 = "rename_node"
+	FenceNode                  = "fence_node"
+	RegisterGroup              = "register_group"
+	RegisterTenant             = "register_tenant"
+	CreateTenantCredential     = "create_tenant_credential"
+	RevokeTenantCredential     = "revoke_tenant_credential"
+	CreateDataset              = "create_dataset"
+	ActivateRange              = "activate_range"
+	PublishGroupMembers        = "publish_group_members"
+	PlanGroupMembers           = "plan_group_members"
+	CompleteGroupMembers       = "complete_group_members"
+	PublishEnrollmentAuthority = "publish_enrollment_authority"
+	SetRangePlacement          = "set_range_placement"
+	RetireRegionGroup          = "retire_region_group"
+	PlanRegionGroupRebuild     = "plan_region_group_rebuild"
 )
 
 const (
-	RangeStatePending    = "pending"
-	RangeStateActive     = "active"
-	GroupChangePending   = "pending"
-	GroupChangeCompleted = "completed"
+	RangeStatePending      = "pending"
+	RangeStateActive       = "active"
+	GroupChangePending     = "pending"
+	GroupChangeCompleted   = "completed"
+	AuthorityStateActive   = "active"
+	AuthorityStateDegraded = "degraded"
 )
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 var nodeIdentity = regexp.MustCompile(`^node_[0-9a-f]{32}$`)
 
 type Node struct {
-	NodeID   string `json:"node_id"`
-	RaftID   uint64 `json:"raft_id"`
+	NodeID string `json:"node_id"`
+	RaftID uint64 `json:"raft_id"`
+	// Name is an optional operator-facing label. It is never used as Node
+	// identity, a routing key, or an authorization principal.
+	Name     string `json:"name,omitempty"`
 	RegionID string `json:"region_id"`
 	Address  string `json:"address"`
+}
+
+type NodeRename struct {
+	NodeID string `json:"node_id"`
+	RaftID uint64 `json:"raft_id"`
+	Name   string `json:"name,omitempty"`
 }
 
 type Group struct {
@@ -65,15 +85,45 @@ type GroupMembership struct {
 	Members       []GroupMember `json:"members"`
 }
 
+// RegionGroupRetirement is the immutable authority cut recorded before a
+// future empty-Group reconstruction. It does not change Raft membership.
+type RegionGroupRetirement struct {
+	GroupID    string   `json:"group_id"`
+	RegionID   string   `json:"region_id"`
+	Generation uint64   `json:"generation"`
+	GroupEpoch uint64   `json:"group_epoch"`
+	FenceIndex uint64   `json:"fence_index"`
+	Nodes      []uint64 `json:"nodes"`
+	RetiredAt  uint64   `json:"retired_at"`
+}
+
+// RegionGroupRebuild is a Root-persisted, module-neutral target cut.
+type RegionGroupRebuild struct {
+	GroupID            string   `json:"group_id"`
+	RegionID           string   `json:"region_id"`
+	PreviousGeneration uint64   `json:"previous_generation"`
+	PreviousGroupEpoch uint64   `json:"previous_group_epoch"`
+	PreviousFenceIndex uint64   `json:"previous_fence_index"`
+	PreviousNodes      []uint64 `json:"previous_nodes"`
+	TargetGeneration   uint64   `json:"target_generation"`
+	TargetNodes        []uint64 `json:"target_nodes"`
+	PlannedAt          uint64   `json:"planned_at"`
+}
+
 // GroupChange is a persistent control task. Members is the desired final
 // ConfState projection, not a user-selected replica count.
 type GroupChange struct {
-	ChangeID       string        `json:"change_id"`
-	GroupID        string        `json:"group_id"`
-	ExpectedEpoch  uint64        `json:"expected_epoch"`
-	Members        []GroupMember `json:"members"`
-	State          string        `json:"state"`
-	CompletedEpoch uint64        `json:"completed_epoch,omitempty"`
+	ChangeID      string        `json:"change_id"`
+	GroupID       string        `json:"group_id"`
+	ExpectedEpoch uint64        `json:"expected_epoch"`
+	Members       []GroupMember `json:"members"`
+	State         string        `json:"state"`
+	// Maintenance is an explicit operator/member-removal change. It is not a
+	// replacement task and never authorizes adding a new member.
+	Maintenance      bool   `json:"maintenance,omitempty"`
+	CompletedEpoch   uint64 `json:"completed_epoch,omitempty"`
+	RegionID         string `json:"region_id,omitempty"`
+	GrowthGeneration uint64 `json:"growth_generation,omitempty"`
 }
 
 type GroupChangePlan struct {
@@ -81,6 +131,28 @@ type GroupChangePlan struct {
 	GroupID       string        `json:"group_id"`
 	ExpectedEpoch uint64        `json:"expected_epoch"`
 	Members       []GroupMember `json:"members"`
+	Maintenance   bool          `json:"maintenance,omitempty"`
+}
+
+// EnrollmentAuthorityPlan is the Root-authorized signer delegation cut. The
+// private signing material never enters Root; Root stores only the epoch and
+// the current majority of eligible authority Nodes.
+type EnrollmentAuthorityPlan struct {
+	ExpectedEpoch uint64   `json:"expected_epoch"`
+	Epoch         uint64   `json:"epoch"`
+	Members       []uint64 `json:"members"`
+	State         string   `json:"state"`
+	ReadyMembers  []uint64 `json:"ready_members,omitempty"`
+}
+
+// EnrollmentAuthority is the durable Root projection consumed by nodes when
+// deciding which current identities may issue a sealed signer transfer.
+type EnrollmentAuthority struct {
+	Epoch          uint64   `json:"epoch"`
+	Members        []uint64 `json:"members"`
+	State          string   `json:"state"`
+	ConfirmedIndex uint64   `json:"confirmed_index"`
+	ReadyMembers   []uint64 `json:"ready_members,omitempty"`
 }
 
 type GroupChangeCompletion struct {
@@ -90,6 +162,21 @@ type GroupChangeCompletion struct {
 
 type Tenant struct {
 	TenantID string `json:"tenant_id"`
+}
+
+// TenantCredential stores only a digest of a random application Token. The
+// plaintext Token is never a Root command, state value, snapshot or result.
+type TenantCredential struct {
+	CredentialID string `json:"credential_id"`
+	TenantID     string `json:"tenant_id"`
+	TokenSHA256  string `json:"token_sha256"`
+	CreatedUnix  int64  `json:"created_unix"`
+	ExpiresUnix  int64  `json:"expires_unix"`
+	RevokedIndex uint64 `json:"revoked_index,omitempty"`
+}
+
+type TenantCredentialRevocation struct {
+	CredentialID string `json:"credential_id"`
 }
 
 // Keyspace is an internal routing domain, not a user-facing resource or a
@@ -134,6 +221,22 @@ type RangeActivation struct {
 	OwnerAppliedIndex uint64 `json:"owner_applied_index"`
 }
 
+// RangeRegionPlacement binds one logical Range to the Region Group cohorts
+// that may hold its data. OwnerGroupID remains the current routing Owner; the
+// Region list is the durable cross-Region placement set used by Geo writes.
+type RangeRegionPlacement struct {
+	RegionID   string `json:"region_id"`
+	GroupID    string `json:"group_id"`
+	Generation uint64 `json:"generation"`
+}
+
+type RangePlacement struct {
+	RangeID      string                 `json:"range_id"`
+	RangeEpoch   uint64                 `json:"range_epoch"`
+	OwnerGroupID string                 `json:"owner_group_id"`
+	Regions      []RangeRegionPlacement `json:"regions"`
+}
+
 func (value Range) Keyspace() Keyspace {
 	return Keyspace{TenantID: value.TenantID, CapabilityID: value.CapabilityID, DatasetID: value.DatasetID}
 }
@@ -159,9 +262,29 @@ func ValidateCapabilityID(value string) error {
 	return nil
 }
 
+func ValidateTenantID(value string) error {
+	if !validID(value) {
+		return errors.New("invalid TenantID")
+	}
+	return nil
+}
+
 func ValidateRequestID(value string) error {
 	if !validID(value) {
 		return errors.New("invalid RequestID")
+	}
+	return nil
+}
+
+// ValidateNodeName accepts an empty label so unattended startup can leave the
+// operator-facing name unset. Non-empty labels use the same portable alphabet
+// and 128-byte bound as other DUBI identifiers.
+func ValidateNodeName(value string) error {
+	if value == "" {
+		return nil
+	}
+	if !validID(value) {
+		return errors.New("invalid Node name")
 	}
 	return nil
 }
@@ -182,17 +305,33 @@ func (value Range) Validate() error {
 // Command is an internal Root Group command, not a public capability API.
 // Exactly one payload matching Type must be present.
 type Command struct {
-	Version         int                    `json:"version"`
-	RequestID       string                 `json:"request_id"`
-	Type            string                 `json:"type"`
-	Node            *Node                  `json:"node,omitempty"`
-	Group           *Group                 `json:"group,omitempty"`
-	Tenant          *Tenant                `json:"tenant,omitempty"`
-	Dataset         *Dataset               `json:"dataset,omitempty"`
-	Activation      *RangeActivation       `json:"activation,omitempty"`
-	Membership      *GroupMembership       `json:"membership,omitempty"`
-	GroupPlan       *GroupChangePlan       `json:"group_plan,omitempty"`
-	GroupCompletion *GroupChangeCompletion `json:"group_completion,omitempty"`
+	Version             int                         `json:"version"`
+	RequestID           string                      `json:"request_id"`
+	Type                string                      `json:"type"`
+	Node                *Node                       `json:"node,omitempty"`
+	NodeRename          *NodeRename                 `json:"node_rename,omitempty"`
+	NodeFence           *NodeFenceRequest           `json:"node_fence,omitempty"`
+	Group               *Group                      `json:"group,omitempty"`
+	Tenant              *Tenant                     `json:"tenant,omitempty"`
+	TenantCredential    *TenantCredential           `json:"tenant_credential,omitempty"`
+	TenantRevocation    *TenantCredentialRevocation `json:"tenant_revocation,omitempty"`
+	Dataset             *Dataset                    `json:"dataset,omitempty"`
+	Activation          *RangeActivation            `json:"activation,omitempty"`
+	Membership          *GroupMembership            `json:"membership,omitempty"`
+	GroupPlan           *GroupChangePlan            `json:"group_plan,omitempty"`
+	GroupCompletion     *GroupChangeCompletion      `json:"group_completion,omitempty"`
+	JoinGrant           *JoinGrant                  `json:"join_grant,omitempty"`
+	JoinConsumption     *JoinGrantConsumption       `json:"join_consumption,omitempty"`
+	JoinRevocation      *JoinGrantRevocation        `json:"join_revocation,omitempty"`
+	RootJoinStart       *RootJoinStart              `json:"root_join_start,omitempty"`
+	RootJoinFinish      *RootJoinFinish             `json:"root_join_finish,omitempty"`
+	RegionPlan          *RegionCohortPlan           `json:"region_plan,omitempty"`
+	RegionConfirmation  *RegionCohortConfirmation   `json:"region_confirmation,omitempty"`
+	RegionGrowth        *RegionGrowthSeal           `json:"region_growth,omitempty"`
+	EnrollmentAuthority *EnrollmentAuthorityPlan    `json:"enrollment_authority,omitempty"`
+	RangePlacement      *RangePlacement             `json:"range_placement,omitempty"`
+	GroupRetirement     *RegionGroupRetirement      `json:"group_retirement,omitempty"`
+	GroupRebuild        *RegionGroupRebuild         `json:"group_rebuild,omitempty"`
 }
 
 type Result struct {
@@ -215,14 +354,89 @@ func (command Command) validate() error {
 	if command.Version != FormatVersion || !validID(command.RequestID) {
 		return errors.New("invalid Root command version or RequestID")
 	}
+	payloads := 0
+	for _, present := range []bool{command.Node != nil, command.NodeRename != nil, command.NodeFence != nil, command.Group != nil, command.Tenant != nil,
+		command.TenantCredential != nil, command.TenantRevocation != nil, command.Dataset != nil,
+		command.Activation != nil, command.Membership != nil, command.GroupPlan != nil, command.GroupCompletion != nil,
+		command.JoinGrant != nil, command.JoinConsumption != nil, command.JoinRevocation != nil,
+		command.RootJoinStart != nil, command.RootJoinFinish != nil, command.RegionPlan != nil, command.RegionConfirmation != nil, command.RegionGrowth != nil, command.EnrollmentAuthority != nil, command.RangePlacement != nil, command.GroupRetirement != nil, command.GroupRebuild != nil} {
+		if present {
+			payloads++
+		}
+	}
+	if payloads != 1 {
+		return errors.New("Root command requires exactly one payload")
+	}
 	switch command.Type {
+	case FenceNode:
+		if command.NodeFence == nil || !nodeIdentity.MatchString(command.NodeFence.NodeID) || command.NodeFence.RaftID == 0 {
+			return errors.New("invalid Node fence request")
+		}
+		return nil
+	case CreateTenantCredential:
+		if command.TenantCredential == nil {
+			return errors.New("create_tenant_credential requires credential payload")
+		}
+		if command.TenantCredential.RevokedIndex != 0 {
+			return errors.New("new Tenant credential cannot be revoked")
+		}
+		return command.TenantCredential.Validate()
+	case RevokeTenantCredential:
+		if command.TenantRevocation == nil || !validTenantCredentialID(command.TenantRevocation.CredentialID) {
+			return errors.New("invalid Tenant credential revocation")
+		}
+		return nil
+	case AuthorizeRegionGrowth:
+		if command.RegionGrowth == nil {
+			return errors.New("authorize_region_growth requires a seal")
+		}
+		return command.RegionGrowth.Validate()
+	case PlanRegionCohort:
+		if command.RegionPlan == nil {
+			return errors.New("plan_region_cohort requires Region plan")
+		}
+		return command.RegionPlan.validate()
+	case ConfirmRegionCohort:
+		if command.RegionConfirmation == nil {
+			return errors.New("confirm_region_cohort requires Region confirmation")
+		}
+		return command.RegionConfirmation.validate()
+	case BeginRootJoin:
+		if command.RootJoinStart == nil {
+			return errors.New("begin_root_join requires enrollment request")
+		}
+		if err := command.RootJoinStart.validate(); err != nil {
+			return err
+		}
+	case CompleteRootJoin:
+		if command.RootJoinFinish == nil || identity.ValidateJoinGrantID(command.RootJoinFinish.GrantID) != nil {
+			return errors.New("complete_root_join requires Grant identity")
+		}
+	case CreateJoinGrant:
+		if command.JoinGrant == nil || command.JoinGrant.Validate() != nil || command.JoinGrant.State != JoinGrantActive {
+			return errors.New("create_join_grant requires a valid active Join Grant")
+		}
+	case ConsumeJoinGrant:
+		value := command.JoinConsumption
+		if value == nil || identity.ValidateJoinGrantID(value.GrantID) != nil || !validDigest(value.RequestSHA256) || value.AuthorizedUnix <= 0 {
+			return errors.New("invalid Join Grant consumption")
+		}
+	case RevokeJoinGrant:
+		value := command.JoinRevocation
+		if value == nil || identity.ValidateJoinGrantID(value.GrantID) != nil || value.RevokedUnix <= 0 {
+			return errors.New("invalid Join Grant revocation")
+		}
 	case RegisterNode:
 		if command.Node == nil || command.Group != nil || command.Tenant != nil || command.Dataset != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
 			return errors.New("register_node requires only Node payload")
 		}
 		value := command.Node
-		if !nodeIdentity.MatchString(value.NodeID) || value.RaftID == 0 || !validID(value.RegionID) || strings.TrimSpace(value.Address) == "" || len(value.Address) > 1024 {
+		if !nodeIdentity.MatchString(value.NodeID) || value.RaftID == 0 || !validID(value.RegionID) || ValidateNodeName(value.Name) != nil || strings.TrimSpace(value.Address) == "" || len(value.Address) > 1024 {
 			return errors.New("invalid Node descriptor")
+		}
+	case RenameNode:
+		if command.NodeRename == nil || !nodeIdentity.MatchString(command.NodeRename.NodeID) || command.NodeRename.RaftID == 0 || ValidateNodeName(command.NodeRename.Name) != nil {
+			return errors.New("invalid Node rename")
 		}
 	case RegisterGroup:
 		if command.Group == nil || command.Node != nil || command.Tenant != nil || command.Dataset != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
@@ -291,6 +505,26 @@ func (command Command) validate() error {
 		if !validID(value.ChangeID) || raft.ValidateGroupID(value.GroupID) != nil || value.GroupID == raft.RootGroupID {
 			return errors.New("invalid Group membership completion")
 		}
+	case PublishEnrollmentAuthority:
+		if command.EnrollmentAuthority == nil {
+			return errors.New("publish_enrollment_authority requires authority payload")
+		}
+		return command.EnrollmentAuthority.validate()
+	case SetRangePlacement:
+		if command.RangePlacement == nil {
+			return errors.New("set_range_placement requires placement payload")
+		}
+		return command.RangePlacement.Validate()
+	case RetireRegionGroup:
+		if command.GroupRetirement == nil {
+			return errors.New("retire_region_group requires retirement payload")
+		}
+		return command.GroupRetirement.validateInput()
+	case PlanRegionGroupRebuild:
+		if command.GroupRebuild == nil {
+			return errors.New("plan_region_group_rebuild requires rebuild payload")
+		}
+		return command.GroupRebuild.validateInput()
 	default:
 		return fmt.Errorf("unsupported Root command %q", command.Type)
 	}

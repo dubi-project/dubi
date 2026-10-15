@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 )
 
 type JoiningControl interface {
-	PrepareJoining(ctx context.Context, groupID string, raftID uint64) error
+	PrepareJoining(ctx context.Context, task rootstate.GroupTaskReference, raftID uint64) error
 }
 
 type JoiningHost interface {
@@ -18,7 +19,7 @@ type JoiningHost interface {
 	AddGroup(groupID string, peers []uint64, joining bool, state raft.StateMachine) error
 }
 
-type StateFactory func(ctx context.Context, groupID string) (raft.StateMachine, error)
+type StateFactory func(ctx context.Context, task rootstate.GroupTaskReference) (raft.StateMachine, error)
 
 // JoinManager opens an empty local Group before its RaftID is proposed as a
 // Learner. The injected factory owns capability-specific state construction;
@@ -37,24 +38,31 @@ func NewJoinManager(host JoiningHost, raftID uint64, factory StateFactory) (*Joi
 	return &JoinManager{host: host, raftID: raftID, factory: factory}, nil
 }
 
-func (manager *JoinManager) PrepareJoining(ctx context.Context, groupID string, raftID uint64) error {
+func (manager *JoinManager) PrepareJoining(ctx context.Context, task rootstate.GroupTaskReference, raftID uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if raftID != manager.raftID || raft.ValidateGroupID(groupID) != nil || groupID == raft.RootGroupID {
+	if raftID != manager.raftID || task.Validate() != nil {
 		return errors.New("invalid local joining Group target")
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	groupID := task.GroupID
 	if manager.host.HasGroup(groupID) {
 		return nil
 	}
-	state, err := manager.factory(ctx, groupID)
+	state, err := manager.factory(ctx, task)
 	if err != nil {
 		return fmt.Errorf("create joining Group state: %w", err)
 	}
 	if state == nil {
 		return errors.New("joining Group State factory returned nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, state.Close())
 	}
 	if err := manager.host.AddGroup(groupID, nil, true, state); err != nil {
 		_ = state.Close()

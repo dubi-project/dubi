@@ -2,9 +2,11 @@ package routedstate
 
 import (
 	"bytes"
+	"encoding/json"
 	"reflect"
 	"testing"
 
+	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"go.etcd.io/raft/v3/raftpb"
@@ -20,6 +22,102 @@ type testMachine struct {
 	payload    []byte
 	calls      int
 	closed     bool
+}
+
+type testHandoffMachine struct{ *testMachine }
+
+func (m *testHandoffMachine) ApplyRegionHandoff(index uint64, id string, _ regionfence.HandoffCommand) error {
+	m.applied, m.requestID = index, id
+	m.calls++
+	return nil
+}
+
+func TestAdapterRegionHandoffIsExclusiveAndRequiresSupport(t *testing.T) {
+	i := regionfence.HandoffIntent{Previous: regionfence.Record{Fence: regionfence.Descriptor{RegionID: "west", GroupID: "data-1", Generation: 1, PlannedIndex: 100, GroupEpoch: 2, MembershipIndex: 1, Members: []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}}, RequestID: "fence", Index: 2}, Next: rootstate.RegionCohort{RegionID: "west", GroupID: "data-1", Generation: 2, PlannedIndex: 101, Nodes: []uint64{1, 2, 3, 4}, State: rootstate.RegionCohortPlanned}}
+	encoded, err := EncodeRegionHandoff("seal", regionfence.HandoffCommand{Action: regionfence.Seal, Intent: &i})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported, _ := New(&testMachine{})
+	if err := unsupported.ValidateCommand(encoded); err == nil {
+		t.Fatal("unsupported handoff passed proposal validation")
+	}
+	if err := unsupported.Apply(3, encoded); err == nil {
+		t.Fatal("unsupported handoff applied")
+	}
+	m := &testHandoffMachine{testMachine: &testMachine{}}
+	a, _ := New(m)
+	if err := a.ValidateCommand(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(3, encoded); err != nil || m.applied != 3 || m.calls != 1 {
+		t.Fatal(err, m)
+	}
+	command, _ := DecodeCommand(encoded)
+	for _, mutate := range []func(*Command){
+		func(c *Command) { c.Payload = []byte("payload") },
+		func(c *Command) { target := validTarget(); c.Target = &target },
+		func(c *Command) { c.Range = &rootstate.Range{} },
+		func(c *Command) { c.Fence = &i.Previous.Fence },
+		func(c *Command) { c.Handoff = nil },
+		func(c *Command) { c.Type = RegionFence; c.Fence = &i.Previous.Fence },
+		func(c *Command) {
+			c.Type = Mutation
+			target := validTarget()
+			c.Target = &target
+			c.Payload = []byte("payload")
+		},
+	} {
+		bad := command
+		mutate(&bad)
+		data, _ := json.Marshal(bad)
+		if err := a.Apply(4, data); err == nil || m.calls != 1 {
+			t.Fatal("mixed handoff reached state", err)
+		}
+	}
+}
+
+func TestAdapterRegionFenceCannotCarryCapabilityPayload(t *testing.T) {
+	d := regionfence.Descriptor{RegionID: "west", GroupID: "data-1", Generation: 1, PlannedIndex: 100, GroupEpoch: 2, MembershipIndex: 3,
+		Members: []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}}
+	encoded, err := EncodeRegionFence("barrier", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &testMachine{}
+	a, _ := New(m)
+	if err := a.Apply(9, encoded); err != nil || m.calls != 1 || m.applied != 9 || m.requestID != "barrier" {
+		t.Fatal(m, err)
+	}
+	c, err := DecodeCommand(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*Command){
+		func(c *Command) { c.Payload = []byte("business-data") },
+		func(c *Command) { target := validTarget(); c.Target = &target },
+		func(c *Command) { c.Range = &rootstate.Range{} },
+		func(c *Command) {
+			c.Type = Mutation
+			target := validTarget()
+			c.Target = &target
+			c.Payload = []byte("payload")
+		},
+		func(c *Command) { c.Fence = nil },
+	} {
+		bad := c
+		mutate(&bad)
+		data, _ := json.Marshal(bad)
+		if err := a.Apply(10, data); err == nil || m.calls != 1 {
+			t.Fatal("mixed envelope accepted", string(data), err)
+		}
+	}
+}
+
+func (machine *testMachine) ApplyRegionFence(index uint64, requestID string, _ regionfence.Descriptor) error {
+	machine.applied, machine.requestID = index, requestID
+	machine.calls++
+	return nil
 }
 
 func (machine *testMachine) AppliedIndex() uint64 { return machine.applied }

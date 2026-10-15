@@ -28,6 +28,8 @@ type sharedMembership struct {
 	conf     *raftpb.ConfState
 	leader   uint64
 	prepared map[uint64]bool
+	index    uint64
+	term     uint64
 }
 
 type membershipBackend struct {
@@ -40,7 +42,10 @@ type membershipJoiner struct {
 	shared *sharedMembership
 }
 
-func (joiner *membershipJoiner) PrepareJoining(_ context.Context, _ string, raftID uint64) error {
+func (joiner *membershipJoiner) PrepareJoining(_ context.Context, task rootstate.GroupTaskReference, raftID uint64) error {
+	if err := task.Validate(); err != nil {
+		return err
+	}
 	if raftID != joiner.local {
 		return errors.New("joining request targeted another Node")
 	}
@@ -79,41 +84,51 @@ func (backend *membershipBackend) Status(string) (raft.GroupStatus, error) {
 	if backend.shared.leader == backend.local {
 		role = etcdraft.StateLeader
 	}
-	return raft.GroupStatus{RaftID: backend.local, LeaderID: backend.shared.leader, Role: role}, nil
+	return raft.GroupStatus{RaftID: backend.local, LeaderID: backend.shared.leader, Role: role, Term: backend.shared.term}, nil
 }
-func (backend *membershipBackend) AddLearner(_ string, raftID uint64) error {
+func (backend *membershipBackend) MembershipCut(string) (raft.MembershipCut, error) {
 	backend.shared.mu.Lock()
 	defer backend.shared.mu.Unlock()
-	if !backend.shared.prepared[raftID] {
-		return errors.New("target Group was not prepared")
+	return raft.MembershipCut{Index: backend.shared.index, Conf: proto.Clone(backend.shared.conf).(*raftpb.ConfState)}, nil
+}
+func (backend *membershipBackend) ChangeMembership(_ string, expected raft.MembershipCut, raftID uint64, operation raftpb.ConfChangeType) error {
+	backend.shared.mu.Lock()
+	defer backend.shared.mu.Unlock()
+	if expected.Index != backend.shared.index || !proto.Equal(expected.Conf, backend.shared.conf) {
+		return raft.ErrMembershipChanged
 	}
-	backend.shared.conf.Learners = append(backend.shared.conf.Learners, raftID)
+	switch operation {
+	case raftpb.ConfChangeType_ConfChangeAddLearnerNode:
+		if !backend.shared.prepared[raftID] {
+			return errors.New("target Group was not prepared")
+		}
+		backend.shared.conf.Learners = append(backend.shared.conf.Learners, raftID)
+	case raftpb.ConfChangeType_ConfChangeAddNode:
+		backend.shared.conf.Learners = withoutRaftID(backend.shared.conf.Learners, raftID)
+		backend.shared.conf.Voters = append(backend.shared.conf.Voters, raftID)
+	case raftpb.ConfChangeType_ConfChangeRemoveNode:
+		backend.shared.conf.Learners = withoutRaftID(backend.shared.conf.Learners, raftID)
+		backend.shared.conf.Voters = withoutRaftID(backend.shared.conf.Voters, raftID)
+	default:
+		return errors.New("unsupported test mutation")
+	}
+	backend.shared.index++
 	return nil
 }
-func (backend *membershipBackend) PromoteLearner(_ string, raftID uint64) error {
-	backend.shared.mu.Lock()
-	defer backend.shared.mu.Unlock()
-	backend.shared.conf.Learners = withoutRaftID(backend.shared.conf.Learners, raftID)
-	backend.shared.conf.Voters = append(backend.shared.conf.Voters, raftID)
-	return nil
-}
-func (backend *membershipBackend) RemoveMember(_ string, raftID uint64) error {
-	backend.shared.mu.Lock()
-	defer backend.shared.mu.Unlock()
-	backend.shared.conf.Learners = withoutRaftID(backend.shared.conf.Learners, raftID)
-	backend.shared.conf.Voters = withoutRaftID(backend.shared.conf.Voters, raftID)
-	return nil
-}
-func (backend *membershipBackend) TransferLeadership(
-	_ context.Context, _ string, target uint64,
+func (backend *membershipBackend) TransferLeadershipFenced(
+	_ context.Context, _ string, target uint64, expected raft.MembershipCut, term uint64,
 ) (raft.GroupStatus, error) {
 	backend.shared.mu.Lock()
 	defer backend.shared.mu.Unlock()
+	if expected.Index != backend.shared.index || !proto.Equal(expected.Conf, backend.shared.conf) || term != backend.shared.term {
+		return raft.GroupStatus{}, raft.ErrMembershipChanged
+	}
 	if !slices.Contains(backend.shared.conf.Voters, target) {
 		return raft.GroupStatus{}, errors.New("target is not a Voter")
 	}
 	backend.shared.leader = target
-	return raft.GroupStatus{RaftID: backend.local, LeaderID: target, Role: etcdraft.StateFollower}, nil
+	backend.shared.term++
+	return raft.GroupStatus{RaftID: backend.local, LeaderID: target, Role: etcdraft.StateFollower, Term: backend.shared.term}, nil
 }
 
 func TestRoutedMembershipControlFollowsNewLeaderBeforeRootPublication(t *testing.T) {
@@ -134,12 +149,17 @@ func TestRoutedMembershipControlFollowsNewLeaderBeforeRootPublication(t *testing
 		return nil
 	}
 	shared := &sharedMembership{conf: &raftpb.ConfState{Voters: []uint64{leaderID}},
-		leader: leaderID, prepared: make(map[uint64]bool)}
+		leader: leaderID, prepared: make(map[uint64]bool), index: 1, term: 1}
+	root, err := rootstate.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
 	directory := NewStaticDirectory()
 	for _, raftID := range []uint64{leaderID, newLeaderID} {
 		backend := &membershipBackend{local: raftID, shared: shared}
 		server, err := NewMembershipServer(clusterID, raftID, backend,
-			&membershipJoiner{local: raftID, shared: shared}, authorize)
+			&membershipJoiner{local: raftID, shared: shared}, root, authorize)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,18 +179,18 @@ func TestRoutedMembershipControlFollowsNewLeaderBeforeRootPublication(t *testing
 		}
 	}
 
-	root, err := rootstate.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer root.Close()
 	rootControl := &directRootControl{state: root}
 	for _, node := range []rootstate.Node{
 		{NodeID: fmt.Sprintf("node_%032x", leaderID), RaftID: leaderID, RegionID: "r1", Address: "n1"},
 		{NodeID: fmt.Sprintf("node_%032x", newLeaderID), RaftID: newLeaderID, RegionID: "r1", Address: "n3"},
+		{NodeID: fmt.Sprintf("node_%032x", clientID), RaftID: clientID, RegionID: "r1", Address: "caller"},
 	} {
 		applyMembershipRoot(t, rootControl, rootstate.Command{Version: 1,
 			RequestID: fmt.Sprintf("node-%d", node.RaftID), Type: rootstate.RegisterNode, Node: &node})
+	}
+	rootControl.index++
+	if err := root.ApplyMembership(rootControl.index, &raftpb.ConfState{Voters: []uint64{leaderID}, Learners: []uint64{newLeaderID, clientID}}); err != nil {
+		t.Fatal(err)
 	}
 	applyMembershipRoot(t, rootControl, rootstate.Command{Version: 1, RequestID: "group-data",
 		Type:  rootstate.RegisterGroup,
