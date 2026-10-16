@@ -85,7 +85,7 @@ func TestManagedRegionalGrowthAfterExplicitRemovalAndFreshJoin(t *testing.T) {
 					progress, found, perr := s.Runtime.Root.RegionProgress(groupID)
 					group, gfound, gerr := s.Runtime.Root.Group(groupID)
 					fence := "closed"
-					if state, ok := s.Runtime.Capabilities.Resolve(groupID); ok {
+					if state, ok := s.Runtime.Engines.Resolve(groupID); ok {
 						if view, ferr := state.RegionFence(); ferr == nil {
 							fence = fmt.Sprintf("active=%v membership=%d handoff=%+v", view.Active, view.MembershipIndex, view.Handoff)
 						}

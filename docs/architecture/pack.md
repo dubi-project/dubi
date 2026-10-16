@@ -1,10 +1,10 @@
 # 本地 Pack 与集合管理
 
-`internal/platform/storage/pack` 提供单 Pack 容器，以及每个 Volume 统一的持久集合管理和自动滚动。它依赖已打开的 Volume Registry，不直接接受磁盘路径，也不提供新的用户配置项。集合管理与带预约的多卷 Pool 已由 Node Runtime 装配并负责关闭，并接入通用 capstate 大值事务；内置 `record` 能力已经可经 Node 认证的开发验证入口写入，面向租户的公开数据 API 尚未实现。
+`internal/platform/storage/pack` 提供单 Pack 容器，以及每个 Volume 统一的持久集合管理和自动滚动。它依赖已打开的 Volume Registry，不直接接受磁盘路径，也不提供新的用户配置项。集合管理与带预约的多卷 Pool 已由 Node Runtime 装配并负责关闭，并接入通用 enginestate 大值事务；内置 `record` 能力已经可经 Node 认证的开发验证入口写入，面向租户的公开数据 API 尚未实现。
 
 ## 所有权与接口
 
-每个 Pack 绑定 `StoreID / VolumeID / PackID`，不绑定 Capability。PackID 自动随机生成；一个 Pack 可以混放不同 Capability、Tenant、Dataset 或 Range 的记录，不引入 File 的 Chunk、Block 或 CID。每条记录保存合法非空 CapabilityID、非空 TenantID、非空不透明 Key 和不透明 Payload；Dataset、Range、逻辑版本及删除语义由能力编码和索引管理。
+每个 Pack 绑定 `StoreID / VolumeID / PackID`，不绑定 Engine。PackID 自动随机生成；一个 Pack 可以混放不同 Engine、Tenant、Dataset 或 Range 的记录，不引入 File 的 Chunk、Block 或 CID。每条记录保存合法非空 EngineID、非空 TenantID、非空不透明 Key 和不透明 Payload；Dataset、Range、逻辑版本及删除语义由能力编码和索引管理。
 
 - `Create(registry, volumeID, targetSize)`：在指定活动卷创建 Pack，target 为零使用 512 MiB。
 - `Open(...)`：只打开已有 Pack，验证所有权和已提交记录，恢复未提交尾部；当前需要活动卷。
@@ -14,18 +14,18 @@
 
 同一个 Pack 只允许一个打开句柄，句柄内操作串行。Scan 回调不得重入该 Pack 或其 Registry。Volume 的 `WithVolume` 在操作期间持有登记锁、验证并固定卷根目录；路径缺失、介质标记变化、Pack 目录/数据文件替换、提交边界丢失或改变都拒绝继续访问。访问受 `os.Root` 目录边界限制。关闭 Registry 后旧 Pack 不可继续操作；正常关停应先关闭 Pack。
 
-这些校验防止正常故障/误操作造成静默重建，不把拥有本机文件系统写权限的恶意进程视作可防御边界。Location 和记录中的 Capability/Tenant 归属字段也不是授权凭据；入口鉴权、精确索引匹配和业务隔离仍由能力及路由层保证。Read 返回归属信息供上层核对，不能仅持有 Location 就绕过能力或 Tenant 授权。
+这些校验防止正常故障/误操作造成静默重建，不把拥有本机文件系统写权限的恶意进程视作可防御边界。Location 和记录中的 Engine/Tenant 归属字段也不是授权凭据；入口鉴权、精确索引匹配和业务隔离仍由能力及路由层保证。Read 返回归属信息供上层核对，不能仅持有 Location 就绕过能力或 Tenant 授权。
 
 ## 文件与提交边界
 
-每个 Volume 统一使用一个 `packs/` 目录，所有能力的记录共用当前 Pack 顺序追加，不按 Capability 新建目录或切换 Pack。一个 Pack 有两个持久文件，文件数随 Pack 数量而不是记录数增长：
+每个 Volume 统一使用一个 `packs/` 目录，所有能力的记录共用当前 Pack 顺序追加，不按 Engine 新建目录或切换 Pack。一个 Pack 有两个持久文件，文件数随 Pack 数量而不是记录数增长：
 
 | 文件 | 内容 |
 | --- | --- |
 | `<PackID>.pack` | 1024 字节版本化头，绑定所有权和目标大小；之后顺序存放记录。 |
 | `<PackID>.state` | 256 字节原子检查点，包含 PackID、已提交末尾、记录数及 Sealed 状态。 |
 
-固定头及检查点为带 magic、长度、填零和 CRC32C 的 JSON 编码。记录头为 28 字节：`DPR2`、Capability/Tenant/Key/Payload 长度（各 uint32 大端）、内容 CRC32C、头部 CRC32C；随后为四段连续字节。内容校验覆盖 Capability、Tenant、Key 和 Payload，不只覆盖载荷。CRC 用于检测偶发损坏，不提供抗篡改认证。
+固定头及检查点为带 magic、长度、填零和 CRC32C 的 JSON 编码。记录头为 28 字节：`DPR2`、Engine/Tenant/Key/Payload 长度（各 uint32 大端）、内容 CRC32C、头部 CRC32C；随后为四段连续字节。内容校验覆盖 Engine、Tenant、Key 和 Payload，不只覆盖载荷。CRC 用于检测偶发损坏，不提供抗篡改认证。
 
 追加顺序是：完整记录写入 → 数据文件 fsync → 临时检查点写入并 fsync → 原子替换检查点 → 目录 fsync → 返回 Location。开始修改后的任何 IO 失败使句柄失效，必须关闭并重新打开。报错或进程退出不表示写入一定没发生：检查点可能已经发布；上层必须用稳定请求 ID/逻辑索引处理不确定结果，不能假定底座自动去重。
 
@@ -35,7 +35,7 @@
 
 ## 集合清单与自动滚动
 
-Collection 是本地文件管理器，不是新的集群路由、授权或故障域概念。一份集合固定归属一个 Store 和 Volume，统一接收全部 Capability 的记录；不跨卷分配数据。Capability 不进入集合身份、Pack 头或物理 Location，而是每条 Record 的字段。它提供 `InitializeCollection`、`OpenCollection`、`Append`、`Read`、`Scan`、`Seal` 和 `Close`。上层通过 Collection 追加记录，不再自行创建/切换 Pack。
+Collection 是本地文件管理器，不是新的集群路由、授权或故障域概念。一份集合固定归属一个 Store 和 Volume，统一接收全部 Engine 的记录；不跨卷分配数据。Engine 不进入集合身份、Pack 头或物理 Location，而是每条 Record 的字段。它提供 `InitializeCollection`、`OpenCollection`、`Append`、`Read`、`Scan`、`Seal` 和 `Close`。上层通过 Collection 追加记录，不再自行创建/切换 Pack。
 
 集合首次初始化只接受空的 `packs/` 目录（允许自身登记锁及中断留下的清单临时文件）。不自动收编既有 standalone Pack。target 为零时首次使用 512 MiB，重启则沿用已保存值；显式 target 与保存值不一致时拒绝，不能借重复初始化替换配置或历史文件。CollectionID、PackID 都由内部生成，无需用户填写。
 
@@ -61,7 +61,7 @@ Collection 是本地文件管理器，不是新的集群路由、授权或故障
 
 Node Runtime 持有一个 `pack.Pool`，提供内部 `Append(ctx, record)`、`Read(location)`、`WriteErrors()` 和 `Close()`；先关闭 Group，再关闭 Pool，最后释放 Volume Registry。Pool 启动不创建 Pack 文件、不要求全部卷健康；集合按实际访问延迟打开。直接的 Pack/Collection 是低层原语，不会自行预约；后续能力的普通 Pack 写入应走 Pool。
 
-Registry 在同一把锁内校验候选卷生命周期/介质标记、固定目录、通过目录描述符读取设备号和 statfs 并记账。默认保留 `max(1 GiB, TotalBytes / 20)`，可预约量为 `max(0, BavailBytes - 安全保留 - 同文件系统未释放预约)`。只选择健康 Active 卷，按可预约字节最多优先、并列时按登记顺序轮转。选择不使用 Capability；同卷的各能力仍共享当前 Pack。
+Registry 在同一把锁内校验候选卷生命周期/介质标记、固定目录、通过目录描述符读取设备号和 statfs 并记账。默认保留 `max(1 GiB, TotalBytes / 20)`，可预约量为 `max(0, BavailBytes - 安全保留 - 同文件系统未释放预约)`。只选择健康 Active 卷，按可预约字节最多优先、并列时按登记顺序轮转。选择不使用 Engine；同卷的各能力仍共享当前 Pack。
 
 预约按文件系统设备号共享，同一文件系统上的多个目录不能各自许诺全部空闲容量。同一轮观察值不同则使用较小的可用空间、较大的保留线。设备号不是完整的物理故障域或存储池拓扑：APFS 共享容器、精简配置、配额等可能有额外限制，本阶段不承诺识别它们。
 
@@ -79,15 +79,15 @@ Pool 不在一个失败请求内自动跨卷重试，因为错误可能发生在
 
 不同能力可以有各自的保留和过期规则，但作用于记录而不是整个 Pack。后续 GC/Compaction 必须综合所有记录的活性与快照/备份保护，不得因单一能力过期而删除整个混合 Pack。混写不改变能力索引的逻辑隔离，也不自动实现删除、TTL 或跨能力事务。
 
-本次将 Pack 头版本升为 2（`DUBIPK02`）、集合清单/身份格式升为 2（`DUBICS02` / `DUBICI02`），记录改用 `DPR2`；检查点格式未改变。旧开发版的 `packs-<CapabilityID>` / `DUBI_PACKS_ID-<CapabilityID>` 布局会在创建新文件之前明确拒绝，旧 Pack 头和旧清单也不能当作新格式打开。不自动移动、转换或删除旧数据；如已有旧开发格式数据，需要单独验证的显式迁移，本次未实现迁移工具。
+本次将 Pack 头版本升为 2（`DUBIPK02`）、集合清单/身份格式升为 2（`DUBICS02` / `DUBICI02`），记录改用 `DPR2`；检查点格式未改变。旧开发版的 `packs-<EngineID>` / `DUBI_PACKS_ID-<EngineID>` 布局会在创建新文件之前明确拒绝，旧 Pack 头和旧清单也不能当作新格式打开。不自动移动、转换或删除旧数据；如已有旧开发格式数据，需要单独验证的显式迁移，本次未实现迁移工具。
 
 默认目标为 512 MiB，建议 256 MiB–1 GiB，内部 API 允许小目标用于测试，目标硬上限 1 GiB。目标包含文件头；最后一条完整记录达到或越过目标时，与该条记录一起持久封存。单 Pack API 的后续追加返回 `ErrSealed`；Collection API 自动滚动到下一 Pack。
 
-当前单条载荷上限 64 MiB、Key 上限 64 KiB、Tenant 标记上限 256 字节、Capability 标记上限 128 字节。因此 Pack 数据文件大小不会超过目标加一条最大编码记录。Append/Read/Scan 的单条记录使用有界内存，尚无大对象流式 API；能力需自行切分更大载荷。不同能力可以有不同编码，不要求统一业务记录格式。
+当前单条载荷上限 64 MiB、Key 上限 64 KiB、Tenant 标记上限 256 字节、Engine 标记上限 128 字节。因此 Pack 数据文件大小不会超过目标加一条最大编码记录。Append/Read/Scan 的单条记录使用有界内存，尚无大对象流式 API；能力需自行切分更大载荷。不同能力可以有不同编码，不要求统一业务记录格式。
 
 每次追加都同步数据及检查点，是先保证正确性的实现；尚无批量提交/流水线。`WithVolume` 也会串行同 Registry 的存储操作，后续需要在保留关闭/Drain 屏障的前提下改为每卷引用与 IO 调度，当前不作吞吐承诺。
 
-通用 capstate 已实现“大值先同步 Pack，再原子提交本地引用/result/applied”的 Raft Apply 路径，以及不携带物理位置的逻辑快照，详见 [状态机与 Pack 提交边界](pack-state.md)。Pack/Pool 本身仍不负责请求去重或逻辑索引。
+通用 enginestate 已实现“大值先同步 Pack，再原子提交本地引用/result/applied”的 Raft Apply 路径，以及不携带物理位置的逻辑快照，详见 [状态机与 Pack 提交边界](pack-state.md)。Pack/Pool 本身仍不负责请求去重或逻辑索引。
 
 尚未实现：混合存活 Pack 的重写式 Compaction、其它持久引擎的统一准入、具体业务索引、跨卷搬迁、安全移除及快照/备份资源登记。当前 GC 只回收整 Pack 已无索引引用的物理文件，不按单一能力或 TTL 猜测删除。Pack 的本地 fsync 确认不等于 Group 已提交，也不等于多数节点/多数区域耐久确认。不能把单 Pack 检查点或集合清单当作整节点或集群恢复点。
 
@@ -95,7 +95,7 @@ Pool 不在一个失败请求内自动跨卷重试，因为错误可能发生在
 
 预约测试覆盖同文件系统共用预算、严格保留线、容量变化复验、并发不可超额、缺失/Draining 卷排除、介质变化拒绝、复制句柄重复释放及关闭后释放。Pool 测试覆盖多卷选择、跨能力同卷混写、精确位置重读、失卷降级、写错误不跨卷重试、取消不创建文件、低空间读与 Pending 延后创建；Node Runtime 测试覆盖 Pool 生命周期、关闭锁释放和重启读取。
 
-跨能力测试验证 File/Record/Message/Search/Cache 等在同一个 Pack 中连续追加，使用相同 Tenant 和 Key 时仍保留各自归属与载荷；覆盖混合滚动、重启和未提交尾部恢复。Capability 字节参与 CRC32C，读取与启动校验还验证其标识格式。旧目录布局及旧文件格式拒绝测试确认原文件不被改写，也不会创建空替代目录。
+跨能力测试验证 File/Record/Message/Search/Cache 等在同一个 Pack 中连续追加，使用相同 Tenant 和 Key 时仍保留各自归属与载荷；覆盖混合滚动、重启和未提交尾部恢复。Engine 字节参与 CRC32C，读取与启动校验还验证其标识格式。旧目录布局及旧文件格式拒绝测试确认原文件不被改写，也不会创建空替代目录。
 
 集合测试覆盖自动滚动、跨 Pack 稳定位置读取/顺序扫描、持久目标与身份、显式封存、并发滚动、排他打开、绕过清单拒绝、未知文件不收编、清单/标记/锁/整目录丢失不重建、非法清单与异常 Pending 拒绝。子进程分别在 Pending 已同步、头部部分写入、空 Pack 已完成、清单已发布、记录持久但响应未返回五个阶段退出，验证同 ID 恢复及已确认数据保留。
 

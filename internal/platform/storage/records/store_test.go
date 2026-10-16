@@ -533,7 +533,7 @@ func TestRecordRepairExistingSyncUncertaintyResolvesOnReopen(t *testing.T) {
 }
 
 func TestRecordPhysicalVerificationRejectsCorruption(t *testing.T) {
-	for _, kind := range []string{"tenant", "capability", "key", "payload", "missing", "crc"} {
+	for _, kind := range []string{"tenant", "engine", "key", "payload", "missing", "crc"} {
 		t.Run(kind, func(t *testing.T) {
 			s, p := testStore(t)
 			d := descriptor(t, "key", "data")
@@ -543,8 +543,8 @@ func TestRecordPhysicalVerificationRejectsCorruption(t *testing.T) {
 			switch kind {
 			case "tenant":
 				r.TenantID = "other"
-			case "capability":
-				r.CapabilityID = "file"
+			case "engine":
+				r.EngineID = "file"
 			case "key":
 				r.Key = []byte("wrong")
 			case "payload":

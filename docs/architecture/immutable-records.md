@@ -1,19 +1,19 @@
 # 不可变数据记录与本地持有校验
 
-`internal/platform/storage/records` 是模块无关的本地存储原语，已接入正式 Node Runtime 的初始化、启动恢复及关闭生命周期。它使用节点既有共享 `pack.Pool`，不引入 File/CID、Replica 数、Capability 专属目录或 Pack。capstate 已提供独立的权威引用事务接口；认证远端逐条持有观察、主动发送及拉取数据已接通。区域扩容时新增节点的单次自动补齐已接入确认路径；预发布物理多数准备及发布后复核已经作为内部原语接通，但持久多数确认尚未接通。没有新增部署参数，也没有迁移已有数据。
+`internal/platform/storage/records` 是模块无关的本地存储原语，已接入正式 Node Runtime 的初始化、启动恢复及关闭生命周期。它使用节点既有共享 `pack.Pool`，不引入 File/CID、Replica 数、Engine 专属目录或 Pack。enginestate 已提供独立的权威引用事务接口；认证远端逐条持有观察、主动发送及拉取数据已接通。区域扩容时新增节点的单次自动补齐已接入确认路径；预发布物理多数准备及发布后复核已经作为内部原语接通，但持久多数确认尚未接通。没有新增部署参数，也没有迁移已有数据。
 
 ## 为什么不能只看 Result 或 applied index
 
-capstate 的 Result 证明某次命令已执行，不证明当时写入的所有旧值仍可寻址。逻辑键后续覆盖或删除会替换其当前值索引；旧的成功 Result、Raft 提交位置、在线成员或区域 fence 都不能据此证明旧内容还在。
+enginestate 的 Result 证明某次命令已执行，不证明当时写入的所有旧值仍可寻址。逻辑键后续覆盖或删除会替换其当前值索引；旧的成功 Result、Raft 提交位置、在线成员或区域 fence 都不能据此证明旧内容还在。
 
-因此，物理持有检查必须针对精确且不可变的数据身份。当前 `Descriptor` 包含完整 Keyspace（Tenant、Capability、Dataset）、来源 Group、模块不透明 Key、字节数和规范小写 SHA-256。`RecordID` 对带版本域分隔及长度前缀的完整描述计算 SHA-256。同键不同内容具有不同身份；不同 Tenant、Capability、Dataset 不做跨归属去重。来源 Group 不表示当前 Range Owner，也不要求持有数据的远端 Store 运行该 Group。
+因此，物理持有检查必须针对精确且不可变的数据身份。当前 `Descriptor` 包含完整 Keyspace（Tenant、Engine、Dataset）、来源 Group、模块不透明 Key、字节数和规范小写 SHA-256。`RecordID` 对带版本域分隔及长度前缀的完整描述计算 SHA-256。同键不同内容具有不同身份；不同 Tenant、Engine、Dataset 不做跨归属去重。来源 Group 不表示当前 Range Owner，也不要求持有数据的远端 Store 运行该 Group。
 
-这里的 Record 指物理数据记录，不是 `capability/record` 产品；不会要求 File、Cache、Message 或 Search 模拟某种文件对象。一个描述对应最多 64 MiB 的不透明字节和最多 4 KiB 的 Key；更大对象如何组织由后续模块/数据入口决定。空载荷有效。
+这里的 Record 指物理数据记录，不是 `engine/record` 产品；不会要求 File、Cache、Message 或 Search 模拟某种文件对象。一个描述对应最多 64 MiB 的不透明字节和最多 4 KiB 的 Key；更大对象如何组织由后续模块/数据入口决定。空载荷有效。
 
 ## 本地写入与确认
 
 1. 校验描述、长度与摘要，在本 Store 串行锁内复制写入载荷，避免每个等待调用都提前分配大缓冲。
-2. 用内容绑定的 RecordID 查询索引。已存在也必须重新读取真实 Pack，核对 CRC、Store、外层 Tenant/Capability、RecordID、长度和摘要，不从旧 Result 或 locator 直接返回成功。
+2. 用内容绑定的 RecordID 查询索引。已存在也必须重新读取真实 Pack，核对 CRC、Store、外层 Tenant/Engine、RecordID、长度和摘要，不从旧 Result 或 locator 直接返回成功。
 3. 不存在则通过共享 Pool 完成数据和 Pack 检查点同步，再把描述与本地 Location 同步发布到记录索引。不同 Keyspace、不同来源 Group 共用 Volume 当前 Pack。
 4. 返回前再次读验物理数据，并在 Pack IO 后复查资源目录/登记。索引同步错误使当前实例停止读写，必须关闭重开、根据实际持久结果恢复。
 
@@ -31,13 +31,13 @@ Store/Volume 元数据现为 v2：`DUBI_VOLUMES` 在首次创建 StoreID 时同�
 
 存在的数据库先以只读方式检查身份，再打开可写实例，避免拒绝之前改写外来数据库；pending 可读身份还需重新完成同步屏障。活动 Store 身份文件丢失，或父级登记丢失但仍有子资源残留时，重复 init 也拒绝重建；在线加卷不能覆盖已丢失/替换的清单。此设计防止常见丢失/误替换，不是针对拥有本机任意文件修改权限者的安全隔离。
 
-正式 `init` 建立资源；`server/join` 在打开 Runtime 时恢复精确资源，启动失败释放句柄，关闭时先停止使用索引，再关闭 Pool 和 Registry。创建索引不要求另指定 Volume，也不会在显式外部卷之外创建默认卷。尚无公开数据入口；capstate 普通 KV 仍保留既有语义，不自动转换成不可变记录。
+正式 `init` 建立资源；`server/join` 在打开 Runtime 时恢复精确资源，启动失败释放句柄，关闭时先停止使用索引，再关闭 Pool 和 Registry。创建索引不要求另指定 Volume，也不会在显式外部卷之外创建默认卷。尚无公开数据入口；enginestate 普通 KV 仍保留既有语义，不自动转换成不可变记录。
 
-记录索引是本地位置资源，不是 Raft 状态，不随 capstate 快照自动复制。未来同步/恢复必须传描述和实际载荷，在目标 Store 重建 Location，不能搬用另一节点的 StoreID、VolumeID 或 Offset。接入回收前，记录索引、事务引用、快照/备份和在途任务必须统一纳入 Checkpoint/GC 保护。
+记录索引是本地位置资源，不是 Raft 状态，不随 enginestate 快照自动复制。未来同步/恢复必须传描述和实际载荷，在目标 Store 重建 Location，不能搬用另一节点的 StoreID、VolumeID 或 Offset。接入回收前，记录索引、事务引用、快照/备份和在途任务必须统一纳入 Checkpoint/GC 保护。
 
-## 权威逻辑引用（capstate v7）
+## 权威逻辑引用（enginestate v7）
 
-`Transaction.SetRecordReference` 将完整描述与当前 Owner Group、Range/epoch、原始路由 Key、RequestID、命令摘要、发布 index 一起写入 `data/record-reference/<Tenant>/<Capability>/<Dataset>/<opaque-key>`。描述的来源 Group 可以不同于当前 Owner，但 Keyspace 和 Key 必须精确匹配事务；路由 Key 允许与逻辑 Key 不同，用于后续 Range 路由与后台 Repair。不得携带本地 Store/Volume/Pack/Offset。引用、普通 KV、成功 Result、applied 在同一个同步 Batch 发布。请求重放保留原发布位置；同一内容先后再次发布仍有新的发布位置，不能只按 RecordID 判断当前权威。v7 的引用记录内部版本为 2，不接受旧版本混用。
+`Transaction.SetRecordReference` 将完整描述与当前 Owner Group、Range/epoch、原始路由 Key、RequestID、命令摘要、发布 index 一起写入 `data/record-reference/<Tenant>/<Engine>/<Dataset>/<opaque-key>`。描述的来源 Group 可以不同于当前 Owner，但 Keyspace 和 Key 必须精确匹配事务；路由 Key 允许与逻辑 Key 不同，用于后续 Range 路由与后台 Repair。不得携带本地 Store/Volume/Pack/Offset。引用、普通 KV、成功 Result、applied 在同一个同步 Batch 发布。请求重放保留原发布位置；同一内容先后再次发布仍有新的发布位置，不能只按 RecordID 判断当前权威。v7 的引用记录内部版本为 2，不接受旧版本混用。
 
 事务内支持读到本次修改、显式删除、覆盖与回滚，最多修改 256 个不同引用键。`ReadView.RecordReference` 在既有 Owner Group ReadIndex 和 Range 检查之内读取，核对当前 Range/Keyspace fence 与原成功 Result 的请求、摘要、位置。Result 不能单独证明当前引用。普通 `Set/Delete` 和引用 API 是两个独立命名空间：删除 KV 不隐式删除引用；`DeleteRecordReference` 也不删除物理记录。调用者不能保留 Transaction/ReadView 跨回调使用。
 
@@ -47,7 +47,7 @@ Result 在任何事务 Pack 写入前检查完整编码不超过 64 MiB，包含
 
 内联与文件快照均保存逻辑引用和关联 Result，在同一切点校验后才恢复；不复制 `records/index`、数据载荷或物理位置。文件快照用有界逐项查找验证关联，支持大于 64 KiB 的 Result 值。恢复引用成功但本机 `records.Verify` 返回未持有，是需要数据传输/修复的状态，不能宣告数据就绪。当前 GC 只依据本地当前索引回收整 Pack 无引用的物理文件；快照/备份引入历史物理保留后，必须扩展统一保护集合，才能启用相应删除。
 
-当前状态标记 `meta/format=7`、文件头 `capstate-v7`；v6 及更早开发状态/快照明确拒绝，不自动迁移。v6 增加权威引用命名空间与关联检查；v7 增加绑定精确引用发布位置和 Region fence 的本地多数确认记录。物理 Pack/本地位置格式不变。协议协商、滚动升级和迁移工具尚未完成。
+当前状态标记 `meta/format=7`、文件头 `enginestate-v7`；v6 及更早开发状态/快照明确拒绝，不自动迁移。v6 增加权威引用命名空间与关联检查；v7 增加绑定精确引用发布位置和 Region fence 的本地多数确认记录。物理 Pack/本地位置格式不变。协议协商、滚动升级和迁移工具尚未完成。
 
 ## 封口代际的固定引用清单
 
@@ -55,7 +55,7 @@ Result 在任何事务 Pack 写入前检查完整编码不超过 64 MiB，包含
 
 `PreparedRecordCut.Build` 按逻辑键顺序流式枚举该 Group 的全部当前不可变记录引用，逐条核对同一视图内的 Range、Keyspace 和成功 Result 关联，且发布位置必须严格早于 seal。校验完成才通过既有快照集合的同步/原子发布机制生成清单，不增加目录、用户配置或数据格式迁移。关联 Result 可以超过 64 KiB，但不进入清单；清单不含数据载荷、Store/Volume/Pack 位置或普通 KV，也不是完整 Group 备份。
 
-清单格式为 `capstate-record-cut-v1`，包含读屏障、精确 seal、规范化引用和末尾计数/载荷总字节/集合摘要。Artifact 的 SHA-256 绑定完整文件及精确 applied 切点；另一个集合 SHA-256 绑定 seal 和有序完整引用（含发布位置），不因无关 Raft 条目推进而改变。不同节点在相同 seal 下得到相同集合摘要可用于后续比较，但摘要本身不证明来源身份、共识、数据持有或保留承诺。文件头没有 ConfState，不能作为 Raft 快照安装。
+清单格式为 `enginestate-record-cut-v1`，包含读屏障、精确 seal、规范化引用和末尾计数/载荷总字节/集合摘要。Artifact 的 SHA-256 绑定完整文件及精确 applied 切点；另一个集合 SHA-256 绑定 seal 和有序完整引用（含发布位置），不因无关 Raft 条目推进而改变。不同节点在相同 seal 下得到相同集合摘要可用于后续比较，但摘要本身不证明来源身份、共识、数据持有或保留承诺。文件头没有 ConfState，不能作为 Raft 快照安装。
 
 `WalkRecordCut` 逐项检查规范编码、精确 seal、发布顺序、计数、集合摘要、末尾及完整文件 SHA-256；必须连最终关闭校验也成功，才算扫描完成。回调可能在发现末尾损坏前见到前缀引用，因此不能依据回调次数发布覆盖完成、激活或删除数据。它不会重新携带并验证源数据库全部关联行，后续传输必须认证来源和预期清单，不能把任意自报清单当作权威证明。
 
@@ -105,15 +105,15 @@ Result 在任何事务 Pack 写入前检查完整编码不超过 64 MiB，包含
 
 ## 内部本地写入协调（非用户入口）
 
-`recordwrite.Writer.WriteLocal` 串起五个门禁：按当前 Owner 的 Root 已确认集合预写真实 Pack 字节、提交模块自有的不透明引用 mutation、在 Owner 读屏障之后重新逐节点验证物理多数、通过 Owner Raft 写入绑定精确引用与 Region fence 的确认记录、最后再次验证当前 Root/Owner/物理多数。只在最后一个门禁通过时返回内部 `LocalWrite`；没有对 `record` demo 命令或租户公开此数据写入口。来源 Group 可不同于当前 Owner，Capability 仍负责 payload 的解释及 `SetRecordReference`。
+`recordwrite.Writer.WriteLocal` 串起五个门禁：按当前 Owner 的 Root 已确认集合预写真实 Pack 字节、提交模块自有的不透明引用 mutation、在 Owner 读屏障之后重新逐节点验证物理多数、通过 Owner Raft 写入绑定精确引用与 Region fence 的确认记录、最后再次验证当前 Root/Owner/物理多数。只在最后一个门禁通过时返回内部 `LocalWrite`；没有对 `record` demo 命令或租户公开此数据写入口。来源 Group 可不同于当前 Owner，Engine 仍负责 payload 的解释及 `SetRecordReference`。
 
 原 RequestID、描述和 payload 相同的重试读取已持久发布结果；确认提交后 ACK 丢失时，先验证重试 Body 与描述一致，再检查当前确认记录、实时物理多数和 Root 集合，仍有效便直接返回，不重新传 Pack。若回执过期或实时多数不足则补写，必要时自动生成新的内部确认 RequestID。相同 RequestID 配不同 mutation 会在碰 Pack 前按已持久 Result 冲突拒绝。失败可能留下已同步但未引用的字节或已发布但尚未确认的引用，不能宣称成功；保守 GC 只会在当前索引完整确认后回收完全无引用的 sealed Pack，混合 Pack 和快照/备份保护仍不会被回收。
 
-内部任意节点 `capabilitydata.Service.Write` 现在也给本地 Owner 尝试和各远端候选分配有界时间：一个目标迟滞时，后续健康成员仍有机会处理**同一个** RequestID、描述、Body 和 mutation。物理预写在仍有备选成员时也限制前一个远端传输的耗时，最后一个候选保留调用方剩余时间。目标 Store 无法确认落盘时返回不可用，该节点不计入持有多数，协调者继续尝试同一已确认集合的其他节点；仍凑不够真实多数就失败。前一尝试超时可能已经落盘或提交，不能回滚；只有后续候选重新通过完整 `LocalReady` 门禁才返回成功，否则保留 `Unknown` 或 `PublishedUnconfirmed` 的不确定状态。显式 `WriteLocal` 不参与跨节点回退；没有放宽原有物理多数、Owner 确认或 Root 代际检查。
+内部任意节点 `enginedata.Service.Write` 现在也给本地 Owner 尝试和各远端候选分配有界时间：一个目标迟滞时，后续健康成员仍有机会处理**同一个** RequestID、描述、Body 和 mutation。物理预写在仍有备选成员时也限制前一个远端传输的耗时，最后一个候选保留调用方剩余时间。目标 Store 无法确认落盘时返回不可用，该节点不计入持有多数，协调者继续尝试同一已确认集合的其他节点；仍凑不够真实多数就失败。前一尝试超时可能已经落盘或提交，不能回滚；只有后续候选重新通过完整 `LocalReady` 门禁才返回成功，否则保留 `Unknown` 或 `PublishedUnconfirmed` 的不确定状态。显式 `WriteLocal` 不参与跨节点回退；没有放宽原有物理多数、Owner 确认或 Root 代际检查。
 
 `recordwrite.Reader.ReadLocal` 是对应的内部数据读门禁：在 Owner ReadIndex 下取得当前引用与关联确认记录，依据当前 Root 集合重新检查真实多数。若入口节点尚未持有，它只从刚通过认证观察的当前成员拉取完整字节，写入自身共享 Pack，再读验并再次确认 Root/Owner/物理多数；损坏的本地记录不会被伪装为缺失来覆盖。Region 增长后旧确认不能用于读，原写 RequestID 再试可在当前多数确认后恢复读。该入口仍只接收内部路由 Target，尚未提供租户授权或通用公开 API。
 
-`capstate.WalkCurrentReferences` 通过 Owner Group ReadIndex 获取固定 Pebble 切点，在同一切点逐条验证当前引用及其 Range/Keyspace/Result 关联；回调不持有 Apply 锁，可以边扫描边有新写入。只有完整扫描无错误才有完成报告，途中副作用不得被当作全量覆盖证明。分页接口每页至多 1024 条且各页是独立切点；分页游标只用于继续遍历，不是持久快照，新插入且排序在游标之前的引用会在下轮全扫发现。`recordrepair.RepairCurrentLocal` / `RepairCurrentLocalPage` 仅从 Root 已确认 cohort 的认证节点观察并拉取真实字节，末尾复查 cohort。若本地索引有效、只有原 Pack 位置不可读，修复器使用单独的认证拉取和 `RepairExisting`：先把完整数据写入健康 Pack 并验读，再同步切换本地索引；失卷后加新 Volume 可不依赖旧卷恢复。普通 `Put` 和普通拉取不自动覆盖，索引损坏、Store 关闭或资源身份变化仍失败关闭。索引 Sync 结果不确定时整个句柄停用，重开后按实际持久位置恢复；旧位置及失败留下的孤儿 Pack 只有在完整索引快照证明整个 sealed Pack 无引用时才允许由保守 GC 回收。一次性全切点调用遇到未修复引用即报错；有界分页把逐条失败记为 `Unrepaired` 债务并继续后续引用，不能把页完成当作覆盖完成。Managed Node 进程内 worker 默认每轮处理至多 8 条，逐条失败推进游标、下轮再扫；元数据/拓扑切点失败则丢弃游标从头重扫。Owner leader 在多数物理数据就绪后可按当前 Root 代际重新走 Owner Raft 确认，避免扩容后必须等原客户端重试。它不是用户配置的定时作业。进程重启也从头扫描，尚无持久游标、退役/成员移除后的自动再平衡或跨 Region 修复。
+`enginestate.WalkCurrentReferences` 通过 Owner Group ReadIndex 获取固定 Pebble 切点，在同一切点逐条验证当前引用及其 Range/Keyspace/Result 关联；回调不持有 Apply 锁，可以边扫描边有新写入。只有完整扫描无错误才有完成报告，途中副作用不得被当作全量覆盖证明。分页接口每页至多 1024 条且各页是独立切点；分页游标只用于继续遍历，不是持久快照，新插入且排序在游标之前的引用会在下轮全扫发现。`recordrepair.RepairCurrentLocal` / `RepairCurrentLocalPage` 仅从 Root 已确认 cohort 的认证节点观察并拉取真实字节，末尾复查 cohort。若本地索引有效、只有原 Pack 位置不可读，修复器使用单独的认证拉取和 `RepairExisting`：先把完整数据写入健康 Pack 并验读，再同步切换本地索引；失卷后加新 Volume 可不依赖旧卷恢复。普通 `Put` 和普通拉取不自动覆盖，索引损坏、Store 关闭或资源身份变化仍失败关闭。索引 Sync 结果不确定时整个句柄停用，重开后按实际持久位置恢复；旧位置及失败留下的孤儿 Pack 只有在完整索引快照证明整个 sealed Pack 无引用时才允许由保守 GC 回收。一次性全切点调用遇到未修复引用即报错；有界分页把逐条失败记为 `Unrepaired` 债务并继续后续引用，不能把页完成当作覆盖完成。Managed Node 进程内 worker 默认每轮处理至多 8 条，逐条失败推进游标、下轮再扫；元数据/拓扑切点失败则丢弃游标从头重扫。Owner leader 在多数物理数据就绪后可按当前 Root 代际重新走 Owner Raft 确认，避免扩容后必须等原客户端重试。它不是用户配置的定时作业。进程重启也从头扫描，尚无持久游标、退役/成员移除后的自动再平衡或跨 Region 修复。
 
 跨 Node 迁移现在有了内部 `RecordRepairService.Repair` 传输原语：目标 Node 自己向认证来源拉取并写入本地 Pack；已有坏位置使用 `RepairExisting`，目标缺少索引时使用普通新增持有。该通道只接受当前 Root 成员身份，仍不替代跨 Region 目标选择、持久搬迁任务或最终多数复验。
 
@@ -125,7 +125,7 @@ Geo worker 还会扫描已有引用的 GeoCoverage 账目：如果 Region genera
 
 进程内修复器对未完成的分页扫描以有界短间隔续页，扫完后恢复低频巡检；一次只处理一个小页，仍按 Group 轮转，不额外要求运维配置。最近发现的 Group 欠账保留在本机诊断状态中：一页无错不清除前页欠账，只有完整新一轮无欠账才解除。`dubi status` 通过只接受本机 Node 证书的内部诊断 RPC 读取此观察，最多显示 64 项并给出总数；进程重启后会重新扫描。它不是持久覆盖账目，空列表不代表扫描完成或全群物理多数已就绪。
 
-测试覆盖描述域隔离、二进制 Key、空值和边界；旧/新内容并存、重复请求/重启无重复追加、20 个并发重复写；错误载荷、索引/物理数据损坏、丢卷、目录替换、外来数据库及两种同步不确定结果。真实磁盘 Pool 验证多个 Tenant、四种 Capability 使用同一个 Pack，重开后复用原 Location。
+测试覆盖描述域隔离、二进制 Key、空值和边界；旧/新内容并存、重复请求/重启无重复追加、20 个并发重复写；错误载荷、索引/物理数据损坏、丢卷、目录替换、外来数据库及两种同步不确定结果。真实磁盘 Pool 验证多个 Tenant、四种 Engine 使用同一个 Pack，重开后复用原 Location。
 
 七个子进程故障点不执行 Close 而直接退出：创建目录、pending 意图、数据库打开、内部身份、active 登记，以及记录索引 Sync 前/后。父进程验证恢复与可见性。这是进程退出测试，不等同于介质掉电、独立故障域或生产验收。
 
@@ -133,16 +133,16 @@ Geo worker 还会扫描已有引用的 GeoCoverage 账目：如果 Region genera
 
 权威引用测试覆盖请求去重、同内容再次发布、覆盖/显式删除、完整 Keyspace 隔离、事务回滚与引用数上限、两种不确定提交、Sync 前后子进程直接退出；两种快照的固定切点、关联损坏拒绝且目标状态不变；真实单节点 Raft 重启与 Owner 拒绝。真实 Pack 验证“旧字节仍在但引用已替换/删除”以及“新引用存在但本机未持有”两种独立状态。进程退出不是掉电测试，单机也不是独立故障域。
 
-远端观察测试覆盖真实共享 Pack、缺失/失卷/关闭、错误载荷身份与响应、IO 前后成员/授权失效、缺少或落后的 Root 屏障、并发耗尽/取消/超时、不可中断 IO 占槽；真实 mTLS 验证错误 RaftID/NodeID 服务端证书、移除后连接复用拒绝及返回时有效期检查。正式双节点加入测试验证四种 Capability、单节点重启、全群冷启动、Root learner 数据持有、原 Store/Volume 身份保持，且观察不会向调用节点复制数据。它仍只是同机 TCP/磁盘测试，不是独立故障域验收。
+远端观察测试覆盖真实共享 Pack、缺失/失卷/关闭、错误载荷身份与响应、IO 前后成员/授权失效、缺少或落后的 Root 屏障、并发耗尽/取消/超时、不可中断 IO 占槽；真实 mTLS 验证错误 RaftID/NodeID 服务端证书、移除后连接复用拒绝及返回时有效期检查。正式双节点加入测试验证四种 Engine、单节点重启、全群冷启动、Root learner 数据持有、原 Store/Volume 身份保持，且观察不会向调用节点复制数据。它仍只是同机 TCP/磁盘测试，不是独立故障域验收。
 
-发送测试覆盖严格帧、空记录、摘要错误、预算/并发耗尽、取消、首帧/EOF/总期限、成员在接收或 IO 中失效、不可中断 IO 保留资源、落盘后 ACK 丢失和精确重试无 Pack 增长。真实 mTLS 验证错误证书在应用请求之前拒绝、多帧传输和未 EOF 流的资源回收。正式双节点在真实 Root 屏障下发送四种 Capability 的独立载荷，单节点重启和全群冷启动后读验原 Store/Volume 及重试；没有把同机测试写成独立故障域资格。
+发送测试覆盖严格帧、空记录、摘要错误、预算/并发耗尽、取消、首帧/EOF/总期限、成员在接收或 IO 中失效、不可中断 IO 保留资源、落盘后 ACK 丢失和精确重试无 Pack 增长。真实 mTLS 验证错误证书在应用请求之前拒绝、多帧传输和未 EOF 流的资源回收。正式双节点在真实 Root 屏障下发送四种 Engine 的独立载荷，单节点重启和全群冷启动后读验原 Store/Volume 及重试；没有把同机测试写成独立故障域资格。
 
-拉取测试覆盖物理数据错误、缺失、IO/发送中失权、错误源证书、空记录、畸形响应、完整数据后的错误/缺失最终状态、首帧/空闲/总期限、预算拒绝、去重重试和坏本地持有响应。真实 mTLS 慢接收测试不取消客户端仍能回收服务端 Send；源读与目标同步写阻塞期间保持共用额度，取消后的已持久字节不被删除。正式双节点在四种 Capability、单节点重启与全群冷启动后验证拉取数据和重试。上述均为同机临时资源验证。
+拉取测试覆盖物理数据错误、缺失、IO/发送中失权、错误源证书、空记录、畸形响应、完整数据后的错误/缺失最终状态、首帧/空闲/总期限、预算拒绝、去重重试和坏本地持有响应。真实 mTLS 慢接收测试不取消客户端仍能回收服务端 Send；源读与目标同步写阻塞期间保持共用额度，取消后的已持久字节不被删除。正式双节点在四种 Engine、单节点重启与全群冷启动后验证拉取数据和重试。上述均为同机临时资源验证。
 
-固定引用清单测试覆盖空集合、四种 Capability、捕获后修改/删除关联行、实时激活、重开、错误关联/超限行不发布、取消与关闭等待、规范编码/摘要/末尾拒绝及最后读取才发现的文件 SHA-256 错误。大 Result 不进入清单；真实三 voter Raft 通过 leader/follower ReadIndex 构建相同集合，并在全组关闭重开后再次验证。这是本机持久目录和队列传输测试，不是网络或硬件故障域验收。
+固定引用清单测试覆盖空集合、四种 Engine、捕获后修改/删除关联行、实时激活、重开、错误关联/超限行不发布、取消与关闭等待、规范编码/摘要/末尾拒绝及最后读取才发现的文件 SHA-256 错误。大 Result 不进入清单；真实三 voter Raft 通过 leader/follower ReadIndex 构建相同集合，并在全组关闭重开后再次验证。这是本机持久目录和队列传输测试，不是网络或硬件故障域验收。
 
 真实四节点联测覆盖多条非空清单引用：三个旧节点分别仅持有一条物理记录（其中一条为空载荷），新增节点跨来源补齐并在重启后逐条读验。另有真实三节点 TLS 路径验证 `StageLocal` 物理多数、`ObservePublishedLocal` 在 Owner 屏障后重新观察、`ConfirmationClaim` 经 Owner Raft 持久确认，以及 `CheckCommittedLocal` 最终复验。组装后的 `Writer.WriteLocal` 还覆盖确认 ACK 丢失、相同 RequestID 重试不重传 Pack、错误 Body/集合外节点拒绝，以及冲突 RequestID 在碰 Pack 前拒绝；`Reader.ReadLocal` 覆盖未持有节点的拉取，以及增长后拒绝旧确认、原写请求重确认。Managed Node 的进程内 worker 在不调用手动 Repair 的情况下补齐旧节点缺失引用，之后第四节点完成封口交接。四节点故障联测还会暂时关闭可用来源 Store，确认目标后台轮次报告精确欠账且不伪造持有；目标和来源进程重启后，未经手动 Repair 自动恢复三份真实持有与读取。独立三节点故障联测用测试专属 TCP 包装在来源发出约 2 MiB TLS 流后关闭新连接，确认目标不发布半截记录、后台报告该引用欠账；停掉原来源并恢复另一来源的 Pack 后，目标无需手动命令自动补齐，持久确认与物理多数读最终恢复。新的三节点联测先确认三台均持有已发布记录，再分别覆盖停机与在线失卷加卷：前台读以有界尝试绕过失去响应的 Owner 成员，在健康多数上重新通过完整读校验；后台从当前集合拉回字节并放进新卷，原卷保持 missing，修复位置在再次重启后仍可验证。测试均为同机进程/TLS 验证，不等于独立故障域或生产资格。
 
-`placement.PlanLocal` 固定 Root 已确认参与集合的严格多数，拒绝离线缩分母、重复 Node/Store 和待定代际；同代际 Group 重新 fencing 也使旧观察失效。路径依据当前路由 Owner Group，而非描述的来源 Group；历史确认记录不代表此刻物理字节健康，正式租户/Capability 前台入口尚未接线，不得对用户声称公开 `LocalReady` 已交付。Repair 针对性测试覆盖首个来源缺失、来源 Fetch 损坏后切换、全部来源不可用时保持未持有、伪造来源身份拒绝、取消不计作普通债务和本地 Store 不可用时禁止覆盖。真实四节点 TLS 联测另覆盖目标停机时发布引用、原始来源随后停机、目标重启后从替代来源自动补齐并恢复读；仍需传输中断/反复重启联测，以及更完整的前台可见性语义。`placement.PlanGeo` 与 `GeoCoverageRecord` 现在固定多 Region 代际、绑定权威引用并可随两种快照恢复，`CheckCommittedGeo` 会在使用前重新验证当前 Owner 引用和已提交覆盖区域证据，但仍只是物理覆盖账目，不发布 `GeoReady`。GeoReady 必须覆盖权威元数据的可恢复切点/日志尾部及其引用数据：远端仅有多个版本的字节，不能在来源 Region 丢失后猜出当前权威版本。Cluster 稳定区域集合、小区域跨区故障联测、跨区域再平衡、Checkpoint/GC 和恢复仍未完成。生产状态继续为 No-Go。
+`placement.PlanLocal` 固定 Root 已确认参与集合的严格多数，拒绝离线缩分母、重复 Node/Store 和待定代际；同代际 Group 重新 fencing 也使旧观察失效。路径依据当前路由 Owner Group，而非描述的来源 Group；历史确认记录不代表此刻物理字节健康，正式租户/Engine 前台入口尚未接线，不得对用户声称公开 `LocalReady` 已交付。Repair 针对性测试覆盖首个来源缺失、来源 Fetch 损坏后切换、全部来源不可用时保持未持有、伪造来源身份拒绝、取消不计作普通债务和本地 Store 不可用时禁止覆盖。真实四节点 TLS 联测另覆盖目标停机时发布引用、原始来源随后停机、目标重启后从替代来源自动补齐并恢复读；仍需传输中断/反复重启联测，以及更完整的前台可见性语义。`placement.PlanGeo` 与 `GeoCoverageRecord` 现在固定多 Region 代际、绑定权威引用并可随两种快照恢复，`CheckCommittedGeo` 会在使用前重新验证当前 Owner 引用和已提交覆盖区域证据，但仍只是物理覆盖账目，不发布 `GeoReady`。GeoReady 必须覆盖权威元数据的可恢复切点/日志尾部及其引用数据：远端仅有多个版本的字节，不能在来源 Region 丢失后猜出当前权威版本。Cluster 稳定区域集合、小区域跨区故障联测、跨区域再平衡、Checkpoint/GC 和恢复仍未完成。生产状态继续为 No-Go。
 
 写入故障测试还覆盖：预写时首个远端一直不响应但下一台健康，仍可在原请求期限内达到物理多数；在线失卷时健康节点继续写入，坏盘节点收到的写入也能转到健康 Owner；停机失卷则由仍在线的多数节点完成写入。两台目标都不能确认持有时仍拒绝发布，不能把错误或超时算作持有证明。

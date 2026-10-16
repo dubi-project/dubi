@@ -45,7 +45,7 @@ func validateRegionCohortSnapshot(view rootSnapshotReader, index uint64, key, va
 	var head RegionCohortHead
 	var group Group
 	if streamJSON(view, regionCohortHeadKey(c.RegionID), &head) != nil || head.validate() != nil || head.RegionID != c.RegionID ||
-		streamJSON(view, groupKey(c.GroupID), &group) != nil || group.GroupID != c.GroupID || group.StateKind != GroupStateCapability || group.Epoch == 0 {
+		streamJSON(view, groupKey(c.GroupID), &group) != nil || group.GroupID != c.GroupID || group.StateKind != GroupStateEngine || group.Epoch == 0 {
 		return bad
 	}
 	owner, err := streamValue(view, regionCohortGroupKey(c.GroupID))

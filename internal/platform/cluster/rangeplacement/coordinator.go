@@ -45,7 +45,7 @@ func PlanRange(r rootstate.Range, progress []rootstate.RegionProgress) (rootstat
 	ownerFound := false
 	for _, view := range progress {
 		if !view.Eligible || view.Pending != nil || view.Current.State != rootstate.RegionCohortConfirmed ||
-			view.Current.GroupID != view.Group.GroupID || view.Group.StateKind != rootstate.GroupStateCapability ||
+			view.Current.GroupID != view.Group.GroupID || view.Group.StateKind != rootstate.GroupStateEngine ||
 			view.Group.Epoch != view.Current.GroupEpoch || seenRegions[view.Current.RegionID] || seenGroups[view.Group.GroupID] {
 			continue
 		}
@@ -96,7 +96,7 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 		}
 		var progress []rootstate.RegionProgress
 		for _, group := range groups {
-			if group.GroupID == raft.RootGroupID || group.StateKind != rootstate.GroupStateCapability {
+			if group.GroupID == raft.RootGroupID || group.StateKind != rootstate.GroupStateEngine {
 				continue
 			}
 			view, found, err := c.root.RegionProgress(group.GroupID)

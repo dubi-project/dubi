@@ -360,7 +360,7 @@ func (p *Pool) Close() error {
 }
 
 func appendBudget(record Record) uint64 {
-	encoded := uint64(recordHeaderSize + len(record.CapabilityID) + len(record.TenantID) + len(record.Key) + len(record.Payload))
+	encoded := uint64(recordHeaderSize + len(record.EngineID) + len(record.TenantID) + len(record.Key) + len(record.Payload))
 	// Round data to 64 KiB and allow 4 MiB for catalog replacements, Pack header,
 	// checkpoints and first-time metadata. This is a conservative byte estimate,
 	// not an exact bound on CoW, journaling, quotas or physical block allocation.

@@ -6,7 +6,7 @@
 
 ## 与现有概念的关系
 
-Region cohort 是一个 Region 在某一代际的数据参与 Node 集合。它不是新的用户资源、可配置副本数、Capability 或 Volume：用户不用创建它或逐节点填 ID。自动协调器从已接纳的节点和持久区域归属推导初始计划。节点有多个 Volume 仍只算一个故障域；Root learner 也可能是数据参与节点。
+Region cohort 是一个 Region 在某一代际的数据参与 Node 集合。它不是新的用户资源、可配置副本数、Engine 或 Volume：用户不用创建它或逐节点填 ID。自动协调器从已接纳的节点和持久区域归属推导初始计划。节点有多个 Volume 仍只算一个故障域；Root learner 也可能是数据参与节点。
 
 Root 投票角色、区域 Group 的投票角色、数据参与集合分别记录。集合包括区域 Group 的 voter 和 learner，不以 voter 数替代数据多数的分母。内部单条集合记录最多 4096 个 Node，是有界处理限制，不是运维参数，也不是已经验证的集群规模。
 

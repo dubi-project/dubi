@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -21,14 +21,14 @@ import (
 
 type nodeTestHandler struct{}
 
-func (*nodeTestHandler) Apply(*capstate.Transaction, router.Target, []byte) (capstate.Outcome, error) {
-	return capstate.Outcome{}, nil
+func (*nodeTestHandler) Apply(*enginestate.Transaction, router.Target, []byte) (enginestate.Outcome, error) {
+	return enginestate.Outcome{}, nil
 }
 
 type nodePackHandler struct{}
 
-func (*nodePackHandler) Apply(tx *capstate.Transaction, _ router.Target, payload []byte) (capstate.Outcome, error) {
-	return capstate.Outcome{Value: []byte("stored")}, tx.Set([]byte("item"), payload)
+func (*nodePackHandler) Apply(tx *enginestate.Transaction, _ router.Target, payload []byte) (enginestate.Outcome, error) {
+	return enginestate.Outcome{Value: []byte("stored")}, tx.Set([]byte("item"), payload)
 }
 
 func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
@@ -37,7 +37,7 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := capabilityruntime.NewRegistry()
+	registry := engineruntime.NewRegistry()
 	if err := registry.Register("record", &nodePackHandler{}); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, CapabilityMux: mux})
+	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "node", Type: rootstate.RegisterNode,
 		Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "region-a", Address: "node-a:7443"}})
 	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup,
-		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	state, err := runtime.Groups.NewState(context.Background(), "data-1")
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err := runtime.Host.Campaign("data-1"); err != nil {
 		t.Fatal(err)
 	}
-	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items",
+	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
 		OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	activation, err := routedstate.EncodeActivateRange("activate", descriptor)
 	if err != nil {
@@ -88,7 +88,7 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := router.Target{Keyspace: descriptor.Keyspace(), RangeID: descriptor.RangeID, OwnerGroupID: "data-1", Epoch: 1, RoutingKey: []byte("item")}
-	large := bytes.Repeat([]byte("data"), capstate.PackValueThreshold/4)
+	large := bytes.Repeat([]byte("data"), enginestate.PackValueThreshold/4)
 	mutation, err := routedstate.EncodeMutation("write", target, large)
 	if err != nil {
 		t.Fatal(err)
@@ -96,13 +96,13 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err := runtime.Host.Submit("data-1", mutation); err != nil {
 		t.Fatal(err)
 	}
-	local, found := runtime.Capabilities.Resolve("data-1")
+	local, found := runtime.Engines.Resolve("data-1")
 	if !found {
 		t.Fatal("missing state")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := local.ReadRouted(ctx, runtime.Host, target, func(view capstate.ReadView) error {
+	if _, err := local.ReadRouted(ctx, runtime.Host, target, func(view enginestate.ReadView) error {
 		value, found, err := view.Get([]byte("item"))
 		if err != nil || !found || !bytes.Equal(value, large) {
 			return errors.New("routed Pack value mismatch")
@@ -117,7 +117,7 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, CapabilityMux: mux})
+	restarted, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err := restarted.RecoverLocalGroups(ctx); err != nil {
 		t.Fatal(err)
 	}
-	local, found = restarted.Capabilities.Resolve("data-1")
+	local, found = restarted.Engines.Resolve("data-1")
 	if !found {
 		t.Fatal("Group not recovered")
 	}
@@ -176,9 +176,9 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	}
 }
 
-func nodeTestMux(t *testing.T) *capabilityruntime.Mux {
+func nodeTestMux(t *testing.T) *engineruntime.Mux {
 	t.Helper()
-	registry := capabilityruntime.NewRegistry()
+	registry := engineruntime.NewRegistry()
 	if err := registry.Register("record", &nodeTestHandler{}); err != nil {
 		t.Fatal(err)
 	}
@@ -197,12 +197,12 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	}
 	mux := nodeTestMux(t)
 	runtime, err := Open(Options{StoreRoot: storeRoot, TickInterval: time.Hour,
-		RootBootstrapPeers: []uint64{id.RaftID}, CapabilityMux: mux})
+		RootBootstrapPeers: []uint64{id.RaftID}, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if runtime.Identity != id || runtime.Host == nil || runtime.Root == nil || runtime.Groups == nil ||
-		runtime.Capabilities == nil || runtime.JoinManager == nil || runtime.LocalMembership == nil || runtime.Packs == nil || runtime.Records == nil {
+		runtime.Engines == nil || runtime.JoinManager == nil || runtime.LocalMembership == nil || runtime.Packs == nil || runtime.Records == nil {
 		t.Fatal("Node runtime did not assemble all core components")
 	}
 	if err := runtime.Host.Campaign(raft.RootGroupID); err != nil {
@@ -211,7 +211,7 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "register-node", Type: rootstate.RegisterNode,
 		Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "region-a", Address: "node-a:7443"}})
 	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "register-data", Type: rootstate.RegisterGroup,
-		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	state, err := runtime.Groups.NewState(context.Background(), "data-1")
 	if err != nil {
 		t.Fatal(err)
@@ -222,8 +222,8 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "publish-data", Type: rootstate.PublishGroupMembers,
 		Membership: &rootstate.GroupMembership{GroupID: "data-1", ExpectedEpoch: 1,
 			Members: []rootstate.GroupMember{{RaftID: id.RaftID, Role: rootstate.GroupMemberVoter}}}})
-	if _, found := runtime.Capabilities.Resolve("data-1"); !found {
-		t.Fatal("open capability Group is absent from runtime directory")
+	if _, found := runtime.Engines.Resolve("data-1"); !found {
+		t.Fatal("open engine Group is absent from runtime directory")
 	}
 	grpcServer := grpc.NewServer()
 	if err := runtime.RegisterInternalRPC(grpcServer, func(context.Context, uint64) error { return nil }, 0); err != nil {
@@ -238,14 +238,14 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, found := runtime.Capabilities.Resolve("data-1"); found {
-		t.Fatal("closed capability Group remained in runtime directory")
+	if _, found := runtime.Engines.Resolve("data-1"); found {
+		t.Fatal("closed engine Group remained in runtime directory")
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	restarted, err := Open(Options{StoreRoot: storeRoot, TickInterval: time.Hour, CapabilityMux: mux})
+	restarted, err := Open(Options{StoreRoot: storeRoot, TickInterval: time.Hour, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,8 +259,8 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	if !restarted.Host.HasGroup("data-1") {
 		t.Fatal("published local Group was not recovered")
 	}
-	if _, found := restarted.Capabilities.Resolve("data-1"); !found {
-		t.Fatal("recovered Group is absent from capability state directory")
+	if _, found := restarted.Engines.Resolve("data-1"); !found {
+		t.Fatal("recovered Group is absent from engine state directory")
 	}
 }
 
@@ -271,12 +271,12 @@ func TestRuntimeOwnsPackPoolAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := nodeTestMux(t)
-	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, CapabilityMux: mux})
+	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	loc, err := runtime.Packs.Append(context.Background(), pack.Record{CapabilityID: "file", TenantID: "t", Key: []byte("k"), Payload: []byte("value")})
+	loc, err := runtime.Packs.Append(context.Background(), pack.Record{EngineID: "file", TenantID: "t", Key: []byte("k"), Payload: []byte("value")})
 	if errors.Is(err, volume.ErrInsufficientSpace) {
 		t.Skip("requires filesystem headroom")
 	}
@@ -289,13 +289,13 @@ func TestRuntimeOwnsPackPoolAcrossRestart(t *testing.T) {
 	if _, err := runtime.Packs.Read(loc); err == nil {
 		t.Fatal("Pool outlived Node")
 	}
-	restarted, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, CapabilityMux: mux})
+	restarted, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer restarted.Close()
 	record, err := restarted.Packs.Read(loc)
-	if err != nil || record.CapabilityID != "file" || string(record.Payload) != "value" {
+	if err != nil || record.EngineID != "file" || string(record.Payload) != "value" {
 		t.Fatal("Pack identity/data lost on runtime restart", record, err)
 	}
 }
@@ -312,11 +312,11 @@ func TestRuntimeOpenFailureReleasesStore(t *testing.T) {
 	}
 	mux := nodeTestMux(t)
 	if _, err := Open(Options{StoreRoot: storeRoot, TickInterval: time.Hour,
-		RootBootstrapPeers: []uint64{other}, CapabilityMux: mux}); err == nil {
+		RootBootstrapPeers: []uint64{other}, EngineMux: mux}); err == nil {
 		t.Fatal("invalid Root bootstrap peers were accepted")
 	}
 	runtime, err := Open(Options{StoreRoot: storeRoot, TickInterval: time.Hour,
-		RootBootstrapPeers: []uint64{id.RaftID}, CapabilityMux: mux})
+		RootBootstrapPeers: []uint64{id.RaftID}, EngineMux: mux})
 	if err != nil {
 		t.Fatalf("failed Open retained resources: %v", err)
 	}

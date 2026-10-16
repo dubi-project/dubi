@@ -292,7 +292,7 @@ func (s *State) PendingRegionConfirmation(groupID string) (RegionConfirmationVie
 	if err := decodeStreamJSON(encoded, &group); err != nil {
 		return RegionConfirmationView{}, false, err
 	}
-	if group.GroupID != groupID || group.StateKind != GroupStateCapability {
+	if group.GroupID != groupID || group.StateKind != GroupStateEngine {
 		return RegionConfirmationView{}, false, errors.New("regional Group binding is invalid")
 	}
 	if group.Epoch < 2 || !cohortMatchesMembers(cohort, group.Members) {
@@ -444,8 +444,8 @@ func (s *State) applyRegionCohort(batch *pebble.Batch, command Command) (string,
 		if err := decodeStreamJSON(encoded, &group); err != nil {
 			return "", err
 		}
-		if group.GroupID != p.GroupID || group.StateKind != GroupStateCapability {
-			return "Region cohort requires capability-neutral data Group", nil
+		if group.GroupID != p.GroupID || group.StateKind != GroupStateEngine {
+			return "Region cohort requires engine-neutral data Group", nil
 		}
 		if head.CurrentGeneration != 0 && !freshFormation {
 			previous, _, err := s.regionCohort(p.RegionID, head.CurrentGeneration)
@@ -583,7 +583,7 @@ func (s *State) applyRegionCohort(batch *pebble.Batch, command Command) (string,
 	if err := decodeStreamJSON(encoded, &group); err != nil {
 		return "", err
 	}
-	if group.GroupID != c.GroupID || group.Epoch != c.GroupEpoch || group.StateKind != GroupStateCapability || !cohortMatchesMembers(cohort, group.Members) {
+	if group.GroupID != c.GroupID || group.Epoch != c.GroupEpoch || group.StateKind != GroupStateEngine || !cohortMatchesMembers(cohort, group.Members) {
 		return "Region cohort confirmation differs from published Group membership", nil
 	}
 	if ready, err := s.cohortCurrentMembers(cohort); err != nil {

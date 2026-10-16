@@ -33,7 +33,7 @@ func cohortFixture(t *testing.T) (*State, string) {
 		applyRootFileCommand(t, s, Command{Type: RegisterNode, Node: &Node{NodeID: fmt.Sprintf("node_%032x", id), RaftID: id, RegionID: region, Address: fmt.Sprintf("127.0.0.1:%d", 10000+id)}})
 	}
 	for _, group := range []string{"regional-west", "other"} {
-		applyRootFileCommand(t, s, Command{Type: RegisterGroup, Group: &Group{GroupID: group, StateKind: GroupStateCapability}})
+		applyRootFileCommand(t, s, Command{Type: RegisterGroup, Group: &Group{GroupID: group, StateKind: GroupStateEngine}})
 	}
 	cohortPublish(t, s, 1, []uint64{1, 2, 3})
 	return s, root
@@ -280,7 +280,7 @@ func TestRegionCohortRootRaftReplay(t *testing.T) {
 	for id := uint64(1); id <= 3; id++ {
 		propose(Command{Type: RegisterNode, Node: &Node{NodeID: fmt.Sprintf("node_%032x", id), RaftID: id, RegionID: "west", Address: fmt.Sprintf("127.0.0.1:%d", 10000+id)}})
 	}
-	propose(Command{Type: RegisterGroup, Group: &Group{GroupID: "regional-west", StateKind: GroupStateCapability}})
+	propose(Command{Type: RegisterGroup, Group: &Group{GroupID: "regional-west", StateKind: GroupStateEngine}})
 	for _, id := range []uint64{2, 3} {
 		if err := g.AddLearner(id); err != nil {
 			t.Fatal(err)

@@ -6,7 +6,7 @@
 
 栅栏绑定 Region、Group、cohort generation、Root 计划位置、Root Group descriptor epoch，以及排序后的完整 voter/learner 集合。另绑定该数据 Group 最近一次应用成员变更的位置 `MembershipIndex`。Root index 与数据 Group index 属于不同日志，不能直接比较。
 
-栅栏不含 Tenant、Capability、业务 payload 或物理 Pack 位置。底层状态机处理它，不调用任何模块 Handler；编码器拒绝将它与 Range 激活或业务 mutation 混入同一命令。内部记录最多 4096 个成员，至少三个 voter；不足三成员的小 Region 则要求全部成员为 voter。元数据读取上限 1 MiB；这些是有界处理限制，不是已验证的生产规模或用户参数。单节点栅栏只证明该 Region Group 的控制面边界，不赋予本地 `LocalReady` 语义；小 Region 的写入仍必须走跨 Region 同步多数。
+栅栏不含 Tenant、Engine、业务 payload 或物理 Pack 位置。底层状态机处理它，不调用任何模块 Handler；编码器拒绝将它与 Range 激活或业务 mutation 混入同一命令。内部记录最多 4096 个成员，至少三个 voter；不足三成员的小 Region 则要求全部成员为 voter。元数据读取上限 1 MiB；这些是有界处理限制，不是已验证的生产规模或用户参数。单节点栅栏只证明该 Region Group 的控制面边界，不赋予本地 `LocalReady` 语义；小 Region 的写入仍必须走跨 Region 同步多数。
 
 ## 原子应用与失效
 
@@ -37,7 +37,7 @@ v5 响应另带状态格式和可选交接记录。客户端拒绝旧/缺失格�
 
 文件和内联快照都携带最新栅栏与成员变更位置，恢复前验证 Group、位置上界、栅栏与结果摘要/位置的一致性、成员位置先后关系，以及仍有效栅栏与该快照 ConfState 的精确匹配。文件生成使用捕获时的固定视图和 ConfState；生成期间发生新成员变更不会污染旧切点。错误镜像在清空目标状态或写 Pack 之前拒绝。
 
-Capability 状态与快照当前使用 **v7**，新空库标记 `meta/format=7`，文件头 `capstate-v7`。v4 引入成员位置栅栏，v5 增加持久代际交接与写入门禁，v6 增加[不可变记录权威引用](immutable-records.md)，v7 增加绑定引用发布位置与 Region fence 的本地多数确认记录；旧 v6 及更早开发格式明确拒绝，不做收养、重写或隐式迁移。观察响应的状态格式也必须匹配当前版本。重要旧数据不能直接覆盖运行新版。Root、Pack 及本地 Pack 引用格式不变，混合 Tenant/Capability Pack 布局不变。版本协商、滚动升级和迁移通道仍未完成。
+Engine 状态与快照当前使用 **v7**，新空库标记 `meta/format=7`，文件头 `enginestate-v7`。v4 引入成员位置栅栏，v5 增加持久代际交接与写入门禁，v6 增加[不可变记录权威引用](immutable-records.md)，v7 增加绑定引用发布位置与 Region fence 的本地多数确认记录；旧 v6 及更早开发格式明确拒绝，不做收养、重写或隐式迁移。观察响应的状态格式也必须匹配当前版本。重要旧数据不能直接覆盖运行新版。Root、Pack 及本地 Pack 引用格式不变，混合 Tenant/Engine Pack 布局不变。版本协商、滚动升级和迁移通道仍未完成。
 
 ## 本地验证
 

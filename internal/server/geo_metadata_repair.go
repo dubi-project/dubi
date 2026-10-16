@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordrepair"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -76,7 +76,7 @@ func (worker *geoMetadataRepair) stepRecords(ctx context.Context) (recordrepair.
 		return recordrepair.GeoRecordRepairReport{}, err
 	}
 	report, retryErr := recordrepair.RetryPendingGeoRecords(ctx, worker.records,
-		func(resolveCtx context.Context, ref capstate.RecordReference) (placement.GeoPlan, string, error) {
+		func(resolveCtx context.Context, ref enginestate.RecordReference) (placement.GeoPlan, string, error) {
 			_, plan, err := placement.ReadRangeGeoPlan(resolveCtx, worker.runtime.Host, worker.runtime.Root,
 				ref.RangeID, rootstate.MaxRegionCohortNodes, rootstate.MaxRegionCohortNodes)
 			if err != nil {
@@ -86,15 +86,15 @@ func (worker *geoMetadataRepair) stepRecords(ctx context.Context) (recordrepair.
 			if err != nil || !found {
 				return placement.GeoPlan{}, "", fmt.Errorf("Owner Group %q has no current Region", ref.OwnerGroupID)
 			}
-			owner, found := worker.runtime.Capabilities.Resolve(ref.OwnerGroupID)
+			owner, found := worker.runtime.Engines.Resolve(ref.OwnerGroupID)
 			if !found || owner == nil {
 				return placement.GeoPlan{}, "", fmt.Errorf("Owner Group %q is not open locally", ref.OwnerGroupID)
 			}
 			target := router.Target{Keyspace: ref.Descriptor.Keyspace, RangeID: ref.RangeID,
 				OwnerGroupID: ref.OwnerGroupID, Epoch: ref.RangeEpoch, RoutingKey: ref.RoutingKey}
-			var current capstate.RecordReference
+			var current enginestate.RecordReference
 			var currentFound bool
-			if _, err := owner.ReadRouted(resolveCtx, worker.runtime.Host, target, func(view capstate.ReadView) error {
+			if _, err := owner.ReadRouted(resolveCtx, worker.runtime.Host, target, func(view enginestate.ReadView) error {
 				var readErr error
 				current, currentFound, readErr = view.RecordReference(ref.Descriptor.Key)
 				return readErr
@@ -128,7 +128,7 @@ func (worker *geoMetadataRepair) stepRecords(ctx context.Context) (recordrepair.
 // mismatch into the same durable record-repair ledger used for missing bytes.
 // The discovery walk is bounded per page and never infers placement from
 // online Nodes.
-func (worker *geoMetadataRepair) discoverStaleGeoRecords(ctx context.Context) ([]capstate.RecordReference, error) {
+func (worker *geoMetadataRepair) discoverStaleGeoRecords(ctx context.Context) ([]enginestate.RecordReference, error) {
 	if worker == nil || worker.runtime == nil || worker.records == nil {
 		return nil, nil
 	}
@@ -136,20 +136,20 @@ func (worker *geoMetadataRepair) discoverStaleGeoRecords(ctx context.Context) ([
 	if err != nil {
 		return nil, err
 	}
-	var stale []capstate.RecordReference
+	var stale []enginestate.RecordReference
 	if worker.geoCursors == nil {
 		worker.geoCursors = make(map[string][]byte)
 	}
 	active := make(map[string]bool, len(descriptors))
 	for _, descriptor := range descriptors {
 		active[descriptor.GroupID] = true
-		owner, found := worker.runtime.Capabilities.Resolve(descriptor.GroupID)
+		owner, found := worker.runtime.Engines.Resolve(descriptor.GroupID)
 		if !found || owner == nil {
 			continue
 		}
 		cursor := worker.geoCursors[descriptor.GroupID]
 		page, pageErr := owner.WalkCurrentReferencesPage(ctx, worker.runtime.Host, cursor, liveRepairPageLimit,
-			func(ref capstate.RecordReference) error {
+			func(ref enginestate.RecordReference) error {
 				_, plan, planErr := placement.ReadRangeGeoPlan(ctx, worker.runtime.Host, worker.runtime.Root,
 					ref.RangeID, rootstate.MaxRegionCohortNodes, rootstate.MaxRegionCohortNodes)
 				if planErr != nil || len(plan.Regions()) < 2 {
@@ -157,9 +157,9 @@ func (worker *geoMetadataRepair) discoverStaleGeoRecords(ctx context.Context) ([
 				}
 				target := router.Target{Keyspace: ref.Descriptor.Keyspace, RangeID: ref.RangeID,
 					OwnerGroupID: ref.OwnerGroupID, Epoch: ref.RangeEpoch, RoutingKey: ref.RoutingKey}
-				var receipt capstate.GeoCoverageRecord
+				var receipt enginestate.GeoCoverageRecord
 				var hasReceipt bool
-				if _, readErr := owner.ReadRouted(ctx, worker.runtime.Host, target, func(view capstate.ReadView) error {
+				if _, readErr := owner.ReadRouted(ctx, worker.runtime.Host, target, func(view enginestate.ReadView) error {
 					var err error
 					receipt, hasReceipt, err = view.GeoCoverage(ref.Descriptor.Key)
 					return err
@@ -196,12 +196,12 @@ func (worker *geoMetadataRepair) discoverStaleGeoRecords(ctx context.Context) ([
 	return stale, nil
 }
 
-func (worker *geoMetadataRepair) reconfirmStaleGeoRecords(ctx context.Context, refs []capstate.RecordReference) error {
+func (worker *geoMetadataRepair) reconfirmStaleGeoRecords(ctx context.Context, refs []enginestate.RecordReference) error {
 	if len(refs) == 0 {
 		return nil
 	}
 	for _, ref := range refs {
-		owner, found := worker.runtime.Capabilities.Resolve(ref.OwnerGroupID)
+		owner, found := worker.runtime.Engines.Resolve(ref.OwnerGroupID)
 		if !found || owner == nil {
 			continue
 		}

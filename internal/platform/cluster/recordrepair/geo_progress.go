@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -40,14 +40,14 @@ type GeoRecordRepairStore struct {
 }
 
 type geoRecordRepairEntry struct {
-	Version   int                      `json:"version"`
-	Reference capstate.RecordReference `json:"reference"`
+	Version   int                         `json:"version"`
+	Reference enginestate.RecordReference `json:"reference"`
 }
 
 // GeoRecordPlanResolver must derive a fresh confirmed GeoPlan and the Region
 // to prefer from the current Root/Range placement. It must not reuse a task's
 // historical cohort after a Region generation changes.
-type GeoRecordPlanResolver func(context.Context, capstate.RecordReference) (placement.GeoPlan, string, error)
+type GeoRecordPlanResolver func(context.Context, enginestate.RecordReference) (placement.GeoPlan, string, error)
 
 // GeoRecordObserver authenticates one physical observation on a specific
 // current Node. A failed observation is not evidence of a missing byte; the
@@ -179,7 +179,7 @@ func OpenGeoRecordRepairStore(root string) (*GeoRecordRepairStore, error) {
 	return &GeoRecordRepairStore{db: db}, nil
 }
 
-func validateGeoRepairReference(ref capstate.RecordReference) error {
+func validateGeoRepairReference(ref enginestate.RecordReference) error {
 	if ref.Version != 2 || ref.Descriptor.Validate() != nil || raft.ValidateGroupID(ref.OwnerGroupID) != nil ||
 		ref.OwnerGroupID == raft.RootGroupID || rootstate.ValidateRangeID(ref.RangeID) != nil || ref.RangeEpoch == 0 ||
 		len(ref.RoutingKey) > 4096 || rootstate.ValidateRequestID(ref.RequestID) != nil || ref.Index == 0 || len(ref.CommandHash) != 64 {
@@ -192,7 +192,7 @@ func validateGeoRepairReference(ref capstate.RecordReference) error {
 	return nil
 }
 
-func geoRecordRepairKey(ref capstate.RecordReference) ([]byte, error) {
+func geoRecordRepairKey(ref enginestate.RecordReference) ([]byte, error) {
 	if err := validateGeoRepairReference(ref); err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func geoRecordRepairKey(ref capstate.RecordReference) ([]byte, error) {
 	return []byte("geo-record/" + recordID + "/" + ref.RequestID), nil
 }
 
-func (s *GeoRecordRepairStore) Save(ref capstate.RecordReference) error {
+func (s *GeoRecordRepairStore) Save(ref enginestate.RecordReference) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.usable(); err != nil {
@@ -235,7 +235,7 @@ func (s *GeoRecordRepairStore) Save(ref capstate.RecordReference) error {
 	return s.db.Set(key, encoded, pebble.Sync)
 }
 
-func (s *GeoRecordRepairStore) List() ([]capstate.RecordReference, error) {
+func (s *GeoRecordRepairStore) List() ([]enginestate.RecordReference, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.usable(); err != nil {
@@ -246,7 +246,7 @@ func (s *GeoRecordRepairStore) List() ([]capstate.RecordReference, error) {
 		return nil, err
 	}
 	defer iter.Close()
-	result := make([]capstate.RecordReference, 0)
+	result := make([]enginestate.RecordReference, 0)
 	for iter.First(); iter.Valid(); iter.Next() {
 		if len(result) >= geoRepairMaxEntries {
 			return nil, errors.New("Geo record repair ledger exceeds entry bound")
@@ -269,7 +269,7 @@ func (s *GeoRecordRepairStore) List() ([]capstate.RecordReference, error) {
 	if err := iter.Error(); err != nil {
 		return nil, err
 	}
-	slices.SortFunc(result, func(a, b capstate.RecordReference) int {
+	slices.SortFunc(result, func(a, b enginestate.RecordReference) int {
 		ak, _ := geoRecordRepairKey(a)
 		bk, _ := geoRecordRepairKey(b)
 		return bytes.Compare(ak, bk)
@@ -277,7 +277,7 @@ func (s *GeoRecordRepairStore) List() ([]capstate.RecordReference, error) {
 	return result, nil
 }
 
-func (s *GeoRecordRepairStore) Delete(ref capstate.RecordReference) error {
+func (s *GeoRecordRepairStore) Delete(ref enginestate.RecordReference) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.usable(); err != nil {

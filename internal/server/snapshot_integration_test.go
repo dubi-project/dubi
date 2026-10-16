@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -35,8 +35,8 @@ import (
 
 type snapshotValueHandler struct{}
 
-func (snapshotValueHandler) Apply(tx *capstate.Transaction, target router.Target, payload []byte) (capstate.Outcome, error) {
-	return capstate.Outcome{}, tx.Set(target.RoutingKey, payload)
+func (snapshotValueHandler) Apply(tx *enginestate.Transaction, target router.Target, payload []byte) (enginestate.Outcome, error) {
+	return enginestate.Outcome{}, tx.Set(target.RoutingKey, payload)
 }
 
 func awaitSnapshotCondition(t *testing.T, label string, ready func() bool) {
@@ -93,11 +93,11 @@ func snapshotNodeTLS(t *testing.T, ids []uint64) ([]*tls.Config, []*tls.Config) 
 	return servers, clients
 }
 
-// This uses real Server/Node Root and capability adapters -> Raft -> mTLS
+// This uses real Server/Node Root and engine adapters -> Raft -> mTLS
 // transport -> file import -> state restore -> shared disk Pack paths.
 // All three processes are represented by independent in-process runtimes on
 // local directories; this is not independent-host/physical-disk/WAN evidence.
-func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
+func TestThreeNodeEngineFileSnapshotCatchupAndRestart(t *testing.T) {
 	const groupID = "data-1"
 	var roots [3]string
 	var ids []uint64
@@ -133,7 +133,7 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	registry := capabilityruntime.NewRegistry()
+	registry := engineruntime.NewRegistry()
 	if err := registry.Register("record", snapshotValueHandler{}); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		options := Options{StoreRoot: roots[i], Listener: listeners[i], CapabilityMux: mux,
+		options := Options{StoreRoot: roots[i], Listener: listeners[i], EngineMux: mux,
 			ServerTLS: serverTLS[i], ClientTLS: clientTLS[i], BootstrapDirectory: directory,
 			TickInterval: 30 * time.Millisecond, MembershipInterval: time.Second,
 			AuthorizePeer: func(ctx context.Context, claimed uint64) error {
@@ -256,7 +256,7 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 			Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "region-a", Address: addresses[i]}})
 	}
 	rootCommand(rootstate.Command{Version: 1, Type: rootstate.RegisterGroup, RequestID: "group",
-		Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateCapability}})
+		Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateEngine}})
 	// Bootstrap only the first data participant. The production Root task
 	// worker must prepare, add and promote the other two over authenticated,
 	// task-bound membership RPCs (or the equivalent guarded local path).
@@ -327,7 +327,7 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 		membershipIndex = index
 		return true
 	})
-	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items",
+	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
 		OwnerGroupID: groupID, Epoch: 1, State: rootstate.RangeStateActive}
 	activation, err := routedstate.EncodeActivateRange("activate", descriptor)
 	if err != nil {
@@ -337,12 +337,12 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitResult := func(request string) {
-		awaitSnapshotCondition(t, "capability result "+request, func() bool {
+		awaitSnapshotCondition(t, "engine result "+request, func() bool {
 			for _, node := range nodes {
 				if node == nil {
 					continue
 				}
-				state, found := node.Runtime.Capabilities.Resolve(groupID)
+				state, found := node.Runtime.Engines.Resolve(groupID)
 				if !found {
 					return false
 				}
@@ -351,7 +351,7 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 					return false
 				}
 				if !result.Applied {
-					t.Fatal("capability command rejected:", result.Error)
+					t.Fatal("engine command rejected:", result.Error)
 				}
 			}
 			return true
@@ -415,7 +415,7 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 			nodes[lagging].Runtime.Root.AppliedIndex() < rootCut {
 			t.Fatal("Root snapshot did not restore offline mutation", found, err)
 		}
-		state, found := nodes[lagging].Runtime.Capabilities.Resolve(groupID)
+		state, found := nodes[lagging].Runtime.Engines.Resolve(groupID)
 		if !found || state.AppliedIndex() < cut {
 			t.Fatal("lagging Group did not reach snapshot cut")
 		}
@@ -470,7 +470,7 @@ func TestThreeNodeCapabilityFileSnapshotCatchupAndRestart(t *testing.T) {
 	}
 	// Preserve the old temporary-test DB but make Raft recover a fresh local
 	// index solely from its durable artifact reference. No user Store is used.
-	statePath := filepath.Join(roots[lagging], "dubi-capability-groups", groupID, "dubi-capability-state")
+	statePath := filepath.Join(roots[lagging], "dubi-engine-groups", groupID, "dubi-engine-state")
 	if err := os.Rename(statePath, statePath+".retained"); err != nil {
 		t.Fatal(err)
 	}

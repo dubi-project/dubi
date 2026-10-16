@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -29,8 +29,8 @@ func (b publishedBarrier) ReadIndex(_ context.Context, group string) (uint64, er
 
 type referenceHandler struct{ descriptor records.Descriptor }
 
-func (h *referenceHandler) Apply(tx *capstate.Transaction, target router.Target, _ []byte) (capstate.Outcome, error) {
-	return capstate.Outcome{}, tx.SetRecordReference(target.RoutingKey, h.descriptor)
+func (h *referenceHandler) Apply(tx *enginestate.Transaction, target router.Target, _ []byte) (enginestate.Outcome, error) {
+	return enginestate.Outcome{}, tx.SetRecordReference(target.RoutingKey, h.descriptor)
 }
 
 type testObserver struct {
@@ -65,17 +65,17 @@ func (o *testObserver) ObserveRecordHolding(_ context.Context, id uint64, d reco
 	return raftrpc.HoldingObservation{}, errors.New("unknown Node")
 }
 
-func publishedFixture(t *testing.T) (*testRoot, router.Target, records.Descriptor, *capstate.State, *referenceHandler) {
+func publishedFixture(t *testing.T) (*testRoot, router.Target, records.Descriptor, *enginestate.State, *referenceHandler) {
 	t.Helper()
 	root, target, descriptor := stageFixture(t)
 	handler := &referenceHandler{descriptor: descriptor}
-	owner, err := capstate.Open(t.TempDir(), target.OwnerGroupID, handler)
+	owner, err := enginestate.Open(t.TempDir(), target.OwnerGroupID, handler)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = owner.Close() })
 	rangeDescriptor := rootstate.Range{RangeID: target.RangeID, TenantID: target.Keyspace.TenantID,
-		CapabilityID: target.Keyspace.CapabilityID, DatasetID: target.Keyspace.DatasetID,
+		EngineID: target.Keyspace.EngineID, DatasetID: target.Keyspace.DatasetID,
 		OwnerGroupID: target.OwnerGroupID, Epoch: target.Epoch, State: rootstate.RangeStateActive}
 	if err := owner.ApplyRange(1, "activate", rangeDescriptor); err != nil {
 		t.Fatal(err)

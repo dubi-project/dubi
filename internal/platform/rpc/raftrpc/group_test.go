@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rangebootstrap"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
@@ -27,27 +27,27 @@ import (
 
 type groupRPCHandler struct{}
 
-func (groupRPCHandler) Apply(transaction *capstate.Transaction, _ router.Target, payload []byte) (capstate.Outcome, error) {
+func (groupRPCHandler) Apply(transaction *enginestate.Transaction, _ router.Target, payload []byte) (enginestate.Outcome, error) {
 	separator := bytes.IndexByte(payload, '=')
 	if separator <= 0 {
-		return capstate.Outcome{Rejection: "invalid test mutation"}, nil
+		return enginestate.Outcome{Rejection: "invalid test mutation"}, nil
 	}
 	key, value := payload[:separator], payload[separator+1:]
 	if err := transaction.Set(key, value); err != nil {
-		return capstate.Outcome{}, err
+		return enginestate.Outcome{}, err
 	}
-	return capstate.Outcome{Value: value}, nil
+	return enginestate.Outcome{Value: value}, nil
 }
 
-func (groupRPCHandler) Read(view capstate.ReadView, _ router.Target, payload []byte) (capstate.Outcome, error) {
+func (groupRPCHandler) Read(view enginestate.ReadView, _ router.Target, payload []byte) (enginestate.Outcome, error) {
 	value, found, err := view.Get(payload)
 	if err != nil {
-		return capstate.Outcome{}, err
+		return enginestate.Outcome{}, err
 	}
 	if !found {
-		return capstate.Outcome{Rejection: "not found"}, nil
+		return enginestate.Outcome{Rejection: "not found"}, nil
 	}
-	return capstate.Outcome{Value: value}, nil
+	return enginestate.Outcome{Value: value}, nil
 }
 
 func TestGroupRPCSubmitsAndConfirmsOverMutualTLS(t *testing.T) {
@@ -150,7 +150,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	}
 	clientID := clientIdentity.RaftID
 	pool, certificates := testCertificates(t, []uint64{serverID.RaftID, clientID})
-	ownerState, err := capstate.Open(t.TempDir(), "data-1", groupRPCHandler{})
+	ownerState, err := enginestate.Open(t.TempDir(), "data-1", groupRPCHandler{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,8 +191,8 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	capabilityServer, err := NewCapabilityServer(serverID.ClusterID, serverID.RaftID, host,
-		func(groupID string) (*capstate.State, bool) {
+	engineServer, err := NewEngineServer(serverID.ClusterID, serverID.RaftID, host,
+		func(groupID string) (*enginestate.State, bool) {
 			return ownerState, groupID == "data-1"
 		}, authorize, 0)
 	if err != nil {
@@ -203,7 +203,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	grpcServer := grpc.NewServer(grpc.Creds(serverTLS), grpc.MaxRecvMsgSize(DefaultMaxMessageSize+1024))
 	defer grpcServer.Stop()
 	raftwire.RegisterRangeControlServiceServer(grpcServer, rangeServer)
-	raftwire.RegisterCapabilityServiceServer(grpcServer, capabilityServer)
+	raftwire.RegisterEngineServiceServer(grpcServer, engineServer)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", CapabilityID: "record",
+	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
 		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	// This deadline covers the whole multi-RPC scenario, including creation and
 	// fsync of another Root Host below. It is not a per-RPC latency assertion;
@@ -273,11 +273,11 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	}
 	rootCommands := []rootstate.Command{
 		{Version: 1, RequestID: "group-data", Type: rootstate.RegisterGroup,
-			Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}},
+			Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}},
 		{Version: 1, RequestID: "tenant-a", Type: rootstate.RegisterTenant,
 			Tenant: &rootstate.Tenant{TenantID: "tenant-a"}},
 		{Version: 1, RequestID: "dataset-a", Type: rootstate.CreateDataset,
-			Dataset: &rootstate.Dataset{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items",
+			Dataset: &rootstate.Dataset{TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
 				RangeID: "range-a", OwnerGroupID: "data-1"}},
 	}
 	for _, command := range rootCommands {
@@ -299,7 +299,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	if err := bootstrapper.Reconcile(ctx, "range-a"); err != nil {
 		t.Fatalf("cross-Node Range bootstrap = %v", err)
 	}
-	keyspace := rootstate.Keyspace{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
 	if published, found, err := rootState.RouteKeyspace(keyspace, []byte("key")); err != nil || !found ||
 		published.OwnerFenceRequestID != proof.RequestID || published.OwnerFenceIndex != proof.AppliedIndex {
 		t.Fatalf("cross-Node published Range = %+v, %v, %v", published, found, err)
@@ -307,7 +307,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	published, _, _ := rootState.RouteKeyspace(keyspace, []byte("key"))
 	target := router.Target{Keyspace: keyspace, RangeID: published.RangeID,
 		OwnerGroupID: published.OwnerGroupID, Epoch: published.Epoch, RoutingKey: []byte("key")}
-	remoteCapability, err := client.RoutedCapability("data-1")
+	remoteEngine, err := client.RoutedEngine("data-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,24 +315,24 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutationResult, err := remoteCapability.Mutate(ctx, mutation)
+	mutationResult, err := remoteEngine.Mutate(ctx, mutation)
 	if err != nil || !mutationResult.Applied || mutationResult.Error != "" || string(mutationResult.Value) != "value" {
-		t.Fatalf("remote capability mutation = %+v, %v", mutationResult, err)
+		t.Fatalf("remote engine mutation = %+v, %v", mutationResult, err)
 	}
 	if candidates := groupRoutes.Candidates("data-1"); len(candidates) == 0 || candidates[0] != serverID.RaftID {
 		t.Fatalf("observed Leader was not promoted: %v", candidates)
 	}
-	repeatedMutation, err := remoteCapability.Mutate(ctx, mutation)
+	repeatedMutation, err := remoteEngine.Mutate(ctx, mutation)
 	if err != nil || repeatedMutation.Index != mutationResult.Index {
 		t.Fatalf("repeated remote mutation = %+v, %v", repeatedMutation, err)
 	}
-	readOutcome, readIndex, err := remoteCapability.Read(ctx, target, []byte("item"))
+	readOutcome, readIndex, err := remoteEngine.Read(ctx, target, []byte("item"))
 	if err != nil || readIndex < mutationResult.Index || readOutcome.Rejection != "" || string(readOutcome.Value) != "value" {
-		t.Fatalf("remote capability read = %+v, index %d, %v", readOutcome, readIndex, err)
+		t.Fatalf("remote engine read = %+v, index %d, %v", readOutcome, readIndex, err)
 	}
 	stale := target
 	stale.Epoch++
-	if _, _, err := remoteCapability.Read(ctx, stale, []byte("item")); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("stale remote capability read = %v", err)
+	if _, _, err := remoteEngine.Read(ctx, stale, []byte("item")); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale remote engine read = %v", err)
 	}
 }

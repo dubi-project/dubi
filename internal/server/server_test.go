@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
@@ -25,8 +25,8 @@ import (
 
 type serverTestHandler struct{}
 
-func (*serverTestHandler) Apply(*capstate.Transaction, router.Target, []byte) (capstate.Outcome, error) {
-	return capstate.Outcome{}, nil
+func (*serverTestHandler) Apply(*enginestate.Transaction, router.Target, []byte) (enginestate.Outcome, error) {
+	return enginestate.Outcome{}, nil
 }
 
 func TestServerRunsInternalTLSRPCAndShutsDown(t *testing.T) {
@@ -43,7 +43,7 @@ func TestServerRunsInternalTLSRPCAndShutsDown(t *testing.T) {
 	}
 	server, err := Open(Options{StoreRoot: storeRoot, Listener: listener,
 		ServerTLS: serverTLS, ClientTLS: clientTLS,
-		AuthorizePeer: func(context.Context, uint64) error { return nil }, CapabilityMux: mux,
+		AuthorizePeer: func(context.Context, uint64) error { return nil }, EngineMux: mux,
 		RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Millisecond,
 		MembershipInterval: 5 * time.Millisecond})
 	if err != nil {
@@ -89,7 +89,7 @@ func TestServerRunsInternalTLSRPCAndShutsDown(t *testing.T) {
 	}
 	restarted, err := Open(Options{StoreRoot: storeRoot, Listener: restartListener,
 		ServerTLS: serverTLS, ClientTLS: clientTLS,
-		AuthorizePeer: func(context.Context, uint64) error { return nil }, CapabilityMux: mux,
+		AuthorizePeer: func(context.Context, uint64) error { return nil }, EngineMux: mux,
 		TickInterval: time.Hour, MembershipInterval: time.Second})
 	if err != nil {
 		t.Fatalf("server shutdown retained resources: %v", err)
@@ -110,7 +110,7 @@ func TestServerRejectsUnsafeTLSAndMissingBootstrapDirectory(t *testing.T) {
 	unsafe.ClientAuth = tls.NoClientCert
 	options := Options{StoreRoot: t.TempDir(), Listener: listener,
 		ServerTLS: unsafe, ClientTLS: clientTLS,
-		AuthorizePeer: func(context.Context, uint64) error { return nil }, CapabilityMux: serverTestMux(t)}
+		AuthorizePeer: func(context.Context, uint64) error { return nil }, EngineMux: serverTestMux(t)}
 	if _, err := Open(options); err == nil {
 		t.Fatal("server accepted TLS without mandatory client certificates")
 	}
@@ -121,9 +121,9 @@ func TestServerRejectsUnsafeTLSAndMissingBootstrapDirectory(t *testing.T) {
 	}
 }
 
-func serverTestMux(t *testing.T) *capabilityruntime.Mux {
+func serverTestMux(t *testing.T) *engineruntime.Mux {
 	t.Helper()
-	registry := capabilityruntime.NewRegistry()
+	registry := engineruntime.NewRegistry()
 	if err := registry.Register("record", &serverTestHandler{}); err != nil {
 		t.Fatal(err)
 	}

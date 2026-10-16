@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -46,7 +46,7 @@ func (r *pendingTestRoot) RootMembers(ids ...uint64) ([]rootstate.Node, bool, er
 	return append([]rootstate.Node(nil), r.sources...), true, nil
 }
 
-func pendingFixture(t *testing.T) (regionfence.Handoff, *pendingTestRoot, capstate.RecordCut) {
+func pendingFixture(t *testing.T) (regionfence.Handoff, *pendingTestRoot, enginestate.RecordCut) {
 	t.Helper()
 	group := "region-west"
 	members := []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}
@@ -68,8 +68,8 @@ func pendingFixture(t *testing.T) (regionfence.Handoff, *pendingTestRoot, capsta
 			{RaftID: 2, RegionID: "west", NodeID: "node-2", Address: "node-2:7443"},
 			{RaftID: 3, RegionID: "west", NodeID: "node-3", Address: "node-3:7443"},
 		}}
-	cut := capstate.RecordCut{Version: 1, Seal: seal, Artifact: snapshot.Reference{Version: snapshot.StreamVersion,
-		GroupID: group, Index: 4, Size: 1, SHA256: zeros()}, RecordCutSummary: capstate.RecordCutSummary{SHA256: zeros()}}
+	cut := enginestate.RecordCut{Version: 1, Seal: seal, Artifact: snapshot.Reference{Version: snapshot.StreamVersion,
+		GroupID: group, Index: 4, Size: 1, SHA256: zeros()}, RecordCutSummary: enginestate.RecordCutSummary{SHA256: zeros()}}
 	if err := cut.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -85,13 +85,13 @@ func TestFillPendingLocalUsesFullOldCohortAndRechecksRoot(t *testing.T) {
 	filled := 0
 	want := Report{References: 2, Fetched: 2, ReferencedBytes: 9}
 	got, err := fillPendingLocal(context.Background(), barrier, root, 4, seal,
-		func(_ context.Context, source rootstate.Node) (capstate.RecordCut, error) {
+		func(_ context.Context, source rootstate.Node) (enginestate.RecordCut, error) {
 			fetched = append(fetched, source.RaftID)
 			if source.RaftID == 1 {
-				return capstate.RecordCut{}, status.Error(codes.Unavailable, "offline")
+				return enginestate.RecordCut{}, status.Error(codes.Unavailable, "offline")
 			}
 			return cut, nil
-		}, func(_ context.Context, received capstate.RecordCut, sources []rootstate.Node) (Report, error) {
+		}, func(_ context.Context, received enginestate.RecordCut, sources []rootstate.Node) (Report, error) {
 			filled++
 			if !reflect.DeepEqual(received, cut) || !reflect.DeepEqual(sources, root.sources) {
 				t.Fatal("fill received a different cut or source set")
@@ -129,14 +129,14 @@ func TestFillPendingLocalLeavesTimeForAnotherSealedCutSource(t *testing.T) {
 	defer cancel()
 	var fetched []uint64
 	got, err := fillPendingLocal(ctx, &pendingTestBarrier{}, root, 4, seal,
-		func(attempt context.Context, source rootstate.Node) (capstate.RecordCut, error) {
+		func(attempt context.Context, source rootstate.Node) (enginestate.RecordCut, error) {
 			fetched = append(fetched, source.RaftID)
 			if source.RaftID == 1 {
 				<-attempt.Done()
-				return capstate.RecordCut{}, attempt.Err()
+				return enginestate.RecordCut{}, attempt.Err()
 			}
 			return cut, nil
-		}, func(context.Context, capstate.RecordCut, []rootstate.Node) (Report, error) {
+		}, func(context.Context, enginestate.RecordCut, []rootstate.Node) (Report, error) {
 			return Report{References: 1}, nil
 		})
 	if err != nil || got.References != 1 || ctx.Err() != nil || !reflect.DeepEqual(fetched, []uint64{1, 2}) {
@@ -151,12 +151,12 @@ func TestFillPendingLocalRejectsPlanAndSourceChanges(t *testing.T) {
 			barrier := &pendingTestBarrier{}
 			fills := 0
 			_, err := fillPendingLocal(context.Background(), barrier, root, 4, seal,
-				func(context.Context, rootstate.Node) (capstate.RecordCut, error) {
+				func(context.Context, rootstate.Node) (enginestate.RecordCut, error) {
 					if phase == "before-fill" {
 						root.sources[0].Address = "replaced:7443"
 					}
 					return cut, nil
-				}, func(context.Context, capstate.RecordCut, []rootstate.Node) (Report, error) {
+				}, func(context.Context, enginestate.RecordCut, []rootstate.Node) (Report, error) {
 					fills++
 					root.view.Pending = nil
 					return Report{References: 1}, nil
@@ -171,17 +171,17 @@ func TestFillPendingLocalRejectsPlanAndSourceChanges(t *testing.T) {
 func TestFillPendingLocalRejectsInvalidSourceOrCut(t *testing.T) {
 	seal, root, cut := pendingFixture(t)
 	if _, err := fillPendingLocal(context.Background(), &pendingTestBarrier{}, root, 2, seal,
-		func(context.Context, rootstate.Node) (capstate.RecordCut, error) {
+		func(context.Context, rootstate.Node) (enginestate.RecordCut, error) {
 			t.Fatal("fetched for old Node")
 			return cut, nil
 		},
-		func(context.Context, capstate.RecordCut, []rootstate.Node) (Report, error) { return Report{}, nil }); err == nil {
+		func(context.Context, enginestate.RecordCut, []rootstate.Node) (Report, error) { return Report{}, nil }); err == nil {
 		t.Fatal("old Node accepted as newly added destination")
 	}
 	cut.Seal.SealRequestID = "different"
 	if _, err := fillPendingLocal(context.Background(), &pendingTestBarrier{}, root, 4, seal,
-		func(context.Context, rootstate.Node) (capstate.RecordCut, error) { return cut, nil },
-		func(context.Context, capstate.RecordCut, []rootstate.Node) (Report, error) {
+		func(context.Context, rootstate.Node) (enginestate.RecordCut, error) { return cut, nil },
+		func(context.Context, enginestate.RecordCut, []rootstate.Node) (Report, error) {
 			t.Fatal("filled wrong cut")
 			return Report{}, nil
 		}); err == nil {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 )
@@ -17,7 +17,7 @@ func registrationRuntime(t *testing.T) *Runtime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := capabilityruntime.NewRegistry()
+	registry := engineruntime.NewRegistry()
 	if err := registry.Register("record", &nodeTestHandler{}); err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func registrationRuntime(t *testing.T) *Runtime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, CapabilityMux: mux})
+	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}

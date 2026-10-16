@@ -9,7 +9,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/identity"
 )
 
-// These are internal resource kinds, not Capability IDs or deployment knobs.
+// These are internal resource kinds, not Engine IDs or deployment knobs.
 // The Store's existing durable manifest is the parent catalog. A mandatory
 // entry is created together with Store identity, never inferred from a missing
 // child's registration. Additional required kinds need an explicit format path.

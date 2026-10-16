@@ -66,7 +66,7 @@ func geoStagePlanWithSizes(t *testing.T, westSize, eastSize int) (placement.GeoP
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items"},
+	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"},
 		RangeID: "range-a", OwnerGroupID: "region-west", Epoch: 3, RoutingKey: []byte("key")}
 	descriptor, err := records.Describe(target.Keyspace, "origin-group", []byte("key"), []byte("body"))
 	if err != nil {

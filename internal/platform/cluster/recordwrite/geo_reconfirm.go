@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
@@ -22,10 +22,10 @@ import (
 
 // EnsureCurrentGeoConfirmation refreshes a GeoCoverage receipt after a
 // Region generation, Group epoch, or fence changes. It never republishes the
-// capability mutation: the immutable reference is read first and the new
+// engine mutation: the immutable reference is read first and the new
 // physical observation is bound to that exact publication before the Owner
 // Group records the replacement receipt.
-func (w Writer) EnsureCurrentGeoConfirmation(ctx context.Context, ref capstate.RecordReference,
+func (w Writer) EnsureCurrentGeoConfirmation(ctx context.Context, ref enginestate.RecordReference,
 	maxRegions, maxNodes int) (bool, error) {
 	if ctx == nil || w.Barrier == nil || w.Root == nil || w.Owner == nil || w.Store == nil ||
 		w.Observer == nil || w.MirrorGeo == nil || w.Submit == nil || w.LocalID == 0 ||
@@ -46,10 +46,10 @@ func (w Writer) EnsureCurrentGeoConfirmation(ctx context.Context, ref capstate.R
 	if err != nil {
 		return false, err
 	}
-	var current capstate.RecordReference
-	var receipt capstate.GeoCoverageRecord
+	var current enginestate.RecordReference
+	var receipt enginestate.GeoCoverageRecord
 	var foundReceipt bool
-	if err := readOwner(ctx, w.Barrier, w.Owner, target, func(view capstate.ReadView) error {
+	if err := readOwner(ctx, w.Barrier, w.Owner, target, func(view enginestate.ReadView) error {
 		var found bool
 		var readErr error
 		current, found, readErr = view.RecordReference(ref.Descriptor.Key)
@@ -104,7 +104,7 @@ func (w Writer) EnsureCurrentGeoConfirmation(ctx context.Context, ref capstate.R
 	if err := w.Submit(ctx, target.OwnerGroupID, command); err != nil {
 		return false, fmt.Errorf("submit Geo reconfirmation: %w", err)
 	}
-	result, err := w.awaitResult(ctx, target.OwnerGroupID, func() (capstate.Result, bool, error) {
+	result, err := w.awaitResult(ctx, target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForGeoConfirmation(confirmID, claim)
 	})
 	if err != nil {
@@ -120,13 +120,13 @@ func (w Writer) EnsureCurrentGeoConfirmation(ctx context.Context, ref capstate.R
 	return true, nil
 }
 
-func sameReference(a, b capstate.RecordReference) bool {
+func sameReference(a, b enginestate.RecordReference) bool {
 	return a.OwnerGroupID == b.OwnerGroupID && a.RequestID == b.RequestID && a.Index == b.Index && a.CommandHash == b.CommandHash &&
 		a.RangeID == b.RangeID && a.RangeEpoch == b.RangeEpoch &&
 		bytes.Equal(a.RoutingKey, b.RoutingKey) && reflect.DeepEqual(a.Descriptor, b.Descriptor)
 }
 
-func geoReceiptMatchesPlan(receipt capstate.GeoCoverageRecord, ref capstate.RecordReference,
+func geoReceiptMatchesPlan(receipt enginestate.GeoCoverageRecord, ref enginestate.RecordReference,
 	target router.Target, plan placement.GeoPlan) bool {
 	if receipt.Claim.Validate() != nil || !reflect.DeepEqual(receipt.Claim.Target, target) ||
 		!bytes.Equal(receipt.Claim.Key, ref.Descriptor.Key) || receipt.Claim.ReferenceRequestID != ref.RequestID ||
@@ -156,7 +156,7 @@ func geoReceiptMatchesPlan(receipt capstate.GeoCoverageRecord, ref capstate.Reco
 	return true
 }
 
-func recordIDForReference(ref capstate.RecordReference) string {
+func recordIDForReference(ref enginestate.RecordReference) string {
 	id, _ := ref.Descriptor.ID()
 	return id
 }
@@ -166,7 +166,7 @@ func recordIDForReference(ref capstate.RecordReference) string {
 // Callers use the negative result to enqueue a bounded background
 // reconfirmation; it does not by itself assert that the bytes are currently
 // held.
-func GeoReceiptMatchesPlan(receipt capstate.GeoCoverageRecord, ref capstate.RecordReference,
+func GeoReceiptMatchesPlan(receipt enginestate.GeoCoverageRecord, ref enginestate.RecordReference,
 	target router.Target, plan placement.GeoPlan) bool {
 	return geoReceiptMatchesPlan(receipt, ref, target, plan)
 }

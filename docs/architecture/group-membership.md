@@ -39,7 +39,7 @@ Raft 保留供受信 Root 加入/拓扑内部调用的本地原语；普通数�
 
 新 Change 请求必须含任务、epoch、成员位置和配置；Prepare 必须含任务/epoch，Transfer 还必须含成员切点与 term，旧空字段请求明确拒绝。新客户端拒绝缺少身份/成员位置/读屏障/term 的旧 Inspect 响应，以及没有完整任务绑定的准备/转移确认，不降级为无栅栏控制。协议协商和滚动升级仍未完成，当前不支持混用旧二进制。
 
-成员控制本身沿用 capstate v4 引入的成员位置键，与 ConfState/applied 原子提交，并随文件/内联快照恢复；v5 另增加[区域交接](region-handoff.md)语义，v6 增加权威记录引用，当前 v7 增加[本地多数确认记录](immutable-records.md)。状态适配器将成员切点暴露给 Raft；不支持它的状态机不得以普通 applied index 代替。失去既有日志的资源保护不变。
+成员控制本身沿用 enginestate v4 引入的成员位置键，与 ConfState/applied 原子提交，并随文件/内联快照恢复；v5 另增加[区域交接](region-handoff.md)语义，v6 增加权威记录引用，当前 v7 增加[本地多数确认记录](immutable-records.md)。状态适配器将成员切点暴露给 Raft；不支持它的状态机不得以普通 applied index 代替。失去既有日志的资源保护不变。
 
 ## 验证边界
 

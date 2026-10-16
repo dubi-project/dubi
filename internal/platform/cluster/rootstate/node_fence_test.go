@@ -45,7 +45,7 @@ func TestNodeFenceOnlyBeforeClusterResponsibility(t *testing.T) {
 	if got := applyFenceAttempt(t, s, 1); !strings.Contains(got, "Root member") {
 		t.Fatal("current Root member was fenced", got)
 	}
-	applyRootFileCommand(t, s, Command{Type: RegisterGroup, Group: &Group{GroupID: "data", StateKind: GroupStateCapability}})
+	applyRootFileCommand(t, s, Command{Type: RegisterGroup, Group: &Group{GroupID: "data", StateKind: GroupStateEngine}})
 	applyRootFileCommand(t, s, Command{Type: PublishGroupMembers, Membership: &GroupMembership{GroupID: "data", ExpectedEpoch: 1,
 		Members: []GroupMember{{RaftID: 2, Role: GroupMemberVoter}}}})
 	if got := applyFenceAttempt(t, s, 2); !strings.Contains(got, "responsibility") {

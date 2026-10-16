@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/capability/record"
+	"github.com/dubi-project/dubi/internal/engine/record"
 	"github.com/dubi-project/dubi/internal/platform/auth"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilitydata"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginedata"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rangebootstrap"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordrepair"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
@@ -449,7 +449,7 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 func (s *dataService) CreateDataset(ctx context.Context, request *datawire.CreateDatasetRequest) (*datawire.CreateDatasetResponse, error) {
 	if request == nil || proto.Size(request) > 32<<10 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || len(request.GetRequestId()) > 100 ||
 		rootstate.ValidateTenantID(request.GetTenantId()) != nil ||
-		(rootstate.Keyspace{TenantID: request.GetTenantId(), CapabilityID: record.CapabilityID, DatasetID: request.GetDatasetId()}).Validate() != nil {
+		(rootstate.Keyspace{TenantID: request.GetTenantId(), EngineID: record.EngineID, DatasetID: request.GetDatasetId()}).Validate() != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid Dataset request")
 	}
 	ctx, release, err := s.begin(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request))
@@ -457,7 +457,7 @@ func (s *dataService) CreateDataset(ctx context.Context, request *datawire.Creat
 		return nil, err
 	}
 	defer release()
-	if existing, found, err := s.runtime.Root.Dataset(request.TenantId, record.CapabilityID, request.DatasetId); err != nil {
+	if existing, found, err := s.runtime.Root.Dataset(request.TenantId, record.EngineID, request.DatasetId); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "read Dataset: %v", err)
 	} else if found {
 		return s.activateDataset(ctx, existing)
@@ -484,12 +484,12 @@ func (s *dataService) CreateDataset(ctx context.Context, request *datawire.Creat
 		}
 	}
 	digest := sha256.Sum256([]byte(request.TenantId + "\x00" + request.DatasetId))
-	dataset := rootstate.Dataset{TenantID: request.TenantId, CapabilityID: record.CapabilityID,
+	dataset := rootstate.Dataset{TenantID: request.TenantId, EngineID: record.EngineID,
 		DatasetID: request.DatasetId, RangeID: "range-" + hex.EncodeToString(digest[:16]), OwnerGroupID: ownerGroup}
 	command := rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.RequestId + "-dataset",
 		Type: rootstate.CreateDataset, Dataset: &dataset}
 	if err := s.rootCommand(ctx, command); err != nil {
-		if existing, found, readErr := s.runtime.Root.Dataset(request.TenantId, record.CapabilityID, request.DatasetId); readErr != nil || !found {
+		if existing, found, readErr := s.runtime.Root.Dataset(request.TenantId, record.EngineID, request.DatasetId); readErr != nil || !found {
 			return nil, err
 		} else {
 			dataset = existing
@@ -594,7 +594,7 @@ func (s *dataService) rootCommand(ctx context.Context, command rootstate.Command
 
 func (s *dataService) activateDataset(ctx context.Context, dataset rootstate.Dataset) (*datawire.CreateDatasetResponse, error) {
 	bootstrap, err := rangebootstrap.New(s.runtime.Host, s.runtime.Root, func(groupID string) (rangebootstrap.OwnerControl, bool) {
-		if state, found := s.runtime.Capabilities.Resolve(groupID); found {
+		if state, found := s.runtime.Engines.Resolve(groupID); found {
 			owner, err := rangebootstrap.NewLocalOwner(s.runtime.Host, state)
 			return owner, err == nil
 		}
@@ -620,7 +620,7 @@ func (s *dataService) activateDataset(ctx context.Context, dataset rootstate.Dat
 }
 
 func (s *dataService) target(ctx context.Context, tenant, dataset string, key []byte) (router.Target, error) {
-	space := rootstate.Keyspace{TenantID: tenant, CapabilityID: record.CapabilityID, DatasetID: dataset}
+	space := rootstate.Keyspace{TenantID: tenant, EngineID: record.EngineID, DatasetID: dataset}
 	if space.Validate() != nil || len(key) == 0 || len(key) > 4096 {
 		return router.Target{}, status.Error(codes.InvalidArgument, "invalid Record identity or key")
 	}
@@ -648,12 +648,12 @@ func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecord
 		return nil, err
 	}
 	defer release()
-	entry, err := capabilitydata.NewWithGeoRetry(s.runtime, s.client, s.geoRetry)
+	entry, err := enginedata.NewWithGeoRetry(s.runtime, s.client, s.geoRetry)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
 	}
-	keyspace := rootstate.Keyspace{TenantID: request.TenantId, CapabilityID: record.CapabilityID, DatasetID: request.DatasetId}
-	result, err := entry.Write(ctx, capabilitydata.WriteRequest{RequestID: request.RequestId, Keyspace: keyspace,
+	keyspace := rootstate.Keyspace{TenantID: request.TenantId, EngineID: record.EngineID, DatasetID: request.DatasetId}
+	result, err := entry.Write(ctx, enginedata.WriteRequest{RequestID: request.RequestId, Keyspace: keyspace,
 		Key: request.Key, Body: request.Value, Publish: func(descriptor records.Descriptor) ([]byte, error) {
 			return record.ReferencePutPayload(descriptor)
 		}})
@@ -673,11 +673,11 @@ func (s *dataService) GetRecord(ctx context.Context, request *datawire.GetRecord
 		return nil, err
 	}
 	defer release()
-	entry, err := capabilitydata.NewWithGeoRetry(s.runtime, s.client, s.geoRetry)
+	entry, err := enginedata.NewWithGeoRetry(s.runtime, s.client, s.geoRetry)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
 	}
-	keyspace := rootstate.Keyspace{TenantID: request.TenantId, CapabilityID: record.CapabilityID, DatasetID: request.DatasetId}
+	keyspace := rootstate.Keyspace{TenantID: request.TenantId, EngineID: record.EngineID, DatasetID: request.DatasetId}
 	read, err := entry.Read(ctx, keyspace, request.Key)
 	if err != nil {
 		if errors.Is(err, router.ErrNoRoute) {

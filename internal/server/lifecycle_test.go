@@ -38,7 +38,7 @@ func TestServerListenerFailureInterruptsStartupBeforeLeader(t *testing.T) {
 	fault := errors.New("injected listener failure")
 	server, err := Open(Options{StoreRoot: store, Listener: failedListener{Listener: listener, err: fault},
 		ServerTLS: serverTLS, ClientTLS: clientTLS, AuthorizePeer: func(context.Context, uint64) error { return nil },
-		CapabilityMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Hour})
+		EngineMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func testServerCloseJoinsControlWorker(t *testing.T, stage string) {
 		t.Fatal(err)
 	}
 	server, err := Open(Options{StoreRoot: store, Listener: listener, ServerTLS: serverTLS, ClientTLS: clientTLS,
-		AuthorizePeer: func(context.Context, uint64) error { return nil }, CapabilityMux: serverTestMux(t),
+		AuthorizePeer: func(context.Context, uint64) error { return nil }, EngineMux: serverTestMux(t),
 		RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +191,7 @@ func TestServerCloseJoinsRPCHandlersBeforeReleasingStore(t *testing.T) {
 			close(canceled)
 			<-release // A handler still finishing cleanup after its transport stops.
 			return ctx.Err()
-		}, CapabilityMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Millisecond})
+		}, EngineMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

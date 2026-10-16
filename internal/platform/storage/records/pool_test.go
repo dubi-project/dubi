@@ -64,7 +64,7 @@ func TestRecordSharedPackReopenAndLostVolume(t *testing.T) {
 	var locations []pack.Location
 	for i, capa := range []string{"file", "cache", "message", "search"} {
 		d := descriptor(t, "same-key", "data")
-		d.Keyspace.CapabilityID = capa
+		d.Keyspace.EngineID = capa
 		if i%2 == 0 {
 			d.Keyspace.TenantID = "other-tenant"
 		}

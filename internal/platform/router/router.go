@@ -21,7 +21,7 @@ var (
 )
 
 // Target is the immutable routing generation carried from an entry Node to
-// the Owner Group. Capability state machines must compare it with their
+// the Owner Group. Engine state machines must compare it with their
 // locally applied Range fence in the same atomic transaction as a mutation.
 type Target struct {
 	Keyspace     rootstate.Keyspace `json:"keyspace"`
@@ -100,7 +100,7 @@ func (r *Router) ResolveTarget(ctx context.Context, keyspace rootstate.Keyspace,
 }
 
 // CheckOwner compares a forwarded Target with the exact Range fence already
-// applied by the Owner Group. It is a pure comparison so capability state
+// applied by the Owner Group. It is a pure comparison so engine state
 // machines can invoke it inside their own atomic apply transaction.
 //
 // Calling this only before Raft submission is not a write fence: the applied

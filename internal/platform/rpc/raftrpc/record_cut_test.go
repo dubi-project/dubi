@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -45,7 +45,7 @@ func recordCutArtifacts(t *testing.T) *snapshot.Store {
 	return store
 }
 
-func recordCutFixture(t *testing.T) (capstate.RecordCut, []byte) {
+func recordCutFixture(t *testing.T) (enginestate.RecordCut, []byte) {
 	t.Helper()
 	s, _, state, _, _ := regionObservationFixture(t)
 	sealObservationState(t, state)
@@ -81,7 +81,7 @@ func recordCutFixture(t *testing.T) (capstate.RecordCut, []byte) {
 
 type cutProxy struct {
 	raftwire.UnimplementedRecordCutServiceServer
-	cut   capstate.RecordCut
+	cut   enginestate.RecordCut
 	body  []byte
 	mode  string
 	calls atomic.Int32
@@ -164,7 +164,7 @@ func TestFetchRecordCutAuthenticatedStreamingAndIncompleteReject(t *testing.T) {
 			destination := recordCutArtifacts(t)
 			got, err := client.FetchRecordCut(ctx, target, cut.Seal, destination)
 			if mode == "good" {
-				if err != nil || got.RecordCutSummary != cut.RecordCutSummary || capstate.WalkVerifiedRecordCut(ctx, destination, got, nil) != nil {
+				if err != nil || got.RecordCutSummary != cut.RecordCutSummary || enginestate.WalkVerifiedRecordCut(ctx, destination, got, nil) != nil {
 					t.Fatal("authenticated cut did not import", got, err)
 				}
 				return
@@ -244,7 +244,7 @@ func recordCutServerFixture(t *testing.T) (*RecordCutServer, *rootstate.State, r
 		t.Fatal(err)
 	}
 	index++
-	apply("group", rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+	apply("group", rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	members := []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}
 	apply("members", rootstate.Command{Type: rootstate.PublishGroupMembers, Membership: &rootstate.GroupMembership{GroupID: "data-1", ExpectedEpoch: 1, Members: members}})
 	apply("plan-initial", rootstate.Command{Type: rootstate.PlanRegionCohort, RegionPlan: &rootstate.RegionCohortPlan{RegionID: "west", GroupID: "data-1", ExpectedGeneration: 0, Nodes: []uint64{1, 2, 3}}})
@@ -252,7 +252,7 @@ func recordCutServerFixture(t *testing.T) (*RecordCutServer, *rootstate.State, r
 	if err != nil || !found {
 		t.Fatal(initial, found, err)
 	}
-	state, err := capstate.Open(t.TempDir(), "data-1", groupRPCHandler{})
+	state, err := enginestate.Open(t.TempDir(), "data-1", groupRPCHandler{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func recordCutServerFixture(t *testing.T) (*RecordCutServer, *rootstate.State, r
 		t.Fatal(err)
 	}
 	auth := &RecordHoldingServer{local: local, host: host, root: root, authorize: authorize}
-	service, err := NewRecordCutServer(auth, func(group string) (*capstate.State, bool) { return state, group == "data-1" }, recordCutArtifacts(t))
+	service, err := NewRecordCutServer(auth, func(group string) (*enginestate.State, bool) { return state, group == "data-1" }, recordCutArtifacts(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestRecordCutServerBuildsFreshAuthorizedStreamAndFencesRemoval(t *testing.T
 	if err := service.Get(request, stream); err != nil || len(stream.frames) < 2 {
 		t.Fatal("valid sealed cut was not streamed", err, len(stream.frames))
 	}
-	var cut capstate.RecordCut
+	var cut enginestate.RecordCut
 	if err := json.Unmarshal(stream.frames[0].GetHeader().CutDescriptor, &cut); err != nil || cut.Count != 0 || cut.Seal.SealRequestID != seal.SealRequestID {
 		t.Fatal("wrong cut header", cut, err)
 	}
@@ -323,7 +323,7 @@ func TestRecordCutServerBuildsFreshAuthorizedStreamAndFencesRemoval(t *testing.T
 		body = append(body, frame.GetData()...)
 	}
 	destination := recordCutArtifacts(t)
-	if err := destination.Import(context.Background(), cut.Artifact, bytes.NewReader(body)); err != nil || capstate.WalkVerifiedRecordCut(context.Background(), destination, cut, nil) != nil {
+	if err := destination.Import(context.Background(), cut.Artifact, bytes.NewReader(body)); err != nil || enginestate.WalkVerifiedRecordCut(context.Background(), destination, cut, nil) != nil {
 		t.Fatal("server streamed an invalid cut", err)
 	}
 	stream = &cutServerStream{ctx: ctx, onSend: func(n int) {

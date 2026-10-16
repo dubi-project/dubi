@@ -61,10 +61,10 @@ func TestTenantTokenVerifiedAgainstCurrentRootAndTenant(t *testing.T) {
 	if err != nil || principal.TenantID() != "tenant-a" || principal.CredentialID() != credential.CredentialID {
 		t.Fatal("current Root credential was not authenticated", principal, err)
 	}
-	if err := principal.Authorize(rootstate.Keyspace{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items"}); err != nil {
+	if err := principal.Authorize(rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}); err != nil {
 		t.Fatal("Tenant denied own Keyspace", err)
 	}
-	if err := principal.Authorize(rootstate.Keyspace{TenantID: "tenant-b", CapabilityID: "record", DatasetID: "items"}); !errors.Is(err, ErrForbiddenTenant) {
+	if err := principal.Authorize(rootstate.Keyspace{TenantID: "tenant-b", EngineID: "record", DatasetID: "items"}); !errors.Is(err, ErrForbiddenTenant) {
 		t.Fatal("Tenant crossed Keyspace", err)
 	}
 	altered := token[:len(token)-1] + "A"

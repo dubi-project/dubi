@@ -303,7 +303,7 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 			var group Group
 			var cohort RegionCohort
 			var head RegionCohortHead
-			if streamJSON(view, groupKey(region.GroupID), &group) != nil || group.StateKind != GroupStateCapability ||
+			if streamJSON(view, groupKey(region.GroupID), &group) != nil || group.StateKind != GroupStateEngine ||
 				streamJSON(view, regionCohortKey(region.RegionID, region.Generation), &cohort) != nil || cohort.State != RegionCohortConfirmed ||
 				cohort.GroupID != region.GroupID || streamJSON(view, regionCohortHeadKey(region.RegionID), &head) != nil ||
 				head.CurrentGeneration != region.Generation {

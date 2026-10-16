@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
@@ -54,7 +54,7 @@ func ConfirmationClaim(target router.Target, observed PublishedObservation) (rou
 // exact current reference, the persisted confirmation Result, and the Root
 // cohort. The result describes this check, not a lease against future disk
 // loss or a public Tenant read/write endpoint.
-func CheckCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner *capstate.State,
+func CheckCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
 	localID uint64, localNodeID string, store Verifier, observer Observer, target router.Target,
 	descriptor records.Descriptor, referenceRequestID string, referenceIndex uint64,
 	confirmationRequestID string, claim routedstate.LocalConfirmation) (PublishedObservation, error) {
@@ -76,7 +76,7 @@ func CheckCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner 
 		!slices.Equal(claim.Nodes, fresh.Nodes) || claim.RecordID != fresh.RecordID {
 		return PublishedObservation{}, errors.New("committed local confirmation is for an obsolete Region plan or publication")
 	}
-	err = readOwner(ctx, barrier, owner, target, func(view capstate.ReadView) error {
+	err = readOwner(ctx, barrier, owner, target, func(view enginestate.ReadView) error {
 		receipt, found, readErr := view.LocalConfirmation(descriptor.Key)
 		if readErr != nil {
 			return readErr

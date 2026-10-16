@@ -129,7 +129,7 @@ func stageFixture(t *testing.T) (*testRoot, router.Target, records.Descriptor) {
 		Current: current, Group: rootstate.Group{GroupID: "region-west", Epoch: 2, Members: []rootstate.GroupMember{
 			{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter},
 		}}}}
-	space := rootstate.Keyspace{TenantID: "tenant", CapabilityID: "record", DatasetID: "items"}
+	space := rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}
 	// The immutable origin is not necessarily the current Range owner.
 	d, err := records.Describe(space, "origin-group", []byte("key"), []byte("body"))
 	if err != nil {

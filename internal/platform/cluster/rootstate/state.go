@@ -596,7 +596,7 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 			return "RangeID is already registered", nil
 		}
 		initial := Range{RangeID: value.RangeID, TenantID: value.TenantID,
-			CapabilityID: value.CapabilityID, DatasetID: value.DatasetID,
+			EngineID: value.EngineID, DatasetID: value.DatasetID,
 			OwnerGroupID: value.OwnerGroupID, Epoch: 1, State: RangeStatePending}
 		if err := setJSON(batch, datasetKey(*value), value); err != nil {
 			return "", err
@@ -672,7 +672,7 @@ func groupChangeKey(id string) []byte            { return []byte("data/group-cha
 func activeGroupChangeKey(groupID string) []byte { return []byte("data/group-active/" + groupID) }
 func tenantKey(id string) []byte                 { return []byte("data/tenant/" + id) }
 func (value Keyspace) path() string {
-	return value.TenantID + "/" + value.CapabilityID + "/" + value.DatasetID
+	return value.TenantID + "/" + value.EngineID + "/" + value.DatasetID
 }
 func datasetKey(value Dataset) []byte { return []byte("data/dataset/" + value.Keyspace().path()) }
 func rangeKey(value Dataset) []byte {
@@ -916,13 +916,13 @@ func (s *State) Tenant(tenantID string) (Tenant, bool, error) {
 	return value, err == nil, err
 }
 
-func (s *State) Dataset(tenantID, capabilityID, datasetID string) (Dataset, bool, error) {
+func (s *State) Dataset(tenantID, engineID, datasetID string) (Dataset, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed || !validID(tenantID) || !validID(capabilityID) || !validID(datasetID) {
+	if s.closed || !validID(tenantID) || !validID(engineID) || !validID(datasetID) {
 		return Dataset{}, false, errors.New("Root state is closed or Dataset identity is invalid")
 	}
-	encoded, found, err := s.get(datasetKey(Dataset{TenantID: tenantID, CapabilityID: capabilityID, DatasetID: datasetID}))
+	encoded, found, err := s.get(datasetKey(Dataset{TenantID: tenantID, EngineID: engineID, DatasetID: datasetID}))
 	if !found || err != nil {
 		return Dataset{}, found, err
 	}
@@ -931,8 +931,8 @@ func (s *State) Dataset(tenantID, capabilityID, datasetID string) (Dataset, bool
 	return value, err == nil, err
 }
 
-func (s *State) Route(tenantID, capabilityID, datasetID string, routingKey []byte) (Range, bool, error) {
-	return s.RouteKeyspace(Keyspace{TenantID: tenantID, CapabilityID: capabilityID, DatasetID: datasetID}, routingKey)
+func (s *State) Route(tenantID, engineID, datasetID string, routingKey []byte) (Range, bool, error) {
+	return s.RouteKeyspace(Keyspace{TenantID: tenantID, EngineID: engineID, DatasetID: datasetID}, routingKey)
 }
 
 // RouteKeyspace currently resolves the initial complete Range. Split and move

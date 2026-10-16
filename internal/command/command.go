@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/capability/record"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
+	"github.com/dubi-project/dubi/internal/engine/record"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/config"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -236,7 +236,7 @@ func openServer(args []string, stderr io.Writer) (*server.Server, error) {
 
 // A supplied mux is only used by in-package integration tests. Normal CLI
 // startup always registers the built-in Record handler below.
-func openServerWithMux(args []string, stderr io.Writer, mux *capabilityruntime.Mux) (*server.Server, error) {
+func openServerWithMux(args []string, stderr io.Writer, mux *engineruntime.Mux) (*server.Server, error) {
 	flags := flag.NewFlagSet("server", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	storeRoot := flags.String("store", "", "durable Node store root")
@@ -299,11 +299,11 @@ func openManagedServer(storeRoot string, listener net.Listener, network server.N
 	return openManagedServerWithMux(storeRoot, listener, network, stderr, nil)
 }
 
-func openManagedServerWithMux(storeRoot string, listener net.Listener, network server.NetworkOptions, stderr io.Writer, mux *capabilityruntime.Mux) (_ *server.Server, returnErr error) {
+func openManagedServerWithMux(storeRoot string, listener net.Listener, network server.NetworkOptions, stderr io.Writer, mux *engineruntime.Mux) (_ *server.Server, returnErr error) {
 	return openManagedServerWithMuxAndPublic(storeRoot, listener, nil, network, stderr, mux)
 }
 
-func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListener net.Listener, network server.NetworkOptions, stderr io.Writer, mux *capabilityruntime.Mux) (_ *server.Server, returnErr error) {
+func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListener net.Listener, network server.NetworkOptions, stderr io.Writer, mux *engineruntime.Mux) (_ *server.Server, returnErr error) {
 	defer func() {
 		if returnErr != nil {
 			_ = listener.Close()
@@ -344,8 +344,8 @@ func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListene
 		signer = nil
 	}
 	if mux == nil {
-		registry := capabilityruntime.NewRegistry()
-		if err := registry.Register(record.CapabilityID, record.Handler{}); err != nil {
+		registry := engineruntime.NewRegistry()
+		if err := registry.Register(record.EngineID, record.Handler{}); err != nil {
 			return nil, err
 		}
 		mux, err = registry.Seal()
@@ -355,7 +355,7 @@ func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListene
 		}
 	}
 	process, err := server.Open(server.Options{StoreRoot: storeRoot, Listener: listener, PublicListener: publicListener,
-		ServerTLS: serverTLS, ClientTLS: clientTLS, AuthorizePeer: authorize, CapabilityMux: mux,
+		ServerTLS: serverTLS, ClientTLS: clientTLS, AuthorizePeer: authorize, EngineMux: mux,
 		EnrollmentSigner: signer, Network: &network,
 		ReportError: func(err error) { _, _ = fmt.Fprintf(stderr, "dubi: background: %v\n", err) }})
 	if err != nil {

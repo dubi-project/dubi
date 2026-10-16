@@ -28,7 +28,7 @@ func TestRuntimeRegionFormationRestartsBeforeRoutingPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	open := func(initial bool) *Runtime {
-		options := Options{StoreRoot: store, TickInterval: time.Hour, Transport: formationDiscardTransport{}, CapabilityMux: nodeTestMux(t)}
+		options := Options{StoreRoot: store, TickInterval: time.Hour, Transport: formationDiscardTransport{}, EngineMux: nodeTestMux(t)}
 		if initial {
 			options.RootBootstrapPeers = []uint64{id.RaftID}
 		}
@@ -63,7 +63,7 @@ func TestRuntimeRegionFormationRestartsBeforeRoutingPublication(t *testing.T) {
 	}
 	slices.Sort(peers)
 	group := regiongroups.GroupID("west")
-	applyRoot(t, r, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: group, StateKind: rootstate.GroupStateCapability}})
+	applyRoot(t, r, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: group, StateKind: rootstate.GroupStateEngine}})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := r.JoinManager.PrepareJoining(ctx, rootstate.GroupTaskReference{GroupID: group, ChangeID: "missing", ExpectedEpoch: 1}, id.RaftID); err == nil || r.Host.HasGroup(group) {

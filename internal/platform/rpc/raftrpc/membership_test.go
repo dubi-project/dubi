@@ -194,7 +194,7 @@ func TestRoutedMembershipControlFollowsNewLeaderBeforeRootPublication(t *testing
 	}
 	applyMembershipRoot(t, rootControl, rootstate.Command{Version: 1, RequestID: "group-data",
 		Type:  rootstate.RegisterGroup,
-		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	applyMembershipRoot(t, rootControl, rootstate.Command{Version: 1, RequestID: "members-initial",
 		Type: rootstate.PublishGroupMembers, Membership: &rootstate.GroupMembership{GroupID: "data-1",
 			ExpectedEpoch: 1, Members: []rootstate.GroupMember{{RaftID: leaderID, Role: rootstate.GroupMemberVoter}}}})

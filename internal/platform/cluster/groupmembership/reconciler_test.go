@@ -200,7 +200,7 @@ func openRootForReconcile(t *testing.T, current []rootstate.GroupMember) (*roots
 	}
 	submitFakeRoot(t, host, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group-1",
 		Type:  rootstate.RegisterGroup,
-		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	submitFakeRoot(t, host, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "members-1",
 		Type: rootstate.PublishGroupMembers, Membership: &rootstate.GroupMembership{
 			GroupID: "data-1", ExpectedEpoch: 1, Members: current}})

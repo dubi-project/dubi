@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/placement"
@@ -104,7 +104,7 @@ func (f *repairSourceFake) RepairRecord(ctx context.Context, source rootstate.No
 
 func TestRemoteRepairUsesAnotherCurrentCohortNode(t *testing.T) {
 	plan := repairTestPlan(t)
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
 		"origin-group", []byte("remote-key"), []byte("remote-body"))
 	if err != nil {
 		t.Fatal(err)
@@ -169,12 +169,12 @@ func TestRepairReferenceFallbackAndRetryWithoutOverwritingLocalDamage(t *testing
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("repair-from-another-confirmed-Node")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
 		"origin-group", []byte("key"), body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := capstate.RecordReference{Descriptor: d}
+	ref := enginestate.RecordReference{Descriptor: d}
 	fake := &repairSourceFake{nodes: plan.Nodes(), body: body,
 		observeErr: map[uint64]error{2: status.Error(codes.NotFound, "source lost bytes")}}
 	fetched, err := repairReference(context.Background(), plan, ref, 1, store, fake)
@@ -195,7 +195,7 @@ func TestRepairReferenceFallbackAndRetryWithoutOverwritingLocalDamage(t *testing
 	}
 	fake.observeErr = nil
 	fake.fetchErr = map[uint64]error{2: status.Error(codes.DataLoss, "source Pack damaged")}
-	if fetched, err := repairReference(context.Background(), plan, capstate.RecordReference{Descriptor: d2}, 1, store, fake); err != nil || !fetched ||
+	if fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d2}, 1, store, fake); err != nil || !fetched ||
 		!slices.Equal(fake.fetchedFrom, []uint64{3, 2, 3}) {
 		t.Fatal("corrupt source prevented alternate source repair", fetched, fake, err)
 	}
@@ -205,19 +205,19 @@ func TestRepairReferenceFallbackAndRetryWithoutOverwritingLocalDamage(t *testing
 		t.Fatal(err)
 	}
 	fake.observeErr = map[uint64]error{2: status.Error(codes.Unavailable, "offline"), 3: status.Error(codes.NotFound, "missing")}
-	if fetched, err := repairReference(context.Background(), plan, capstate.RecordReference{Descriptor: d3}, 1, store, fake); err == nil || fetched {
+	if fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d3}, 1, store, fake); err == nil || fetched {
 		t.Fatal("all sources missing was counted as repaired", fetched, err)
 	}
 	if _, err := store.Verify(context.Background(), d3); !errors.Is(err, records.ErrNotHeld) {
 		t.Fatal("failed repair fabricated local data", err)
 	}
 	if err := processRepairReference(context.Background(), plan,
-		capstate.RecordReference{RequestID: "missing", Descriptor: d3}, 1, store, fake, 0, &LivePageReport{}); err == nil {
+		enginestate.RecordReference{RequestID: "missing", Descriptor: d3}, 1, store, fake, 0, &LivePageReport{}); err == nil {
 		t.Fatal("one-shot full-cut repair falsely completed over missing data")
 	}
 	page := LivePageReport{}
 	if err := processRepairReference(context.Background(), plan,
-		capstate.RecordReference{RequestID: "missing", Descriptor: d3}, 1, store, fake, 2, &page); err != nil {
+		enginestate.RecordReference{RequestID: "missing", Descriptor: d3}, 1, store, fake, 2, &page); err != nil {
 		t.Fatal("bounded page must retain retryable debt and advance", err)
 	}
 	fake.observeErr = nil
@@ -226,7 +226,7 @@ func TestRepairReferenceFallbackAndRetryWithoutOverwritingLocalDamage(t *testing
 		t.Fatal(err)
 	}
 	if err := processRepairReference(context.Background(), plan,
-		capstate.RecordReference{RequestID: "later", Descriptor: d4}, 1, store, fake, 2, &page); err != nil ||
+		enginestate.RecordReference{RequestID: "later", Descriptor: d4}, 1, store, fake, 2, &page); err != nil ||
 		page.Unrepaired != 1 || page.Fetched != 1 || len(page.Failures) != 1 || len(page.References) != 1 ||
 		page.References[0].RequestID != "later" {
 		t.Fatal("failed first reference starved a later repair in one bounded page", page, err)
@@ -234,14 +234,14 @@ func TestRepairReferenceFallbackAndRetryWithoutOverwritingLocalDamage(t *testing
 	fake.observeErr = nil
 	fake.spoofNodeID = map[uint64]string{2: "node_000000000000000000000000000000ff"}
 	beforeFetch := len(fake.fetchedFrom)
-	if fetched, err := repairReference(context.Background(), plan, capstate.RecordReference{Descriptor: d3}, 1, store, fake); err == nil || fetched || len(fake.fetchedFrom) != beforeFetch {
+	if fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d3}, 1, store, fake); err == nil || fetched || len(fake.fetchedFrom) != beforeFetch {
 		t.Fatal("source outside confirmed Node identity was used", fetched, fake, err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	page = LivePageReport{}
 	if err := processRepairReference(cancelled, plan,
-		capstate.RecordReference{RequestID: "cancelled", Descriptor: d3}, 1, store, fake, 2, &page); err == nil || page.Unrepaired != 0 {
+		enginestate.RecordReference{RequestID: "cancelled", Descriptor: d3}, 1, store, fake, 2, &page); err == nil || page.Unrepaired != 0 {
 		t.Fatal("cancellation was mistaken for retryable page debt", page, err)
 	}
 	// A damaged/closed local Store is not the same as a missing record and must
@@ -252,7 +252,7 @@ func TestRepairReferenceFallbackAndRetryWithoutOverwritingLocalDamage(t *testing
 	fake.observeErr = nil
 	fake.spoofNodeID = nil
 	before := len(fake.observed)
-	if fetched, err := repairReference(context.Background(), plan, capstate.RecordReference{Descriptor: d3}, 1, store, fake); err == nil || fetched || len(fake.observed) != before {
+	if fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d3}, 1, store, fake); err == nil || fetched || len(fake.observed) != before {
 		t.Fatal("unusable local Store was silently repaired", fetched, fake, err)
 	}
 }
@@ -279,7 +279,7 @@ func TestRepairReferenceRelocatesLostPackFromConfirmedSource(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	body := []byte("recovered-from-confirmed-source")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
 		"origin-group", []byte("lost-key"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -297,14 +297,14 @@ func TestRepairReferenceRelocatesLostPackFromConfirmedSource(t *testing.T) {
 	}
 	fake := &repairSourceFake{nodes: plan.Nodes(), body: body,
 		observeErr: map[uint64]error{2: status.Error(codes.Unavailable, "offline"), 3: status.Error(codes.NotFound, "not held")}}
-	if repaired, err := repairReference(context.Background(), plan, capstate.RecordReference{Descriptor: d}, 1, store, fake); err == nil || repaired || len(fake.repairedFrom) != 0 {
+	if repaired, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d}, 1, store, fake); err == nil || repaired || len(fake.repairedFrom) != 0 {
 		t.Fatal("unavailable confirmed sources fabricated a replacement", repaired, fake, err)
 	}
 	if _, err := store.Verify(context.Background(), d); !errors.Is(err, records.ErrUnavailable) {
 		t.Fatal("unverified repair changed the old locator", err)
 	}
 	fake.observeErr = nil
-	fetched, err := repairReference(context.Background(), plan, capstate.RecordReference{Descriptor: d}, 1, store, fake)
+	fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d}, 1, store, fake)
 	if err != nil || !fetched || !slices.Equal(fake.repairedFrom, []uint64{2}) || len(fake.fetchedFrom) != 0 {
 		t.Fatal("confirmed source did not repair the existing unreadable location", fetched, fake, err)
 	}
@@ -333,12 +333,12 @@ func TestInterruptedRepairRetriesTheSameReferenceFromConfirmedSources(t *testing
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("repair-after-an-interrupted-source-stream")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
 		"origin-group", []byte("interrupted"), body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := capstate.RecordReference{RequestID: "interrupted-repair", Descriptor: d}
+	ref := enginestate.RecordReference{RequestID: "interrupted-repair", Descriptor: d}
 	fake := &repairSourceFake{nodes: plan.Nodes(), body: body,
 		fetchErr: map[uint64]error{
 			2: status.Error(codes.Unavailable, "stream interrupted"),
@@ -369,7 +369,7 @@ func TestLiveRepairLeavesTimeForFallbackWhenFirstSourceStalls(t *testing.T) {
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("fallback-after-stalled-source")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
 		"origin-group", []byte("stalled"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +377,7 @@ func TestLiveRepairLeavesTimeForFallbackWhenFirstSourceStalls(t *testing.T) {
 	fake := &repairSourceFake{nodes: plan.Nodes(), body: body, blockFetch: map[uint64]bool{2: true}}
 	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
 	defer cancel()
-	fetched, err := repairReference(ctx, plan, capstate.RecordReference{Descriptor: d}, 1, store, fake)
+	fetched, err := repairReference(ctx, plan, enginestate.RecordReference{Descriptor: d}, 1, store, fake)
 	if err != nil || !fetched || ctx.Err() != nil || !slices.Equal(fake.fetchedFrom, []uint64{2, 3}) {
 		t.Fatal("stalled source consumed the whole repair round", fetched, fake.fetchedFrom, ctx.Err(), err)
 	}

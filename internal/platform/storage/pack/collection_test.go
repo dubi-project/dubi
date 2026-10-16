@@ -36,7 +36,7 @@ func TestCollectionRolloverRestartAndScope(t *testing.T) {
 	r, v, m := collection(t, headerSize+100)
 	var locations []Location
 	for i := range 11 {
-		loc, err := m.Append(Record{CapabilityID: "record", TenantID: fmt.Sprint("tenant-", i%2), Key: []byte("same-key"), Payload: bytes.Repeat([]byte{byte(i)}, 30)})
+		loc, err := m.Append(Record{EngineID: "record", TenantID: fmt.Sprint("tenant-", i%2), Key: []byte("same-key"), Payload: bytes.Repeat([]byte{byte(i)}, 30)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestCollectionExplicitSealAndInvalidAppend(t *testing.T) {
 	if len(m.catalog.Packs) != 0 || m.catalog.Pending != "" {
 		t.Fatal("empty/invalid operation created a Pack")
 	}
-	loc, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("k")})
+	loc, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("k")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestCollectionExplicitSealAndInvalidAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	next, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("next")})
+	next, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("next")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,11 +154,11 @@ func TestCollectionExplicitSealAndInvalidAppend(t *testing.T) {
 
 func TestCollectionCompactRemovesOnlyUnreachableSealedPacks(t *testing.T) {
 	r, v, m := collection(t, headerSize+1)
-	first, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("old"), Payload: []byte("old")})
+	first, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("old"), Payload: []byte("old")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	live, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("live"), Payload: []byte("live")})
+	live, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("live"), Payload: []byte("live")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestCollectionMissingMetadataNeverReinitialized(t *testing.T) {
 	for _, what := range []string{"catalog", "marker", "directory", "lock", "pack", "checkpoint", "volume"} {
 		t.Run(what, func(t *testing.T) {
 			r, v, m := collection(t, headerSize+1)
-			loc, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("k")})
+			loc, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("k")})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -273,7 +273,7 @@ func TestCollectionCorruptionFailsClosed(t *testing.T) {
 	for _, what := range []string{"catalog-crc", "duplicate", "active-middle", "pending-with-active", "marker", "record"} {
 		t.Run(what, func(t *testing.T) {
 			r, v, m := collection(t, 0)
-			loc, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("k")})
+			loc, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("k")})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -320,7 +320,7 @@ func TestCollectionConcurrentRollover(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 20 {
 		wg.Go(func() {
-			loc, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte(fmt.Sprint(i))})
+			loc, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte(fmt.Sprint(i))})
 			if err != nil {
 				t.Error(err)
 				return
@@ -451,14 +451,14 @@ func TestCollectionInitialPublicationResume(t *testing.T) {
 	if m.catalog.CollectionID != id {
 		t.Fatal("initial publication changed identity")
 	}
-	loc, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("k")})
+	loc, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("k")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(filepath.Join(v.Path, "packs", catalogName), filepath.Join(v.Path, "packs", catalogName+".lost")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("next")}); err == nil {
+	if _, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("next")}); err == nil {
 		t.Fatal("write through lost catalog")
 	}
 	if _, err := m.Read(loc); err == nil {
@@ -480,7 +480,7 @@ func TestCollectionCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		loc, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("confirmed")})
+		loc, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("confirmed")})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -517,7 +517,7 @@ func TestCollectionCrashRecovery(t *testing.T) {
 			}
 		}
 		if phase == "response-lost" {
-			if _, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("uncertain-success")}); err != nil {
+			if _, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("uncertain-success")}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -583,7 +583,7 @@ func TestCollectionCrashRecovery(t *testing.T) {
 			if count != expected {
 				t.Fatal("wrong committed record count", count, expected)
 			}
-			if _, err := m.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("after-crash")}); err != nil {
+			if _, err := m.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("after-crash")}); err != nil {
 				t.Fatal(err)
 			}
 		})

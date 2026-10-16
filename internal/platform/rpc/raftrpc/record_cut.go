@@ -10,7 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -25,7 +25,7 @@ const recordCutFrameBytes = 1 << 20
 const recordCutHeaderBytes = regionfence.MaxRecordBytes + 4096
 const recordCutTimeout = 30 * time.Minute
 
-type recordCutResolver func(string) (*capstate.State, bool)
+type recordCutResolver func(string) (*enginestate.State, bool)
 
 // RecordCutServer only serves a fresh, locally read-barriered cut of a pending
 // handoff to a current Node in its next cohort. It neither transfers payloads
@@ -150,7 +150,7 @@ func (s *RecordCutServer) Get(req *raftwire.GetRecordCutRequest, stream raftwire
 	if err := errors.Join(buildErr, prepared.Close()); err != nil {
 		return status.Error(codes.FailedPrecondition, "record cut cannot be published")
 	}
-	if err := capstate.WalkVerifiedRecordCut(ctx, s.artifacts, cut, nil); err != nil {
+	if err := enginestate.WalkVerifiedRecordCut(ctx, s.artifacts, cut, nil); err != nil {
 		return status.Error(codes.DataLoss, "record cut artifact failed full validation")
 	}
 	after, index, err := s.qualify(ctx, req.FromRaftId, req.GroupId, seal)

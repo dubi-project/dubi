@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/router"
@@ -36,10 +36,10 @@ func (r Reader) ReadGeo(ctx context.Context, target router.Target, key []byte, m
 	if err != nil {
 		return LocalRead{}, err
 	}
-	var ref capstate.RecordReference
-	var receipt capstate.GeoCoverageRecord
+	var ref enginestate.RecordReference
+	var receipt enginestate.GeoCoverageRecord
 	var foundRef, foundReceipt bool
-	if err := readOwner(ctx, r.Barrier, r.Owner, target, func(view capstate.ReadView) error {
+	if err := readOwner(ctx, r.Barrier, r.Owner, target, func(view enginestate.ReadView) error {
 		var readErr error
 		ref, foundRef, readErr = view.RecordReference(key)
 		if readErr != nil {
@@ -95,8 +95,8 @@ func (r Reader) ReadGeo(ctx context.Context, target router.Target, key []byte, m
 	} else if err != nil {
 		return LocalRead{}, err
 	}
-	var final capstate.RecordReference
-	if err := readOwner(ctx, r.Barrier, r.Owner, target, func(view capstate.ReadView) error {
+	var final enginestate.RecordReference
+	if err := readOwner(ctx, r.Barrier, r.Owner, target, func(view enginestate.ReadView) error {
 		var ok bool
 		var readErr error
 		final, ok, readErr = view.RecordReference(key)

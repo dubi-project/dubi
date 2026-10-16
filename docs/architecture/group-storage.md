@@ -8,7 +8,7 @@
 2. Group 目录中的 `DUBI_RAFT_STORAGE` 登记日志资源，`dubi-raft` Pebble 内同步保存同一个日志身份。Store 的 Group 登记再绑定该日志身份。因此日志目录及其旁边的登记文件一起丢失，也不能当成第一次创建；换成另一份或空数据库同样拒绝。
 3. 日志中在第一份 Raft Ready 之前保存 GroupID、本地 RaftID、初始加入模式和 bootstrap 成员集合。后续调用不能换 Group/本地身份/初始成员，learner 不能改成 bootstrap。原始 bootstrap 意图已保存而日志尚未开始时，恢复可读取原集合，无需重新填写 peer。成员扩缩仍通过正常 Raft ConfChange，不修改初始意图。
 
-这些都是自动生成、内部使用的记录，不是新的运维 ID、目录配置或副本数设置。Pack 布局不变，多个 Capability/Tenant 继续共用卷内 Pack。
+这些都是自动生成、内部使用的记录，不是新的运维 ID、目录配置或副本数设置。Pack 布局不变，多个 Engine/Tenant 继续共用卷内 Pack。
 
 ## 初始化、同步与失败处理
 

@@ -19,7 +19,7 @@ func validateRegionGrowthSnapshot(view rootSnapshotReader, index uint64, key, va
 	var result Result
 	if streamJSON(view, regionCohortKey(p.RegionID, p.Generation-1), &previous) != nil || previous.Validate() != nil || previous.State != RegionCohortConfirmed || previous.GroupID != p.GroupID || previous.GroupEpoch > p.ExpectedEpoch || previous.GroupFenceIndex != p.PreviousFenceIndex || previous.GroupFenceRequestID != p.PreviousFenceRequestID || !cohortContainsMembers(previous, g.BaseMembers) ||
 		streamJSON(view, regionCohortKey(p.RegionID, p.Generation), &next) != nil || next.Validate() != nil || next.PlannedIndex != p.PlannedIndex || !cohortExtends(previous, next, g.BaseMembers) || !cohortMatchesMembers(next, p.Members) ||
-		streamJSON(view, groupKey(p.GroupID), &group) != nil || group.GroupID != p.GroupID || group.StateKind != GroupStateCapability ||
+		streamJSON(view, groupKey(p.GroupID), &group) != nil || group.GroupID != p.GroupID || group.StateKind != GroupStateEngine ||
 		streamJSON(view, groupChangeKey(p.ChangeID), &task) != nil || !growthMatchesTask(g, task) ||
 		streamJSON(view, resultKey(g.RequestID), &result) != nil || result.RequestID != g.RequestID || result.Index != g.AuthorizedIndex || result.Hash != g.ResultSHA256 || result.Error != "" {
 		return bad

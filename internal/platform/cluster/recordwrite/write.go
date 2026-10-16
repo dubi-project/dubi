@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/router"
@@ -20,14 +20,14 @@ import (
 // independently waits for the Owner Group's persisted Result.
 type SubmitCommand func(context.Context, string, []byte) error
 
-// Writer is an internal, capability-neutral write coordinator. The caller's
+// Writer is an internal, engine-neutral write coordinator. The caller's
 // opaque mutation must publish exactly the supplied immutable Descriptor via
 // Transaction.SetRecordReference. Nothing here authorizes a Tenant or defines
-// a Capability's schema.
+// a Engine's schema.
 type Writer struct {
 	Barrier     Barrier
 	Root        Root
-	Owner       *capstate.State
+	Owner       *enginestate.State
 	LocalID     uint64
 	LocalNodeID string
 	Store       Store
@@ -49,14 +49,14 @@ type WriteRequest struct {
 	Target     router.Target
 	Descriptor records.Descriptor
 	Body       []byte
-	Payload    []byte // Opaque capability mutation that publishes Descriptor.
+	Payload    []byte // Opaque engine mutation that publishes Descriptor.
 }
 
 // LocalWrite is returned only after a committed confirmation and a fresh
 // majority/Root/Owner recheck. It is a completed local durability event, not
 // GeoReady or an ongoing lease against later storage failures.
 type LocalWrite struct {
-	Reference         capstate.RecordReference
+	Reference         enginestate.RecordReference
 	ConfirmationIndex uint64
 	RegionGeneration  uint64
 }
@@ -77,7 +77,7 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 	if err != nil {
 		return LocalWrite{}, err
 	}
-	publication, found, err := w.resultAtCut(ctx, request.Target.OwnerGroupID, func() (capstate.Result, bool, error) {
+	publication, found, err := w.resultAtCut(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForMutation(request.RequestID, request.Target, request.Payload)
 	})
 	if err != nil {
@@ -102,9 +102,9 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 			request.Descriptor.Key, recordID, request.RequestID, publication.Index); err != nil {
 			return LocalWrite{}, err
 		}
-		var prior capstate.LocalConfirmationRecord
+		var prior enginestate.LocalConfirmationRecord
 		var hasPrior bool
-		if err := readOwner(ctx, w.Barrier, w.Owner, request.Target, func(view capstate.ReadView) error {
+		if err := readOwner(ctx, w.Barrier, w.Owner, request.Target, func(view enginestate.ReadView) error {
 			var readErr error
 			prior, hasPrior, readErr = view.LocalConfirmation(request.Descriptor.Key)
 			return readErr
@@ -128,7 +128,7 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 		if err := w.Submit(ctx, request.Target.OwnerGroupID, mutation); err != nil {
 			return LocalWrite{}, fmt.Errorf("submit immutable reference publication: %w", err)
 		}
-		publication, err = w.awaitResult(ctx, request.Target.OwnerGroupID, func() (capstate.Result, bool, error) {
+		publication, err = w.awaitResult(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 			return w.Owner.ResultForMutation(request.RequestID, request.Target, request.Payload)
 		})
 		if err != nil {
@@ -151,9 +151,9 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 		return LocalWrite{}, err
 	}
 	// Recover an already committed confirmation before creating a new one.
-	var prior capstate.LocalConfirmationRecord
+	var prior enginestate.LocalConfirmationRecord
 	var hasPrior bool
-	err = readOwner(ctx, w.Barrier, w.Owner, request.Target, func(view capstate.ReadView) error {
+	err = readOwner(ctx, w.Barrier, w.Owner, request.Target, func(view enginestate.ReadView) error {
 		var readErr error
 		prior, hasPrior, readErr = view.LocalConfirmation(request.Descriptor.Key)
 		return readErr
@@ -180,7 +180,7 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 	if err := w.Submit(ctx, request.Target.OwnerGroupID, command); err != nil {
 		return LocalWrite{}, fmt.Errorf("submit local majority confirmation: %w", err)
 	}
-	confirmation, err := w.awaitResult(ctx, request.Target.OwnerGroupID, func() (capstate.Result, bool, error) {
+	confirmation, err := w.awaitResult(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForLocalConfirmation(confirmID, claim)
 	})
 	if err != nil {
@@ -204,35 +204,35 @@ func (w Writer) finish(ctx context.Context, request WriteRequest, publicationInd
 		ConfirmationIndex: confirmationIndex}, nil
 }
 
-func (w Writer) resultAtCut(ctx context.Context, groupID string, lookup func() (capstate.Result, bool, error)) (capstate.Result, bool, error) {
+func (w Writer) resultAtCut(ctx context.Context, groupID string, lookup func() (enginestate.Result, bool, error)) (enginestate.Result, bool, error) {
 	for {
 		index, err := w.Barrier.ReadIndex(ctx, groupID)
 		if err != nil {
-			return capstate.Result{}, false, err
+			return enginestate.Result{}, false, err
 		}
 		if index == 0 {
-			return capstate.Result{}, false, errors.New("Owner read barrier returned no confirmed index")
+			return enginestate.Result{}, false, errors.New("Owner read barrier returned no confirmed index")
 		}
 		if w.Owner.AppliedIndex() >= index {
 			return lookup()
 		}
 		if err := pauseRead(ctx); err != nil {
-			return capstate.Result{}, false, err
+			return enginestate.Result{}, false, err
 		}
 	}
 }
 
-func (w Writer) awaitResult(ctx context.Context, groupID string, lookup func() (capstate.Result, bool, error)) (capstate.Result, error) {
+func (w Writer) awaitResult(ctx context.Context, groupID string, lookup func() (enginestate.Result, bool, error)) (enginestate.Result, error) {
 	for {
 		result, found, err := w.resultAtCut(ctx, groupID, lookup)
 		if err != nil {
-			return capstate.Result{}, err
+			return enginestate.Result{}, err
 		}
 		if found {
 			return result, nil
 		}
 		if err := pauseRead(ctx); err != nil {
-			return capstate.Result{}, err
+			return enginestate.Result{}, err
 		}
 	}
 }

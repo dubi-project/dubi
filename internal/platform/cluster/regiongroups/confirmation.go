@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
@@ -21,7 +21,7 @@ import (
 type Observation struct {
 	RootConfirmedIndex  uint64
 	GroupConfirmedIndex uint64
-	View                capstate.RegionFenceView
+	View                enginestate.RegionFenceView
 }
 
 // Participants supplies authenticated, direct-to-node observations. Propose may

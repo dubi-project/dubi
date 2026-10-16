@@ -32,7 +32,7 @@ func (stepper snapshotStepper) InstallSnapshotStream(ctx context.Context, groupI
 	// Both formal Node adapters recover durable references. Unknown Groups
 	// must not persist a format their current state adapter cannot replay.
 	if groupID != raft.RootGroupID {
-		if _, found := runtime.Capabilities.Resolve(groupID); !found {
+		if _, found := runtime.Engines.Resolve(groupID); !found {
 			return 0, errors.New("Group has no file snapshot state adapter")
 		}
 	}

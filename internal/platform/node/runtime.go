@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/cluster/groupmembership"
 	"github.com/dubi-project/dubi/internal/platform/cluster/groupruntime"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rangebootstrap"
@@ -35,7 +35,7 @@ type Options struct {
 	TickInterval       time.Duration
 	Transport          raft.Transport
 	RootBootstrapPeers []uint64
-	CapabilityMux      *capabilityruntime.Mux
+	EngineMux          *engineruntime.Mux
 }
 
 // Runtime owns components in their shutdown order. Root is owned by Host once
@@ -45,7 +45,7 @@ type Runtime struct {
 	Host            *raft.Host
 	Root            *rootstate.State
 	Groups          *groupruntime.Registry
-	Capabilities    *capabilityruntime.Runtime
+	Engines         *engineruntime.Runtime
 	JoinManager     *groupmembership.JoinManager
 	LocalMembership *groupmembership.LocalControl
 	Volumes         *volume.Registry
@@ -175,10 +175,10 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 			continue
 		}
 		// A remote membership reconciler may be preparing this same local
-		// capability Group at the exact moment startup recovery reaches it. The
-		// capability state is registered before Host.AddGroup, so wait for that
+		// engine Group at the exact moment startup recovery reaches it. The
+		// engine state is registered before Host.AddGroup, so wait for that
 		// owner instead of opening a second state and colliding on its Store lock.
-		if _, open := runtime.Capabilities.Resolve(groupID); open {
+		if _, open := runtime.Engines.Resolve(groupID); open {
 			if err := runtime.waitForGroupOpen(ctx, groupID); err != nil {
 				return err
 			}
@@ -187,7 +187,7 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 		joining := targets[groupID]
 		state, err := runtime.Groups.NewState(ctx, groupID)
 		if err != nil {
-			if errors.Is(err, capabilityruntime.ErrGroupStateAlreadyOpen) {
+			if errors.Is(err, engineruntime.ErrGroupStateAlreadyOpen) {
 				if waitErr := runtime.waitForGroupOpen(ctx, groupID); waitErr != nil {
 					return waitErr
 				}
@@ -277,8 +277,8 @@ func InitializeRoot(store string, volumePaths ...string) error {
 }
 
 func Open(options Options) (*Runtime, error) {
-	if options.StoreRoot == "" || options.CapabilityMux == nil || options.TickInterval < 0 {
-		return nil, errors.New("Node runtime requires StoreRoot, Capability Mux, and a non-negative tick interval")
+	if options.StoreRoot == "" || options.EngineMux == nil || options.TickInterval < 0 {
+		return nil, errors.New("Node runtime requires StoreRoot, Engine Mux, and a non-negative tick interval")
 	}
 	if err := protocol.CurrentAdvertisement().Validate(); err != nil {
 		return nil, fmt.Errorf("validate local protocol formats: %w", err)
@@ -335,7 +335,7 @@ func Open(options Options) (*Runtime, error) {
 		return nil, errors.Join(err, localJoin.Close(), data.Close(), packs.Close(), volumes.Close(), host.Close())
 	}
 	recoveryContext, cancelRecovery := context.WithCancel(context.Background())
-	capabilities, err := capabilityruntime.NewRuntimeWithSnapshots(options.StoreRoot, options.CapabilityMux, packs, artifacts, recoveryContext)
+	engines, err := engineruntime.NewRuntimeWithSnapshots(options.StoreRoot, options.EngineMux, packs, artifacts, recoveryContext)
 	if err != nil {
 		cancelRecovery()
 		return nil, errors.Join(err, localJoin.Close(), artifacts.Close(), data.Close(), packs.Close(), volumes.Close(), host.Close())
@@ -370,7 +370,7 @@ func Open(options Options) (*Runtime, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := capabilities.Register(groups); err != nil {
+	if err := engines.Register(groups); err != nil {
 		return fail(err)
 	}
 	joiningFactory := func(ctx context.Context, task rootstate.GroupTaskReference) (raft.StateMachine, error) {
@@ -381,10 +381,10 @@ func Open(options Options) (*Runtime, error) {
 			return nil, err
 		}
 		state, err := groups.NewState(ctx, task.GroupID)
-		if !errors.Is(err, capabilityruntime.ErrGroupStateAlreadyOpen) {
+		if !errors.Is(err, engineruntime.ErrGroupStateAlreadyOpen) {
 			return state, err
 		}
-		// Startup recovery may have registered the durable capability state a
+		// Startup recovery may have registered the durable engine state a
 		// moment before attaching the Raft Group. Wait for that owner instead of
 		// reporting a transient duplicate-open failure to the scheduler.
 		if waitErr := waitForGroupOpen(ctx, host, task.GroupID); waitErr != nil {
@@ -401,17 +401,17 @@ func Open(options Options) (*Runtime, error) {
 		return fail(err)
 	}
 	return &Runtime{Identity: value, Host: host, Root: root, Groups: groups,
-		Capabilities: capabilities, JoinManager: joiner, LocalMembership: localMembership, Volumes: volumes, Packs: packs, Records: data,
+		Engines: engines, JoinManager: joiner, LocalMembership: localMembership, Volumes: volumes, Packs: packs, Records: data,
 		Snapshots: artifacts, RootJoin: localJoin, recoveryContext: recoveryContext, cancelRecovery: cancelRecovery, closeDone: make(chan struct{})}, nil
 }
 
-// LocalOwner resolves only capability Groups currently open on this Node.
+// LocalOwner resolves only engine Groups currently open on this Node.
 // Cluster-wide coordinators should combine it with remote Owner RPC routing.
 func (runtime *Runtime) LocalOwner(groupID string) (rangebootstrap.OwnerControl, bool) {
-	if runtime == nil || runtime.Host == nil || runtime.Capabilities == nil {
+	if runtime == nil || runtime.Host == nil || runtime.Engines == nil {
 		return nil, false
 	}
-	state, found := runtime.Capabilities.Resolve(groupID)
+	state, found := runtime.Engines.Resolve(groupID)
 	if !found {
 		return nil, false
 	}
@@ -449,8 +449,8 @@ func (runtime *Runtime) RegisterInternalRPC(registrar grpc.ServiceRegistrar,
 	if err != nil {
 		return err
 	}
-	capabilityServer, err := raftrpc.NewCapabilityServer(clusterID, raftID, runtime.Host,
-		runtime.Capabilities.Resolve, authorize, maxSize)
+	engineServer, err := raftrpc.NewEngineServer(clusterID, raftID, runtime.Host,
+		runtime.Engines.Resolve, authorize, maxSize)
 	if err != nil {
 		return err
 	}
@@ -459,7 +459,7 @@ func (runtime *Runtime) RegisterInternalRPC(registrar grpc.ServiceRegistrar,
 	if err != nil {
 		return err
 	}
-	regionServer, err := raftrpc.NewRegionFenceServer(clusterID, raftID, runtime.Host, runtime.Root, runtime.Capabilities.Resolve, authorize)
+	regionServer, err := raftrpc.NewRegionFenceServer(clusterID, raftID, runtime.Host, runtime.Root, runtime.Engines.Resolve, authorize)
 	if err != nil {
 		return err
 	}
@@ -467,7 +467,7 @@ func (runtime *Runtime) RegisterInternalRPC(registrar grpc.ServiceRegistrar,
 	if err != nil {
 		return err
 	}
-	cutServer, err := raftrpc.NewRecordCutServer(holdingServer, runtime.Capabilities.Resolve, runtime.Snapshots)
+	cutServer, err := raftrpc.NewRecordCutServer(holdingServer, runtime.Engines.Resolve, runtime.Snapshots)
 	if err != nil {
 		return err
 	}
@@ -478,7 +478,7 @@ func (runtime *Runtime) RegisterInternalRPC(registrar grpc.ServiceRegistrar,
 	raftwire.RegisterRaftServiceServer(registrar, raftServer)
 	raftwire.RegisterGroupServiceServer(registrar, groupServer)
 	raftwire.RegisterRangeControlServiceServer(registrar, rangeServer)
-	raftwire.RegisterCapabilityServiceServer(registrar, capabilityServer)
+	raftwire.RegisterEngineServiceServer(registrar, engineServer)
 	raftwire.RegisterGroupMembershipServiceServer(registrar, membershipServer)
 	raftwire.RegisterRegionFenceServiceServer(registrar, regionServer)
 	raftwire.RegisterRecordHoldingServiceServer(registrar, holdingServer)

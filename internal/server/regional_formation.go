@@ -73,7 +73,7 @@ func (p regionalParticipants) Observe(ctx context.Context, target uint64, group 
 	if _, err := p.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return regiongroups.Observation{}, err
 	}
-	state, found := p.runtime.Capabilities.Resolve(group)
+	state, found := p.runtime.Engines.Resolve(group)
 	if !found {
 		return regiongroups.Observation{}, errors.New("local regional Group is not open")
 	}

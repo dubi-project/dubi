@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -33,7 +33,7 @@ func (f regionBarrierFunc) ReadIndex(ctx context.Context, group string) (uint64,
 	return f(ctx, group)
 }
 
-func regionObservationFixture(t *testing.T) (*RegionFenceServer, *rootstate.State, *capstate.State, context.Context, *raftwire.ObserveRegionFenceRequest) {
+func regionObservationFixture(t *testing.T) (*RegionFenceServer, *rootstate.State, *enginestate.State, context.Context, *raftwire.ObserveRegionFenceRequest) {
 	t.Helper()
 	root, err := rootstate.Open(t.TempDir())
 	if err != nil {
@@ -52,11 +52,11 @@ func regionObservationFixture(t *testing.T) (*RegionFenceServer, *rootstate.Stat
 		t.Fatal(err)
 	}
 	index++
-	r := applyRootCommand(t, root, &index, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+	r := applyRootCommand(t, root, &index, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	if r.Error != "" {
 		t.Fatal(r)
 	}
-	state, err := capstate.Open(t.TempDir(), "data-1", groupRPCHandler{})
+	state, err := enginestate.Open(t.TempDir(), "data-1", groupRPCHandler{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func regionObservationFixture(t *testing.T) (*RegionFenceServer, *rootstate.Stat
 		}
 		return state.AppliedIndex(), nil
 	})
-	s, err := NewRegionFenceServer("cluster", 1, host, root, func(group string) (*capstate.State, bool) { return state, group == "data-1" }, func(_ context.Context, id uint64) error {
+	s, err := NewRegionFenceServer("cluster", 1, host, root, func(group string) (*enginestate.State, bool) { return state, group == "data-1" }, func(_ context.Context, id uint64) error {
 		if id != 991 {
 			return errors.New("wrong certificate identity")
 		}
@@ -119,7 +119,7 @@ func TestRegionObservationChecksQuorumsMembershipAndFreshAuthorization(t *testin
 				request.GroupId = "unknown"
 				expect = codes.FailedPrecondition
 			case "not-hosted":
-				s.states = func(string) (*capstate.State, bool) { return nil, false }
+				s.states = func(string) (*enginestate.State, bool) { return nil, false }
 				expect = codes.NotFound
 			case "no-root-quorum":
 				s.host = regionBarrierFunc(func(context.Context, string) (uint64, error) { return 0, errors.New("quorum gone") })
@@ -361,7 +361,7 @@ func TestRegionObservationOverMutualTLSBindsSenderAndResponder(t *testing.T) {
 	}
 }
 
-func sealObservationState(t *testing.T, state *capstate.State) regionfence.HandoffIntent {
+func sealObservationState(t *testing.T, state *enginestate.State) regionfence.HandoffIntent {
 	t.Helper()
 	v, err := state.RegionFence()
 	if err != nil {

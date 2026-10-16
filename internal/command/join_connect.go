@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/config"
@@ -42,7 +42,7 @@ func openJoiningServer(ctx context.Context, args []string, stdin io.Reader, stde
 	return openJoiningServerWithMux(ctx, args, stdin, stderr, nil)
 }
 
-func openJoiningServerWithMux(ctx context.Context, args []string, stdin io.Reader, stderr io.Writer, mux *capabilityruntime.Mux) (process *server.Server, returnErr error) {
+func openJoiningServerWithMux(ctx context.Context, args []string, stdin io.Reader, stderr io.Writer, mux *engineruntime.Mux) (process *server.Server, returnErr error) {
 	flags := flag.NewFlagSet("join", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	store := flags.String("store", "", "durable joining Node store")

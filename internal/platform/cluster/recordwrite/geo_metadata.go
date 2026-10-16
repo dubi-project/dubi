@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
@@ -37,7 +37,7 @@ type GeoMetadataReplicationError struct {
 // unavailable. Durable destination rejection also remains in the ledger until
 // a fresh placement/publication retry explicitly supersedes it.
 func ReplicateGeoMetadataWithRetryStore(ctx context.Context, transport GeoMetadataMirrorTransport,
-	plan placement.GeoPlan, mirrors []routedstate.GeoMetadataMirror, retry *GeoMetadataRetryStore) ([]capstate.Result, error) {
+	plan placement.GeoPlan, mirrors []routedstate.GeoMetadataMirror, retry *GeoMetadataRetryStore) ([]enginestate.Result, error) {
 	if retry == nil {
 		return ReplicateGeoMetadata(ctx, transport, plan, mirrors)
 	}
@@ -113,10 +113,10 @@ func GeoMetadataMirrors(target router.Target, descriptor records.Descriptor,
 }
 
 // GeoMetadataMirrorTransport is the authenticated node-to-node path used to
-// submit a MirrorGeo command to a destination capability Group. Implementations
+// submit a MirrorGeo command to a destination engine Group. Implementations
 // must return the destination's durable Result, not just a Raft proposal index.
 type GeoMetadataMirrorTransport interface {
-	MirrorGeo(context.Context, uint64, string, []byte) (capstate.Result, error)
+	MirrorGeo(context.Context, uint64, string, []byte) (enginestate.Result, error)
 }
 
 // ReplicateGeoMetadata submits each supplied covered-Region mirror to any
@@ -128,7 +128,7 @@ type GeoMetadataMirrorTransport interface {
 // response and avoiding a second metadata record.
 func ReplicateGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransport,
 	plan placement.GeoPlan, mirrors []routedstate.GeoMetadataMirror,
-) ([]capstate.Result, error) {
+) ([]enginestate.Result, error) {
 	if ctx == nil || transport == nil || len(mirrors) == 0 {
 		return nil, errors.New("Geo metadata replication requires a transport and mirrors")
 	}
@@ -148,7 +148,7 @@ func ReplicateGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransp
 		}
 		byRegion[mirror.RegionID] = mirror
 	}
-	results := make([]capstate.Result, 0, len(mirrors))
+	results := make([]enginestate.Result, 0, len(mirrors))
 	for _, region := range regions {
 		mirror, found := byRegion[region.RegionID]
 		if !found {
@@ -171,52 +171,52 @@ func mirrorMatchesRegion(m routedstate.GeoMetadataMirror, r placement.LocalPlan)
 // RetryGeoMetadata delivers ONE mirror against a freshly authorized Region
 // plan. Callers must also verify the exact current Owner publication first.
 func RetryGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransport, region placement.LocalPlan,
-	mirror routedstate.GeoMetadataMirror) (capstate.Result, error) {
+	mirror routedstate.GeoMetadataMirror) (enginestate.Result, error) {
 	if ctx == nil || transport == nil || !mirrorMatchesRegion(mirror, region) {
-		return capstate.Result{}, errors.New("Geo metadata retry differs from current Region plan")
+		return enginestate.Result{}, errors.New("Geo metadata retry differs from current Region plan")
 	}
 	requestID, err := mirrorRequestID(mirror)
 	if err != nil {
-		return capstate.Result{}, err
+		return enginestate.Result{}, err
 	}
 	encoded, err := routedstate.EncodeGeoMetadataMirror(requestID, mirror)
 	if err != nil {
-		return capstate.Result{}, err
+		return enginestate.Result{}, err
 	}
 	var failures []error
-	var applied capstate.Result
+	var applied enginestate.Result
 	var submitted bool
 	nodes := region.Nodes()
 	for i, node := range nodes {
 		if err := ctx.Err(); err != nil {
-			return capstate.Result{}, err
+			return enginestate.Result{}, err
 		}
 		attempt, cancel := remoteCandidateContext(ctx, len(nodes)-i)
 		result, submitErr := transport.MirrorGeo(attempt, node.RaftID, region.GroupID, encoded)
 		cancel()
 		if submitErr != nil {
 			if ctx.Err() != nil {
-				return capstate.Result{}, ctx.Err()
+				return enginestate.Result{}, ctx.Err()
 			}
 			if status.Code(submitErr) != codes.Unknown && !retryable(submitErr) && !errors.Is(submitErr, context.DeadlineExceeded) {
-				return capstate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror, Cause: submitErr}
+				return enginestate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror, Cause: submitErr}
 			}
 			failures = append(failures, fmt.Errorf("Node %d: %w", node.RaftID, submitErr))
 			continue
 		}
 		if result.RequestID != requestID || result.Index == 0 {
-			return capstate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror,
+			return enginestate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror,
 				Cause: errors.New("destination returned an invalid Geo metadata Result")}
 		}
 		if result.Error != "" || !result.Applied {
-			return capstate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror,
+			return enginestate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror,
 				Cause: fmt.Errorf("destination rejected Geo metadata mirror: %s", result.Error)}
 		}
 		applied, submitted = result, true
 		break
 	}
 	if !submitted {
-		return capstate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror,
+		return enginestate.Result{}, &GeoMetadataReplicationError{RegionID: region.RegionID, Mirror: mirror,
 			Retryable: true, Cause: fmt.Errorf("no reachable voter: %w", errors.Join(failures...))}
 	}
 	return applied, nil

@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -39,16 +39,16 @@ func FillPendingLocal(ctx context.Context, barrier PendingBarrier, root PendingR
 		return Report{}, errors.New("pending record fill requires artifacts, destination and client")
 	}
 	return fillPendingLocal(ctx, barrier, root, local, seal,
-		func(ctx context.Context, source rootstate.Node) (capstate.RecordCut, error) {
+		func(ctx context.Context, source rootstate.Node) (enginestate.RecordCut, error) {
 			return client.FetchRecordCut(ctx, source, seal, artifacts)
 		},
-		func(ctx context.Context, cut capstate.RecordCut, sources []rootstate.Node) (Report, error) {
+		func(ctx context.Context, cut enginestate.RecordCut, sources []rootstate.Node) (Report, error) {
 			return FillLocalCut(ctx, artifacts, cut, local, sources, destination, client)
 		})
 }
 
-type pendingCutFetcher func(context.Context, rootstate.Node) (capstate.RecordCut, error)
-type pendingCutFiller func(context.Context, capstate.RecordCut, []rootstate.Node) (Report, error)
+type pendingCutFetcher func(context.Context, rootstate.Node) (enginestate.RecordCut, error)
+type pendingCutFiller func(context.Context, enginestate.RecordCut, []rootstate.Node) (Report, error)
 
 func fillPendingLocal(ctx context.Context, barrier PendingBarrier, root PendingRoot, local uint64,
 	seal regionfence.Handoff, fetch pendingCutFetcher, fill pendingCutFiller) (Report, error) {
@@ -62,7 +62,7 @@ func fillPendingLocal(ctx context.Context, barrier PendingBarrier, root PendingR
 	if err != nil {
 		return Report{}, err
 	}
-	var cut capstate.RecordCut
+	var cut enginestate.RecordCut
 	var last error
 	for i, source := range sources {
 		attempt, cancel := sourceAttemptContext(ctx, len(sources)-i)

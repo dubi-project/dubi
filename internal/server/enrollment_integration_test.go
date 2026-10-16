@@ -57,7 +57,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	process, err := Open(Options{StoreRoot: store, Listener: listener, ServerTLS: serverTLS, ClientTLS: clientTLS,
-		AuthorizePeer: authorize, CapabilityMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID},
+		AuthorizePeer: authorize, EngineMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID},
 		TickInterval: time.Millisecond, MembershipInterval: 10 * time.Millisecond, EnrollmentSigner: signer})
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 		process, err = Open(Options{StoreRoot: store, Listener: listener, ServerTLS: serverTLS, ClientTLS: clientTLS,
-			AuthorizePeer: authorize, CapabilityMux: serverTestMux(t), TickInterval: 10 * time.Millisecond})
+			AuthorizePeer: authorize, EngineMux: serverTestMux(t), TickInterval: 10 * time.Millisecond})
 		if err != nil {
 			t.Fatal("cold-open Root without signer/bootstrap", err)
 		}
@@ -250,7 +250,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 	// Remote admission cannot replace a local quorum barrier and activation.
 	stopIssuer()
 	joining, err = Open(Options{StoreRoot: joinStore, Listener: joinListener, ServerTLS: joinServerTLS, ClientTLS: joinClientTLS,
-		AuthorizePeer: authorize, CapabilityMux: serverTestMux(t), TickInterval: 10 * time.Millisecond})
+		AuthorizePeer: authorize, EngineMux: serverTestMux(t), TickInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 		t.Helper()
 		var err error
 		joining, err = Open(Options{StoreRoot: joinStore, Listener: listener, ServerTLS: joinServerTLS, ClientTLS: joinClientTLS,
-			AuthorizePeer: authorize, CapabilityMux: serverTestMux(t), TickInterval: 10 * time.Millisecond})
+			AuthorizePeer: authorize, EngineMux: serverTestMux(t), TickInterval: 10 * time.Millisecond})
 		if err != nil {
 			t.Fatal("open admitted learner without bootstrap options", err)
 		}
@@ -310,9 +310,9 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 	// originating Group. These observations are NOT regional quorum receipts.
 	var holdingDescriptors []records.Descriptor
 	var sourceHoldings []records.Holding
-	for _, capability := range []string{"file", "cache", "message", "search"} {
-		payload := []byte("opaque/" + capability)
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "holding-" + capability, CapabilityID: capability, DatasetID: "items"}, "origin-not-hosted", []byte("key"), payload)
+	for _, engine := range []string{"file", "cache", "message", "search"} {
+		payload := []byte("opaque/" + engine)
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "holding-" + engine, EngineID: engine, DatasetID: "items"}, "origin-not-hosted", []byte("key"), payload)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,7 +349,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 	var fetched []records.Descriptor
 	var fetchedHoldings []records.Holding
 	for i, original := range holdingDescriptors {
-		payload := bytes.Repeat([]byte("transfer/"+original.Keyspace.CapabilityID), 1+i*(1<<17))
+		payload := bytes.Repeat([]byte("transfer/"+original.Keyspace.EngineID), 1+i*(1<<17))
 		d, err := records.Describe(original.Keyspace, original.GroupID, []byte("transferred-key"), payload)
 		if err != nil {
 			t.Fatal(err)

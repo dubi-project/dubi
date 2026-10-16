@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -126,7 +126,7 @@ func TestRootJoinStartupRecoveryCancellationJoinsRuntimeClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := capabilityruntime.NewRegistry()
+	registry := engineruntime.NewRegistry()
 	if err := registry.Register("record", &nodeTestHandler{}); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestRootJoinStartupRecoveryCancellationJoinsRuntimeClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, CapabilityMux: mux})
+	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,11 +177,11 @@ func TestRootJoinStartupBeginShutdownCancelsWithoutReleasingStore(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux, err := capabilityruntime.NewRegistry().Seal()
+	mux, err := engineruntime.NewRegistry().Seal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, CapabilityMux: mux})
+	runtime, err := Open(Options{StoreRoot: store, TickInterval: time.Hour, RootBootstrapPeers: []uint64{id.RaftID}, EngineMux: mux})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -147,7 +147,7 @@ func TestManagedRegionalGrowthAutomaticThreeToFiveAndColdRestart(t *testing.T) {
 			if err != nil || !found || !slices.Equal(c.Nodes, ids) {
 				return false
 			}
-			s, found := r.Capabilities.Resolve(group)
+			s, found := r.Engines.Resolve(group)
 			if !found {
 				return false
 			}
@@ -198,7 +198,7 @@ func TestManagedRegionalGrowthAutomaticThreeToFiveAndColdRestart(t *testing.T) {
 		if generation == 2 {
 			poll("in-flight sealed growth", func() bool {
 				for _, n := range nodes {
-					s, found := n.server.Runtime.Capabilities.Resolve(group)
+					s, found := n.server.Runtime.Engines.Resolve(group)
 					if !found {
 						continue
 					}
@@ -217,7 +217,7 @@ func TestManagedRegionalGrowthAutomaticThreeToFiveAndColdRestart(t *testing.T) {
 		}
 		poll("automatic sealed growth and activation", func() bool { return check(all, generation, nil) })
 	}
-	state, _ := nodes[0].server.Runtime.Capabilities.Resolve(group)
+	state, _ := nodes[0].server.Runtime.Engines.Resolve(group)
 	view, err := state.RegionFence()
 	if err != nil {
 		t.Fatal(err)

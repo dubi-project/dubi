@@ -54,7 +54,7 @@ func create(t *testing.T, r *volume.Registry, v volume.Status, target int64) *Pa
 
 func appendRecord(t *testing.T, p *Pack, key string) Location {
 	t.Helper()
-	loc, err := p.Append(Record{CapabilityID: "record", TenantID: "tenant-a", Key: []byte(key), Payload: []byte("value-" + key)})
+	loc, err := p.Append(Record{EngineID: "record", TenantID: "tenant-a", Key: []byte(key), Payload: []byte("value-" + key)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,9 +72,9 @@ func TestAppendScanRestartAndSeal(t *testing.T) {
 		t.Fatal("wrong default target")
 	}
 	records := []Record{
-		{CapabilityID: "record", TenantID: "tenant-a", Key: []byte("duplicate"), Payload: []byte("one")},
-		{CapabilityID: "record", TenantID: "tenant-b", Key: []byte("duplicate"), Payload: []byte("two")},
-		{CapabilityID: "record", TenantID: "tenant-a", Key: []byte("binary\x00key"), Payload: []byte{}},
+		{EngineID: "record", TenantID: "tenant-a", Key: []byte("duplicate"), Payload: []byte("one")},
+		{EngineID: "record", TenantID: "tenant-b", Key: []byte("duplicate"), Payload: []byte("two")},
+		{EngineID: "record", TenantID: "tenant-a", Key: []byte("binary\x00key"), Payload: []byte{}},
 	}
 	var locations []Location
 	for _, record := range records {
@@ -149,7 +149,7 @@ func TestWholeRecordMayCrossTarget(t *testing.T) {
 	if _, err := p.Read(loc); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("k")}); !errors.Is(err, ErrSealed) {
+	if _, err := p.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("k")}); !errors.Is(err, ErrSealed) {
 		t.Fatal(err)
 	}
 	next := create(t, r, v, 0)
@@ -163,7 +163,7 @@ func TestWholeRecordMayCrossTarget(t *testing.T) {
 }
 
 func TestRecoveryDiscardsOnlyUncommittedTail(t *testing.T) {
-	for _, tail := range [][]byte{[]byte("DPR"), bytes.Repeat([]byte{0xff}, 80), mustEncode(t, Record{CapabilityID: "record", TenantID: "t", Key: []byte("unacked"), Payload: []byte("whole")})} {
+	for _, tail := range [][]byte{[]byte("DPR"), bytes.Repeat([]byte{0xff}, 80), mustEncode(t, Record{EngineID: "record", TenantID: "t", Key: []byte("unacked"), Payload: []byte("whole")})} {
 		t.Run(fmt.Sprint(len(tail)), func(t *testing.T) {
 			r, v := setup(t)
 			p := create(t, r, v, 0)
@@ -331,7 +331,7 @@ func TestVolumeAndPackLossNeverRecreate(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := p.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("k")}); err == nil {
+			if _, err := p.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("k")}); err == nil {
 				t.Fatal("write to lost resource")
 			}
 			if _, err := p.Read(loc); err == nil {
@@ -357,9 +357,9 @@ func TestVolumeAndPackLossNeverRecreate(t *testing.T) {
 
 func TestValidationAndScopeBinding(t *testing.T) {
 	r, v := setup(t)
-	for _, capability := range []string{"../escape", "", "a/b"} {
-		if _, err := encodeRecord(Record{CapabilityID: capability, TenantID: "t", Key: []byte("k")}); err == nil {
-			t.Fatal("accepted capability", capability)
+	for _, engine := range []string{"../escape", "", "a/b"} {
+		if _, err := encodeRecord(Record{EngineID: engine, TenantID: "t", Key: []byte("k")}); err == nil {
+			t.Fatal("accepted engine", engine)
 		}
 	}
 	for _, target := range []int64{-1, headerSize, MaxTargetSize + 1} {
@@ -369,7 +369,7 @@ func TestValidationAndScopeBinding(t *testing.T) {
 		}
 	}
 	p := create(t, r, v, 0)
-	for _, record := range []Record{{Key: []byte("k")}, {CapabilityID: "record", TenantID: "t"}, {CapabilityID: "record", TenantID: "t", Key: make([]byte, MaxKeySize+1)}, {CapabilityID: "record", TenantID: string(make([]byte, MaxTenantSize+1)), Key: []byte("k")}} {
+	for _, record := range []Record{{Key: []byte("k")}, {EngineID: "record", TenantID: "t"}, {EngineID: "record", TenantID: "t", Key: make([]byte, MaxKeySize+1)}, {EngineID: "record", TenantID: string(make([]byte, MaxTenantSize+1)), Key: []byte("k")}} {
 		if _, err := p.Append(record); err == nil {
 			t.Fatal("invalid record accepted")
 		}
@@ -398,7 +398,7 @@ func TestConcurrentAppend(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 24 {
 		wg.Go(func() {
-			loc, err := p.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte(fmt.Sprint(i)), Payload: []byte("data")})
+			loc, err := p.Append(Record{EngineID: "record", TenantID: "t", Key: []byte(fmt.Sprint(i)), Payload: []byte("data")})
 			if err != nil {
 				t.Error(err)
 				return
@@ -441,7 +441,7 @@ func TestProcessCrash(t *testing.T) {
 			// a response/location. Recovery must retain this uncertain outcome.
 			appendRecord(t, p, "response-lost")
 		} else {
-			tail := mustEncode(t, Record{CapabilityID: "record", TenantID: "t", Key: []byte("unconfirmed")})
+			tail := mustEncode(t, Record{EngineID: "record", TenantID: "t", Key: []byte("unconfirmed")})
 			if _, err := p.file.WriteAt(tail, p.state.End); err != nil {
 				t.Fatal(err)
 			}
@@ -521,7 +521,7 @@ func TestReplacedPackAndSymlinkDirectoryRejected(t *testing.T) {
 	if _, err := p.Read(loc); err == nil {
 		t.Fatal("replaced Pack file accepted")
 	}
-	if _, err := p.Append(Record{CapabilityID: "record", TenantID: "t", Key: []byte("k")}); err == nil {
+	if _, err := p.Append(Record{EngineID: "record", TenantID: "t", Key: []byte("k")}); err == nil {
 		t.Fatal("wrote after file replacement")
 	}
 	otherVolume, err := r.Add(t.TempDir())
@@ -567,13 +567,13 @@ func mustEncode(t *testing.T, r Record) []byte {
 }
 
 func FuzzRecordHeader(f *testing.F) {
-	b, _ := encodeRecord(Record{CapabilityID: "record", TenantID: "tenant", Key: []byte("key"), Payload: []byte("value")})
+	b, _ := encodeRecord(Record{EngineID: "record", TenantID: "tenant", Key: []byte("key"), Payload: []byte("value")})
 	f.Add(b[:recordHeaderSize])
 	f.Add([]byte{})
 	f.Add(bytes.Repeat([]byte{0xff}, recordHeaderSize))
 	f.Fuzz(func(t *testing.T, b []byte) {
-		capability, tenant, key, payload, _, err := decodeRecordHeader(b)
-		if err == nil && (capability <= 0 || capability > MaxCapabilitySize || tenant <= 0 || tenant > MaxTenantSize || key <= 0 || key > MaxKeySize || payload < 0 || payload > MaxPayloadSize) {
+		engine, tenant, key, payload, _, err := decodeRecordHeader(b)
+		if err == nil && (engine <= 0 || engine > MaxEngineSize || tenant <= 0 || tenant > MaxTenantSize || key <= 0 || key > MaxKeySize || payload < 0 || payload > MaxPayloadSize) {
 			t.Fatal("unchecked lengths")
 		}
 	})

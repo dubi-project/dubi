@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -30,7 +30,7 @@ type Verifier interface {
 // reporting a completed data write.
 type PublishedObservation struct {
 	Plan      placement.LocalPlan
-	Reference capstate.RecordReference
+	Reference enginestate.RecordReference
 	Holdings  []placement.Holding
 }
 
@@ -40,7 +40,7 @@ type PublishedObservation struct {
 // holdings are retried on other members of the unchanged confirmed cohort;
 // the denominator never shrinks. The two Owner reads detect replacement or
 // deletion of the exact logical publication during physical IO.
-func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owner *capstate.State,
+func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
 	localID uint64, localNodeID string, store Verifier, observer Observer,
 	target router.Target, descriptor records.Descriptor, requestID string, publicationIndex uint64) (PublishedObservation, error) {
 	if ctx == nil || barrier == nil || root == nil || owner == nil || localID == 0 || localNodeID == "" ||
@@ -142,23 +142,23 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 	return result, nil
 }
 
-func publishedReference(ctx context.Context, barrier Barrier, owner *capstate.State, target router.Target,
-	key []byte, recordID, requestID string, publicationIndex uint64) (capstate.RecordReference, error) {
-	var ref capstate.RecordReference
+func publishedReference(ctx context.Context, barrier Barrier, owner *enginestate.State, target router.Target,
+	key []byte, recordID, requestID string, publicationIndex uint64) (enginestate.RecordReference, error) {
+	var ref enginestate.RecordReference
 	var found bool
-	err := readOwner(ctx, barrier, owner, target, func(view capstate.ReadView) error {
+	err := readOwner(ctx, barrier, owner, target, func(view enginestate.ReadView) error {
 		var readErr error
 		ref, found, readErr = view.RecordReference(key)
 		return readErr
 	})
 	if err != nil {
-		return capstate.RecordReference{}, err
+		return enginestate.RecordReference{}, err
 	}
 	id, idErr := ref.Descriptor.ID()
 	if !found || idErr != nil || id != recordID || ref.RequestID != requestID || ref.Index != publicationIndex ||
 		ref.OwnerGroupID != target.OwnerGroupID || ref.RangeID != target.RangeID || ref.RangeEpoch != target.Epoch ||
 		!bytes.Equal(ref.RoutingKey, target.RoutingKey) {
-		return capstate.RecordReference{}, errors.New("exact authoritative record publication is not current")
+		return enginestate.RecordReference{}, errors.New("exact authoritative record publication is not current")
 	}
 	return ref, nil
 }

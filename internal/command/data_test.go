@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/capability/record"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilitydata"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/engine/record"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginedata"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rangebootstrap"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordrepair"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
@@ -36,17 +36,17 @@ import (
 // the same Raft mutation path without extending the user-facing Record module.
 type referenceTestHandler struct{}
 
-type immutableCapabilityTestHandler struct{}
+type immutableEngineTestHandler struct{}
 
-func (immutableCapabilityTestHandler) Apply(tx *capstate.Transaction, target router.Target, payload []byte) (capstate.Outcome, error) {
+func (immutableEngineTestHandler) Apply(tx *enginestate.Transaction, target router.Target, payload []byte) (enginestate.Outcome, error) {
 	if bytes.Equal(payload, []byte("skip-reference")) {
-		return capstate.Outcome{}, nil
+		return enginestate.Outcome{}, nil
 	}
 	var descriptor records.Descriptor
 	if err := json.Unmarshal(payload, &descriptor); err != nil {
-		return capstate.Outcome{}, err
+		return enginestate.Outcome{}, err
 	}
-	return capstate.Outcome{}, tx.SetRecordReference(target.RoutingKey, descriptor)
+	return enginestate.Outcome{}, tx.SetRecordReference(target.RoutingKey, descriptor)
 }
 
 type rejectingRecordSender struct{ calls int }
@@ -73,29 +73,29 @@ func (s *rejectingRecordSender) PutRecord(context.Context, rootstate.Node, recor
 	return raftrpc.HoldingObservation{}, errors.New("unexpected Pack transfer during confirmed write retry")
 }
 
-func (referenceTestHandler) Apply(tx *capstate.Transaction, target router.Target, payload []byte) (capstate.Outcome, error) {
+func (referenceTestHandler) Apply(tx *enginestate.Transaction, target router.Target, payload []byte) (enginestate.Outcome, error) {
 	if len(payload) > 0 && payload[0] == 0x7f {
 		descriptor, err := records.Describe(target.Keyspace, target.OwnerGroupID, target.RoutingKey, payload[1:])
 		if err != nil {
-			return capstate.Outcome{}, err
+			return enginestate.Outcome{}, err
 		}
-		return capstate.Outcome{}, tx.SetRecordReference(target.RoutingKey, descriptor)
+		return enginestate.Outcome{}, tx.SetRecordReference(target.RoutingKey, descriptor)
 	}
 	return record.Handler{}.Apply(tx, target, payload)
 }
 
-func (referenceTestHandler) Read(view capstate.ReadView, target router.Target, payload []byte) (capstate.Outcome, error) {
+func (referenceTestHandler) Read(view enginestate.ReadView, target router.Target, payload []byte) (enginestate.Outcome, error) {
 	return record.Handler{}.Read(view, target, payload)
 }
 
-func referenceTestMux(t *testing.T) *capabilityruntime.Mux {
+func referenceTestMux(t *testing.T) *engineruntime.Mux {
 	t.Helper()
-	registry := capabilityruntime.NewRegistry()
-	if err := registry.Register(record.CapabilityID, referenceTestHandler{}); err != nil {
+	registry := engineruntime.NewRegistry()
+	if err := registry.Register(record.EngineID, referenceTestHandler{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, capabilityID := range []string{"data-alpha", "data-beta"} {
-		if err := registry.Register(capabilityID, immutableCapabilityTestHandler{}); err != nil {
+	for _, engineID := range []string{"data-alpha", "data-beta"} {
+		if err := registry.Register(engineID, immutableEngineTestHandler{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -106,18 +106,18 @@ func referenceTestMux(t *testing.T) *capabilityruntime.Mux {
 	return mux
 }
 
-func activateCapabilityTestDataset(t *testing.T, ctx context.Context, first *server.Server,
+func activateEngineTestDataset(t *testing.T, ctx context.Context, first *server.Server,
 	group string, space rootstate.Keyspace) {
 	t.Helper()
-	dataset := rootstate.Dataset{TenantID: space.TenantID, CapabilityID: space.CapabilityID,
-		DatasetID: space.DatasetID, RangeID: "range-" + space.CapabilityID, OwnerGroupID: group}
+	dataset := rootstate.Dataset{TenantID: space.TenantID, EngineID: space.EngineID,
+		DatasetID: space.DatasetID, RangeID: "range-" + space.EngineID, OwnerGroupID: group}
 	rootCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
-		RequestID: "create-" + space.CapabilityID, Type: rootstate.CreateDataset, Dataset: &dataset})
+		RequestID: "create-" + space.EngineID, Type: rootstate.CreateDataset, Dataset: &dataset})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Runtime.Host.Submit(raft.RootGroupID, rootCommand); err != nil {
-		t.Fatal("submit capability Dataset", err)
+		t.Fatal("submit engine Dataset", err)
 	}
 	for {
 		if _, err := first.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
@@ -129,19 +129,19 @@ func activateCapabilityTestDataset(t *testing.T, ctx context.Context, first *ser
 		}
 		if found {
 			if result.Error != "" {
-				t.Fatal("capability Dataset rejected", result.Error)
+				t.Fatal("engine Dataset rejected", result.Error)
 			}
 			break
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatal("capability Dataset registration did not commit", ctx.Err())
+			t.Fatal("engine Dataset registration did not commit", ctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	bootstrap, err := rangebootstrap.New(first.Runtime.Host, first.Runtime.Root,
 		func(groupID string) (rangebootstrap.OwnerControl, bool) {
-			owner, found := first.Runtime.Capabilities.Resolve(groupID)
+			owner, found := first.Runtime.Engines.Resolve(groupID)
 			if !found {
 				return nil, false
 			}
@@ -152,11 +152,11 @@ func activateCapabilityTestDataset(t *testing.T, ctx context.Context, first *ser
 		t.Fatal(err)
 	}
 	if err := bootstrap.Reconcile(ctx, dataset.RangeID); err != nil {
-		t.Fatal("activate capability Dataset", err)
+		t.Fatal("activate engine Dataset", err)
 	}
 }
 
-func TestCapabilityDataAnyNodeGateway(t *testing.T) {
+func TestEngineDataAnyNodeGateway(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	mux := referenceTestMux(t)
@@ -201,7 +201,7 @@ func TestCapabilityDataAnyNodeGateway(t *testing.T) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	space := rootstate.Keyspace{TenantID: "gateway-demo", CapabilityID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "gateway-demo", EngineID: "data-alpha", DatasetID: "shared"}
 	// The test-owned control-plane setup does not turn the development Record
 	// endpoint into a general Dataset API.
 	tenantCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
@@ -231,7 +231,7 @@ func TestCapabilityDataAnyNodeGateway(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	activateCapabilityTestDataset(t, ctx, first, group, space)
+	activateEngineTestDataset(t, ctx, first, group, space)
 	_, ticket := joinTestTicket(t, store, firstNode.Address)
 	gatewayStore := filepath.Join(t.TempDir(), "gateway")
 	gateway, err := openJoiningServerWithMux(ctx, []string{"--store", gatewayStore,
@@ -241,17 +241,17 @@ func TestCapabilityDataAnyNodeGateway(t *testing.T) {
 	}
 	_, ready := startJoinTestServer(t, gateway)
 	ready()
-	if _, found := gateway.Runtime.Capabilities.Resolve(group); found {
+	if _, found := gateway.Runtime.Engines.Resolve(group); found {
 		t.Fatal("gateway unexpectedly hosts the Owner Group")
 	}
 	body := bytes.Repeat([]byte("streamed-gateway-body-"), 100000)
-	request := capabilitydata.WriteRequest{RequestID: "gateway-any-node-write", Keyspace: space,
+	request := enginedata.WriteRequest{RequestID: "gateway-any-node-write", Keyspace: space,
 		Key: []byte("gateway-key"), Body: body,
 		Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) }}
-	var written capabilitydata.WriteResult
+	var written enginedata.WriteResult
 	for {
 		attempt, stop := context.WithTimeout(ctx, 12*time.Second)
-		written, err = gateway.CapabilityData.Write(attempt, request)
+		written, err = gateway.EngineData.Write(attempt, request)
 		stop()
 		if err == nil {
 			break
@@ -262,13 +262,13 @@ func TestCapabilityDataAnyNodeGateway(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	if written.State != capabilitydata.WriteLocalReady || written.Local.ConfirmationIndex == 0 {
+	if written.State != enginedata.WriteLocalReady || written.Local.ConfirmationIndex == 0 {
 		t.Fatal("gateway returned without Owner LocalReady proof", written)
 	}
-	if _, err := gateway.CapabilityData.WriteLocal(ctx, request); !errors.Is(err, capabilitydata.ErrOwnerNotLocal) {
+	if _, err := gateway.EngineData.WriteLocal(ctx, request); !errors.Is(err, enginedata.ErrOwnerNotLocal) {
 		t.Fatal("Owner-local entry did not distinguish a non-Owner gateway", err)
 	}
-	read, err := gateway.CapabilityData.Read(ctx, space, request.Key)
+	read, err := gateway.EngineData.Read(ctx, space, request.Key)
 	if err != nil || !bytes.Equal(read.Body, body) || read.Reference.Index != written.Local.Reference.Index {
 		t.Fatal("gateway did not stream verified current data from Owner", len(read.Body), err)
 	}
@@ -281,13 +281,13 @@ func TestCapabilityDataAnyNodeGateway(t *testing.T) {
 	beforeConf, beforeErr := gateway.Runtime.Root.RootMembership()
 	t.Logf("before Owner loss: candidates=%v stopped=%x RootConf=%v err=%v", candidates, candidates[0], beforeConf, beforeErr)
 	owners[candidates[0]]()
-	second := capabilitydata.WriteRequest{RequestID: "gateway-after-owner-loss", Keyspace: space,
+	second := enginedata.WriteRequest{RequestID: "gateway-after-owner-loss", Keyspace: space,
 		Key: []byte("gateway-key-after-loss"), Body: bytes.Repeat([]byte("surviving-owner-"), 80000),
 		Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) }}
 	failoverCtx, failoverCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer failoverCancel()
-	committed, err := gateway.CapabilityData.Write(failoverCtx, second)
-	if err != nil || committed.State != capabilitydata.WriteLocalReady {
+	committed, err := gateway.EngineData.Write(failoverCtx, second)
+	if err != nil || committed.State != enginedata.WriteLocalReady {
 		conf, confErr := gateway.Runtime.Root.RootMembership()
 		t.Logf("failed Owner=%x candidates=%v gateway RootConf=%v applied=%d err=%v", candidates[0], candidates, conf, gateway.Runtime.Root.AppliedIndex(), confErr)
 		for _, id := range candidates[1:] {
@@ -304,12 +304,12 @@ func TestCapabilityDataAnyNodeGateway(t *testing.T) {
 	}
 	// Model a lost response at the caller: the write is committed, but the
 	// caller repeats the exact RequestID/body instead of inventing a new one.
-	retried, err := gateway.CapabilityData.Write(failoverCtx, second)
-	if err != nil || retried.State != capabilitydata.WriteLocalReady ||
+	retried, err := gateway.EngineData.Write(failoverCtx, second)
+	if err != nil || retried.State != enginedata.WriteLocalReady ||
 		retried.Local.Reference.Index != committed.Local.Reference.Index {
 		t.Fatal("gateway retry did not recover the original publication", committed, retried, err)
 	}
-	afterLoss, err := gateway.CapabilityData.Read(failoverCtx, space, second.Key)
+	afterLoss, err := gateway.EngineData.Read(failoverCtx, space, second.Key)
 	if err != nil || !bytes.Equal(afterLoss.Body, second.Body) ||
 		afterLoss.Reference.Index != committed.Local.Reference.Index {
 		t.Fatal("gateway did not read through surviving Owner members", err)
@@ -322,8 +322,8 @@ func TestCapabilityDataAnyNodeGateway(t *testing.T) {
 	third := second
 	third.RequestID = "gateway-without-owner-majority"
 	third.Key = []byte("gateway-key-without-majority")
-	if result, err := gateway.CapabilityData.Write(noMajorityCtx, third); err == nil ||
-		result.State == capabilitydata.WriteLocalReady {
+	if result, err := gateway.EngineData.Write(noMajorityCtx, third); err == nil ||
+		result.State == enginedata.WriteLocalReady {
 		t.Fatal("gateway claimed LocalReady without an Owner majority", result, err)
 	}
 }
@@ -401,26 +401,26 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	if err := json.Unmarshal(create, &descriptor); err != nil || descriptor.RangeID == "" || descriptor.OwnerGroupID != group {
 		t.Fatal("Dataset was not activated", string(create), err)
 	}
-	// A capability implementation calls the same in-process data entry; the
+	// A engine implementation calls the same in-process data entry; the
 	// platform routes it and verifies the exact reference published by its
 	// opaque mutation. Both handlers share this Owner Group and Node Pack pool.
-	capabilityCases := []struct {
+	engineCases := []struct {
 		space rootstate.Keyspace
 		body  []byte
 	}{
-		{space: rootstate.Keyspace{TenantID: "demo", CapabilityID: "data-alpha", DatasetID: "shared"}, body: []byte("alpha-immutable-body")},
-		{space: rootstate.Keyspace{TenantID: "demo", CapabilityID: "data-beta", DatasetID: "shared"}, body: []byte("beta-immutable-body")},
+		{space: rootstate.Keyspace{TenantID: "demo", EngineID: "data-alpha", DatasetID: "shared"}, body: []byte("alpha-immutable-body")},
+		{space: rootstate.Keyspace{TenantID: "demo", EngineID: "data-beta", DatasetID: "shared"}, body: []byte("beta-immutable-body")},
 	}
-	for _, tc := range capabilityCases {
-		dataset := rootstate.Dataset{TenantID: tc.space.TenantID, CapabilityID: tc.space.CapabilityID,
-			DatasetID: tc.space.DatasetID, RangeID: "range-" + tc.space.CapabilityID, OwnerGroupID: group}
+	for _, tc := range engineCases {
+		dataset := rootstate.Dataset{TenantID: tc.space.TenantID, EngineID: tc.space.EngineID,
+			DatasetID: tc.space.DatasetID, RangeID: "range-" + tc.space.EngineID, OwnerGroupID: group}
 		rootCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
-			RequestID: "create-" + tc.space.CapabilityID, Type: rootstate.CreateDataset, Dataset: &dataset})
+			RequestID: "create-" + tc.space.EngineID, Type: rootstate.CreateDataset, Dataset: &dataset})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := first.Runtime.Host.Submit(raft.RootGroupID, rootCommand); err != nil {
-			t.Fatal("submit capability Dataset", err)
+			t.Fatal("submit engine Dataset", err)
 		}
 		for {
 			if _, err := first.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
@@ -432,19 +432,19 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 			}
 			if found {
 				if result.Error != "" {
-					t.Fatal("capability Dataset rejected", result.Error)
+					t.Fatal("engine Dataset rejected", result.Error)
 				}
 				break
 			}
 			select {
 			case <-ctx.Done():
-				t.Fatal("capability Dataset registration did not commit", ctx.Err())
+				t.Fatal("engine Dataset registration did not commit", ctx.Err())
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
 		bootstrap, err := rangebootstrap.New(first.Runtime.Host, first.Runtime.Root,
 			func(groupID string) (rangebootstrap.OwnerControl, bool) {
-				owner, found := first.Runtime.Capabilities.Resolve(groupID)
+				owner, found := first.Runtime.Engines.Resolve(groupID)
 				if !found {
 					return nil, false
 				}
@@ -455,65 +455,65 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := bootstrap.Reconcile(ctx, dataset.RangeID); err != nil {
-			t.Fatal("activate capability Dataset", err)
+			t.Fatal("activate engine Dataset", err)
 		}
-		write := capabilitydata.WriteRequest{
-			RequestID: "write-" + tc.space.CapabilityID, Keyspace: tc.space,
+		write := enginedata.WriteRequest{
+			RequestID: "write-" + tc.space.EngineID, Keyspace: tc.space,
 			Key: []byte("same-key"), Body: tc.body,
 			Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) },
 		}
-		var written capabilitydata.WriteResult
+		var written enginedata.WriteResult
 		for {
-			written, err = first.CapabilityData.WriteLocal(ctx, write)
+			written, err = first.EngineData.WriteLocal(ctx, write)
 			if err == nil {
 				break
 			}
-			if written.State != capabilitydata.WritePublishedUnconfirmed {
-				t.Fatal("capability write failed before recoverable confirmation", tc.space, written, err)
+			if written.State != enginedata.WritePublishedUnconfirmed {
+				t.Fatal("engine write failed before recoverable confirmation", tc.space, written, err)
 			}
 			select {
 			case <-ctx.Done():
-				t.Fatal("capability confirmation did not recover with the same RequestID", tc.space, err)
+				t.Fatal("engine confirmation did not recover with the same RequestID", tc.space, err)
 			case <-time.After(25 * time.Millisecond):
 			}
 		}
-		if err != nil || written.State != capabilitydata.WriteLocalReady || written.Local.ConfirmationIndex == 0 {
-			t.Fatal("capability data did not reach LocalReady", tc.space, written, err)
+		if err != nil || written.State != enginedata.WriteLocalReady || written.Local.ConfirmationIndex == 0 {
+			t.Fatal("engine data did not reach LocalReady", tc.space, written, err)
 		}
 		stored, err := records.Describe(tc.space, group, []byte("same-key"), tc.body)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := first.Runtime.Records.Verify(ctx, stored); err != nil {
-			t.Fatal("capability bytes missing from the shared local Pack pool", tc.space, err)
+			t.Fatal("engine bytes missing from the shared local Pack pool", tc.space, err)
 		}
-		read, err := nodes[1].process.CapabilityData.ReadLocal(ctx, tc.space, []byte("same-key"))
+		read, err := nodes[1].process.EngineData.ReadLocal(ctx, tc.space, []byte("same-key"))
 		if err != nil || !bytes.Equal(read.Body, tc.body) {
-			t.Fatal("second Node could not read capability data", tc.space, read, err)
+			t.Fatal("second Node could not read engine data", tc.space, read, err)
 		}
 	}
-	unpublished, err := first.CapabilityData.WriteLocal(ctx, capabilitydata.WriteRequest{
-		RequestID: "write-without-reference", Keyspace: capabilityCases[0].space,
+	unpublished, err := first.EngineData.WriteLocal(ctx, enginedata.WriteRequest{
+		RequestID: "write-without-reference", Keyspace: engineCases[0].space,
 		Key: []byte("no-reference"), Body: []byte("not-durable-without-reference"),
 		Publish: func(records.Descriptor) ([]byte, error) { return []byte("skip-reference"), nil },
 	})
-	if err == nil || unpublished.State != capabilitydata.WriteUnknown {
+	if err == nil || unpublished.State != enginedata.WriteUnknown {
 		t.Fatal("handler mutation without the exact reference was mistaken for LocalReady", unpublished, err)
 	}
-	if got, err := first.CapabilityData.ReadLocal(ctx, capabilityCases[0].space, []byte("no-reference")); err == nil || len(got.Body) != 0 {
+	if got, err := first.EngineData.ReadLocal(ctx, engineCases[0].space, []byte("no-reference")); err == nil || len(got.Body) != 0 {
 		t.Fatal("unpublished immutable bytes leaked through the read gate", got, err)
 	}
 	packFiles, err := filepath.Glob(filepath.Join(nodes[0].store, "volume", "packs", "*.pack"))
 	if err != nil || len(packFiles) != 1 {
-		t.Fatal("two Capabilities did not use the same physical Pack", packFiles, err)
+		t.Fatal("two Engines did not use the same physical Pack", packFiles, err)
 	}
-	probeSpace := capabilityCases[0].space
-	probeDescriptor, err := records.Describe(probeSpace, group, []byte("same-key"), capabilityCases[0].body)
+	probeSpace := engineCases[0].space
+	probeDescriptor, err := records.Describe(probeSpace, group, []byte("same-key"), engineCases[0].body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if _, err := nodes[i].process.Runtime.Records.Put(ctx, probeDescriptor, capabilityCases[0].body); err != nil {
+		if _, err := nodes[i].process.Runtime.Records.Put(ctx, probeDescriptor, engineCases[0].body); err != nil {
 			t.Fatal("prepare physical holdings for disk loss", i, err)
 		}
 	}
@@ -550,11 +550,11 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	if _, err := nodes[2].process.Runtime.Records.Put(ctx, newDescriptor, []byte("new-bytes")); err == nil {
 		t.Fatal("replaced Volume accepted new physical bytes")
 	}
-	if _, err := nodes[2].process.CapabilityData.ReadLocal(ctx, probeSpace, []byte("same-key")); err == nil {
+	if _, err := nodes[2].process.EngineData.ReadLocal(ctx, probeSpace, []byte("same-key")); err == nil {
 		t.Fatal("Owner-local read hid the missing Volume")
 	}
-	viaHealthyOwner, err := nodes[2].process.CapabilityData.Read(ctx, probeSpace, []byte("same-key"))
-	if err != nil || !bytes.Equal(viaHealthyOwner.Body, capabilityCases[0].body) {
+	viaHealthyOwner, err := nodes[2].process.EngineData.Read(ctx, probeSpace, []byte("same-key"))
+	if err != nil || !bytes.Equal(viaHealthyOwner.Body, engineCases[0].body) {
 		t.Fatal("any-Node read did not use surviving physical holders", viaHealthyOwner, err)
 	}
 	entries, err := os.ReadDir(volumePath)
@@ -578,18 +578,18 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	if err := nodes[2].process.Runtime.Records.Close(); err != nil {
 		t.Fatal("inject local immutable Store failure", err)
 	}
-	if _, err := nodes[2].process.CapabilityData.ReadLocal(ctx, probeSpace, []byte("same-key")); err == nil {
+	if _, err := nodes[2].process.EngineData.ReadLocal(ctx, probeSpace, []byte("same-key")); err == nil {
 		t.Fatal("Owner-local read hid the failed Store")
 	}
-	viaHealthyOwner, err = nodes[2].process.CapabilityData.Read(ctx, probeSpace, []byte("same-key"))
-	if err != nil || !bytes.Equal(viaHealthyOwner.Body, capabilityCases[0].body) {
+	viaHealthyOwner, err = nodes[2].process.EngineData.Read(ctx, probeSpace, []byte("same-key"))
+	if err != nil || !bytes.Equal(viaHealthyOwner.Body, engineCases[0].body) {
 		t.Fatal("any-Node read did not fall back to a healthy Owner", viaHealthyOwner, err)
 	}
 	// Routing cannot manufacture durability: if another physical holder now
 	// leaves, only one of the original three Nodes can prove the bytes.
 	nodes[1].stop()
 	minorityCtx, minorityCancel := context.WithTimeout(ctx, 8*time.Second)
-	minorityRead, minorityErr := nodes[2].process.CapabilityData.Read(minorityCtx, probeSpace, []byte("same-key"))
+	minorityRead, minorityErr := nodes[2].process.EngineData.Read(minorityCtx, probeSpace, []byte("same-key"))
 	minorityCancel()
 	if minorityErr == nil || len(minorityRead.Body) != 0 {
 		t.Fatal("Owner fallback returned data without a physical majority", minorityRead, minorityErr)
@@ -676,10 +676,10 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		}
 	}
 	read(1)
-	for _, tc := range capabilityCases {
-		got, err := nodes[1].process.CapabilityData.ReadLocal(ctx, tc.space, []byte("same-key"))
+	for _, tc := range engineCases {
+		got, err := nodes[1].process.EngineData.ReadLocal(ctx, tc.space, []byte("same-key"))
 		if err != nil || !bytes.Equal(got.Body, tc.body) {
-			t.Fatal("restarted Node lost capability data", tc.space, got, err)
+			t.Fatal("restarted Node lost engine data", tc.space, got, err)
 		}
 	}
 	whileOneDown = struct {
@@ -700,7 +700,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	if _, found, err := first.Runtime.Root.Tenant("demo"); err != nil || !found {
 		t.Fatal("Tenant missing", err)
 	}
-	if _, found, err := first.Runtime.Root.RouteKeyspace(rootstate.Keyspace{TenantID: "demo", CapabilityID: "record", DatasetID: "items"}, []byte("greeting")); err != nil || !found {
+	if _, found, err := first.Runtime.Root.RouteKeyspace(rootstate.Keyspace{TenantID: "demo", EngineID: "record", DatasetID: "items"}, []byte("greeting")); err != nil || !found {
 		t.Fatal("Range missing", err)
 	}
 	if _, err := first.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
@@ -709,7 +709,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	// Each old Node initially owns a different physical record, including an
 	// empty one. The logical references are replicated through the data Group,
 	// so n4 must try multiple old sources while filling the sealed cut.
-	space := rootstate.Keyspace{TenantID: "demo", CapabilityID: record.CapabilityID, DatasetID: "items"}
+	space := rootstate.Keyspace{TenantID: "demo", EngineID: record.EngineID, DatasetID: "items"}
 	type immutableRef struct {
 		key, body  []byte
 		source     int
@@ -736,7 +736,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 			t.Fatal("publish immutable reference through Raft", err)
 		}
 		for {
-			state, found := first.Runtime.Capabilities.Resolve(group)
+			state, found := first.Runtime.Engines.Resolve(group)
 			if !found {
 				t.Fatal("old regional Group disappeared")
 			}
@@ -819,7 +819,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		}
 	}
 	publicationIndex := publishReference(&majority, "reference-majority-before-growth")
-	owner, found := first.Runtime.Capabilities.Resolve(group)
+	owner, found := first.Runtime.Engines.Resolve(group)
 	if !found {
 		t.Fatal("regional Owner Group disappeared after immutable publication")
 	}
@@ -860,7 +860,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	if _, err := owner.ReadRouted(ctx, first.Runtime.Host, majority.target, func(view capstate.ReadView) error {
+	if _, err := owner.ReadRouted(ctx, first.Runtime.Host, majority.target, func(view enginestate.ReadView) error {
 		receipt, found, err := view.LocalConfirmation(majority.key)
 		if err != nil || !found || receipt.Claim.ReferenceIndex != publicationIndex || receipt.Claim.Generation != observed.Plan.Generation {
 			return fmt.Errorf("local physical confirmation missing from Owner cut: found=%t record=%+v error=%v", found, receipt, err)
@@ -963,7 +963,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		readerIndex = 1
 	}
 	readerNode := nodes[readerIndex].process
-	readerOwner, found := readerNode.Runtime.Capabilities.Resolve(group)
+	readerOwner, found := readerNode.Runtime.Engines.Resolve(group)
 	if !found {
 		t.Fatal("unheld Node lacks regional Owner Group")
 	}
@@ -985,7 +985,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.WriteLocal(ctx, changed); !errors.Is(err, capstate.ErrRequestIDReused) {
+	if _, err := writer.WriteLocal(ctx, changed); !errors.Is(err, enginestate.ErrRequestIDReused) {
 		t.Fatal("changed immutable write reused a committed RequestID", err)
 	}
 	if _, err := first.Runtime.Records.Verify(ctx, changed.Descriptor); !errors.Is(err, records.ErrNotHeld) {
@@ -1016,7 +1016,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		readerNode.Runtime.Root, readerOwner, group,
 		readerNode.Runtime.Identity.RaftID, readerNode.Runtime.Identity.NodeID,
 		readerNode.Runtime.Records, readerNode.GroupClient)
-	if err != nil || repair.Cut.Count != uint64(len(refs)+len(capabilityCases)) ||
+	if err != nil || repair.Cut.Count != uint64(len(refs)+len(engineCases)) ||
 		repair.Fetched+repair.AlreadyHeld != repair.Cut.Count {
 		t.Fatal("live Owner reference cut did not repair missing local Pack data", repair, err)
 	}
@@ -1087,14 +1087,14 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	read(3)
 	verifyNewNode := func() {
 		t.Helper()
-		state, found := nodes[3].process.Runtime.Capabilities.Resolve(group)
+		state, found := nodes[3].process.Runtime.Engines.Resolve(group)
 		if !found {
 			t.Fatal("new Node did not open the regional data Group")
 		}
 		ready, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
 		for {
-			_, err := state.ReadRouted(ready, nodes[3].process.Runtime.Host, refs[0].target, func(view capstate.ReadView) error {
+			_, err := state.ReadRouted(ready, nodes[3].process.Runtime.Host, refs[0].target, func(view enginestate.ReadView) error {
 				for _, expected := range refs {
 					ref, found, err := view.RecordReference(expected.key)
 					if err != nil || !found || !reflect.DeepEqual(ref.Descriptor, expected.descriptor) {
@@ -1151,7 +1151,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	// reference mutation before activation is correctly rejected by the Owner
 	// write fence, so wait for the latter before publishing the next value.
 	for {
-		owner, found := first.Runtime.Capabilities.Resolve(group)
+		owner, found := first.Runtime.Engines.Resolve(group)
 		if !found {
 			t.Fatal("regional Owner disappeared after growth")
 		}
@@ -1267,7 +1267,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	recoveryOwner, found := recoveredFourth.Runtime.Capabilities.Resolve(group)
+	recoveryOwner, found := recoveredFourth.Runtime.Engines.Resolve(group)
 	if !found {
 		t.Fatal("restarted repair destination lacks Owner Group")
 	}

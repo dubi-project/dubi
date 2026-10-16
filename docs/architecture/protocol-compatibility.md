@@ -1,11 +1,11 @@
 # 协议与磁盘格式兼容
 
-DUBI 的控制协议和本地持久格式由 `internal/platform/protocol` 集中声明。节点启动时先校验自身的协议范围、capability 状态机格式和 Pack 容器格式；不认识的格式直接拒绝打开，不尝试猜测或原地修复。
+DUBI 的控制协议和本地持久格式由 `internal/platform/protocol` 集中声明。节点启动时先校验自身的协议范围、engine 状态机格式和 Pack 容器格式；不认识的格式直接拒绝打开，不尝试猜测或原地修复。
 
 当前版本：
 
 - 控制协议版本 `1`；当前与最小兼容版本均为 `1`。
-- capability 状态机格式 `7`。
+- engine 状态机格式 `7`。
 - Pack 容器格式 `2`，Pack catalog 格式 `2`。
 - 不可变记录索引格式 `1`。
 

@@ -72,7 +72,7 @@ func rootFileFixture(t *testing.T) *State {
 	}
 	applyRootFileCommand(t, s, Command{Type: RegisterNode, Node: &Node{NodeID: "node_00000000000000000000000000000001", RaftID: 11, RegionID: "west", Address: "127.0.0.1:10001"}})
 	for _, group := range []string{"data", "empty"} {
-		applyRootFileCommand(t, s, Command{Type: RegisterGroup, Group: &Group{GroupID: group, StateKind: GroupStateCapability}})
+		applyRootFileCommand(t, s, Command{Type: RegisterGroup, Group: &Group{GroupID: group, StateKind: GroupStateEngine}})
 	}
 	members := []GroupMember{{RaftID: 11, Role: GroupMemberVoter}}
 	applyRootFileCommand(t, s, Command{Type: PublishGroupMembers, Membership: &GroupMembership{GroupID: "data", ExpectedEpoch: 1, Members: members}})
@@ -80,8 +80,8 @@ func rootFileFixture(t *testing.T) *State {
 	applyRootFileCommand(t, s, Command{Type: CompleteGroupMembers, GroupCompletion: &GroupChangeCompletion{ChangeID: "done", GroupID: "data"}})
 	applyRootFileCommand(t, s, Command{Type: PlanGroupMembers, GroupPlan: &GroupChangePlan{ChangeID: "pending", GroupID: "data", ExpectedEpoch: 3, Members: members}})
 	applyRootFileCommand(t, s, Command{Type: RegisterTenant, Tenant: &Tenant{TenantID: "tenant"}})
-	for _, capability := range []string{"record", "search"} {
-		applyRootFileCommand(t, s, Command{Type: CreateDataset, Dataset: &Dataset{TenantID: "tenant", CapabilityID: capability, DatasetID: "items", RangeID: capability, OwnerGroupID: "data"}})
+	for _, engine := range []string{"record", "search"} {
+		applyRootFileCommand(t, s, Command{Type: CreateDataset, Dataset: &Dataset{TenantID: "tenant", EngineID: engine, DatasetID: "items", RangeID: engine, OwnerGroupID: "data"}})
 	}
 	// Owner index is deliberately greater than Root cut.
 	applyRootFileCommand(t, s, Command{Type: ActivateRange, Activation: &RangeActivation{RangeID: "record", OwnerGroupID: "data", Epoch: 1, OwnerRequestID: "owner-record", OwnerAppliedIndex: 100000}})

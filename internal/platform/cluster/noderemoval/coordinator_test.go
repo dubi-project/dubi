@@ -107,7 +107,7 @@ func TestCoordinatorRetiresSingleNodeRegionBeforeRootRemoval(t *testing.T) {
 	root := openFixtureWithRoot(t, []uint64{2}, []uint64{1, 2, 3})
 	groupID := regiongroups.GroupID("west")
 	if err := applyCommand(root, rootstate.Command{RequestID: "region-register", Type: rootstate.RegisterGroup,
-		Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateCapability}}); err != nil {
+		Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateEngine}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := applyCommand(root, rootstate.Command{RequestID: "region-plan", Type: rootstate.PlanRegionCohort,

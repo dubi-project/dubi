@@ -282,7 +282,7 @@ func (s *State) applyRegionGroupRebuild(batch *pebble.Batch, value RegionGroupRe
 	if err := decodeStreamJSON(groupEncoded, &group); err != nil {
 		return "", err
 	}
-	if group.GroupID != value.GroupID || group.StateKind != GroupStateCapability {
+	if group.GroupID != value.GroupID || group.StateKind != GroupStateEngine {
 		return "Region Group descriptor is invalid", nil
 	}
 	// The old Group is no longer routable after retirement. Reset only the

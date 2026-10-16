@@ -28,7 +28,7 @@ type StateFactory func(ctx context.Context, task rootstate.GroupTaskReference) (
 var ErrJoiningGroupAlreadyOpen = errors.New("joining Group is already being opened")
 
 // JoinManager opens an empty local Group before its RaftID is proposed as a
-// Learner. The injected factory owns capability-specific state construction;
+// Learner. The injected factory owns engine-specific state construction;
 // the Raft layer never guesses a module's persistent format.
 type JoinManager struct {
 	mu      sync.Mutex

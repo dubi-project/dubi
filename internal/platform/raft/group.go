@@ -35,7 +35,7 @@ type CommandValidator interface {
 }
 
 // Snapshotter captures the application state and its exact Raft cut. The
-// returned bytes must restore that state on another Node without capability-
+// returned bytes must restore that state on another Node without engine-
 // specific knowledge in the Raft layer.
 type Snapshotter interface {
 	Snapshot() (data []byte, index uint64, conf *raftpb.ConfState, err error)
@@ -609,7 +609,7 @@ func (g *Group) InstallSnapshot(message *raftpb.Message) (uint64, error) {
 	return index, nil
 }
 
-// CreateSnapshot writes a capability-opaque state image into Raft storage and
+// CreateSnapshot writes a engine-opaque state image into Raft storage and
 // compacts the log through the included index in one durable storage batch.
 func (g *Group) CreateSnapshot() (uint64, error) {
 	g.mu.Lock()

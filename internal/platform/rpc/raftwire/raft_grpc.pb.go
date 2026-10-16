@@ -626,139 +626,139 @@ var RangeControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	CapabilityService_Mutate_FullMethodName = "/dubi.internal.raft.v1.CapabilityService/Mutate"
-	CapabilityService_Read_FullMethodName   = "/dubi.internal.raft.v1.CapabilityService/Read"
+	EngineService_Mutate_FullMethodName = "/dubi.internal.raft.v1.EngineService/Mutate"
+	EngineService_Read_FullMethodName   = "/dubi.internal.raft.v1.EngineService/Read"
 )
 
-// CapabilityServiceClient is the client API for CapabilityService service.
+// EngineServiceClient is the client API for EngineService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type CapabilityServiceClient interface {
-	Mutate(ctx context.Context, in *CapabilityMutateRequest, opts ...grpc.CallOption) (*CapabilityResult, error)
-	Read(ctx context.Context, in *CapabilityReadRequest, opts ...grpc.CallOption) (*CapabilityReadResponse, error)
+type EngineServiceClient interface {
+	Mutate(ctx context.Context, in *EngineMutateRequest, opts ...grpc.CallOption) (*EngineResult, error)
+	Read(ctx context.Context, in *EngineReadRequest, opts ...grpc.CallOption) (*EngineReadResponse, error)
 }
 
-type capabilityServiceClient struct {
+type engineServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewCapabilityServiceClient(cc grpc.ClientConnInterface) CapabilityServiceClient {
-	return &capabilityServiceClient{cc}
+func NewEngineServiceClient(cc grpc.ClientConnInterface) EngineServiceClient {
+	return &engineServiceClient{cc}
 }
 
-func (c *capabilityServiceClient) Mutate(ctx context.Context, in *CapabilityMutateRequest, opts ...grpc.CallOption) (*CapabilityResult, error) {
+func (c *engineServiceClient) Mutate(ctx context.Context, in *EngineMutateRequest, opts ...grpc.CallOption) (*EngineResult, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CapabilityResult)
-	err := c.cc.Invoke(ctx, CapabilityService_Mutate_FullMethodName, in, out, cOpts...)
+	out := new(EngineResult)
+	err := c.cc.Invoke(ctx, EngineService_Mutate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *capabilityServiceClient) Read(ctx context.Context, in *CapabilityReadRequest, opts ...grpc.CallOption) (*CapabilityReadResponse, error) {
+func (c *engineServiceClient) Read(ctx context.Context, in *EngineReadRequest, opts ...grpc.CallOption) (*EngineReadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CapabilityReadResponse)
-	err := c.cc.Invoke(ctx, CapabilityService_Read_FullMethodName, in, out, cOpts...)
+	out := new(EngineReadResponse)
+	err := c.cc.Invoke(ctx, EngineService_Read_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// CapabilityServiceServer is the server API for CapabilityService service.
-// All implementations must embed UnimplementedCapabilityServiceServer
+// EngineServiceServer is the server API for EngineService service.
+// All implementations must embed UnimplementedEngineServiceServer
 // for forward compatibility.
-type CapabilityServiceServer interface {
-	Mutate(context.Context, *CapabilityMutateRequest) (*CapabilityResult, error)
-	Read(context.Context, *CapabilityReadRequest) (*CapabilityReadResponse, error)
-	mustEmbedUnimplementedCapabilityServiceServer()
+type EngineServiceServer interface {
+	Mutate(context.Context, *EngineMutateRequest) (*EngineResult, error)
+	Read(context.Context, *EngineReadRequest) (*EngineReadResponse, error)
+	mustEmbedUnimplementedEngineServiceServer()
 }
 
-// UnimplementedCapabilityServiceServer must be embedded to have
+// UnimplementedEngineServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedCapabilityServiceServer struct{}
+type UnimplementedEngineServiceServer struct{}
 
-func (UnimplementedCapabilityServiceServer) Mutate(context.Context, *CapabilityMutateRequest) (*CapabilityResult, error) {
+func (UnimplementedEngineServiceServer) Mutate(context.Context, *EngineMutateRequest) (*EngineResult, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Mutate not implemented")
 }
-func (UnimplementedCapabilityServiceServer) Read(context.Context, *CapabilityReadRequest) (*CapabilityReadResponse, error) {
+func (UnimplementedEngineServiceServer) Read(context.Context, *EngineReadRequest) (*EngineReadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Read not implemented")
 }
-func (UnimplementedCapabilityServiceServer) mustEmbedUnimplementedCapabilityServiceServer() {}
-func (UnimplementedCapabilityServiceServer) testEmbeddedByValue()                           {}
+func (UnimplementedEngineServiceServer) mustEmbedUnimplementedEngineServiceServer() {}
+func (UnimplementedEngineServiceServer) testEmbeddedByValue()                       {}
 
-// UnsafeCapabilityServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to CapabilityServiceServer will
+// UnsafeEngineServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EngineServiceServer will
 // result in compilation errors.
-type UnsafeCapabilityServiceServer interface {
-	mustEmbedUnimplementedCapabilityServiceServer()
+type UnsafeEngineServiceServer interface {
+	mustEmbedUnimplementedEngineServiceServer()
 }
 
-func RegisterCapabilityServiceServer(s grpc.ServiceRegistrar, srv CapabilityServiceServer) {
-	// If the following call pancis, it indicates UnimplementedCapabilityServiceServer was
+func RegisterEngineServiceServer(s grpc.ServiceRegistrar, srv EngineServiceServer) {
+	// If the following call pancis, it indicates UnimplementedEngineServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&CapabilityService_ServiceDesc, srv)
+	s.RegisterService(&EngineService_ServiceDesc, srv)
 }
 
-func _CapabilityService_Mutate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CapabilityMutateRequest)
+func _EngineService_Mutate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EngineMutateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CapabilityServiceServer).Mutate(ctx, in)
+		return srv.(EngineServiceServer).Mutate(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CapabilityService_Mutate_FullMethodName,
+		FullMethod: EngineService_Mutate_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CapabilityServiceServer).Mutate(ctx, req.(*CapabilityMutateRequest))
+		return srv.(EngineServiceServer).Mutate(ctx, req.(*EngineMutateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _CapabilityService_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CapabilityReadRequest)
+func _EngineService_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EngineReadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CapabilityServiceServer).Read(ctx, in)
+		return srv.(EngineServiceServer).Read(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CapabilityService_Read_FullMethodName,
+		FullMethod: EngineService_Read_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CapabilityServiceServer).Read(ctx, req.(*CapabilityReadRequest))
+		return srv.(EngineServiceServer).Read(ctx, req.(*EngineReadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// CapabilityService_ServiceDesc is the grpc.ServiceDesc for CapabilityService service.
+// EngineService_ServiceDesc is the grpc.ServiceDesc for EngineService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var CapabilityService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "dubi.internal.raft.v1.CapabilityService",
-	HandlerType: (*CapabilityServiceServer)(nil),
+var EngineService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.EngineService",
+	HandlerType: (*EngineServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "Mutate",
-			Handler:    _CapabilityService_Mutate_Handler,
+			Handler:    _EngineService_Mutate_Handler,
 		},
 		{
 			MethodName: "Read",
-			Handler:    _CapabilityService_Read_Handler,
+			Handler:    _EngineService_Read_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -766,46 +766,46 @@ var CapabilityService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	CapabilityDataService_Write_FullMethodName = "/dubi.internal.raft.v1.CapabilityDataService/Write"
-	CapabilityDataService_Read_FullMethodName  = "/dubi.internal.raft.v1.CapabilityDataService/Read"
+	EngineDataService_Write_FullMethodName = "/dubi.internal.raft.v1.EngineDataService/Write"
+	EngineDataService_Read_FullMethodName  = "/dubi.internal.raft.v1.EngineDataService/Read"
 )
 
-// CapabilityDataServiceClient is the client API for CapabilityDataService service.
+// EngineDataServiceClient is the client API for EngineDataService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type CapabilityDataServiceClient interface {
-	Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CapabilityDataWriteRequest, CapabilityDataWriteResponse], error)
-	Read(ctx context.Context, in *CapabilityDataReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CapabilityDataReadResponse], error)
+type EngineDataServiceClient interface {
+	Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[EngineDataWriteRequest, EngineDataWriteResponse], error)
+	Read(ctx context.Context, in *EngineDataReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineDataReadResponse], error)
 }
 
-type capabilityDataServiceClient struct {
+type engineDataServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewCapabilityDataServiceClient(cc grpc.ClientConnInterface) CapabilityDataServiceClient {
-	return &capabilityDataServiceClient{cc}
+func NewEngineDataServiceClient(cc grpc.ClientConnInterface) EngineDataServiceClient {
+	return &engineDataServiceClient{cc}
 }
 
-func (c *capabilityDataServiceClient) Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CapabilityDataWriteRequest, CapabilityDataWriteResponse], error) {
+func (c *engineDataServiceClient) Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[EngineDataWriteRequest, EngineDataWriteResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CapabilityDataService_ServiceDesc.Streams[0], CapabilityDataService_Write_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &EngineDataService_ServiceDesc.Streams[0], EngineDataService_Write_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[CapabilityDataWriteRequest, CapabilityDataWriteResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[EngineDataWriteRequest, EngineDataWriteResponse]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CapabilityDataService_WriteClient = grpc.ClientStreamingClient[CapabilityDataWriteRequest, CapabilityDataWriteResponse]
+type EngineDataService_WriteClient = grpc.ClientStreamingClient[EngineDataWriteRequest, EngineDataWriteResponse]
 
-func (c *capabilityDataServiceClient) Read(ctx context.Context, in *CapabilityDataReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CapabilityDataReadResponse], error) {
+func (c *engineDataServiceClient) Read(ctx context.Context, in *EngineDataReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineDataReadResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CapabilityDataService_ServiceDesc.Streams[1], CapabilityDataService_Read_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &EngineDataService_ServiceDesc.Streams[1], EngineDataService_Read_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[CapabilityDataReadRequest, CapabilityDataReadResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[EngineDataReadRequest, EngineDataReadResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -816,85 +816,85 @@ func (c *capabilityDataServiceClient) Read(ctx context.Context, in *CapabilityDa
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CapabilityDataService_ReadClient = grpc.ServerStreamingClient[CapabilityDataReadResponse]
+type EngineDataService_ReadClient = grpc.ServerStreamingClient[EngineDataReadResponse]
 
-// CapabilityDataServiceServer is the server API for CapabilityDataService service.
-// All implementations must embed UnimplementedCapabilityDataServiceServer
+// EngineDataServiceServer is the server API for EngineDataService service.
+// All implementations must embed UnimplementedEngineDataServiceServer
 // for forward compatibility.
-type CapabilityDataServiceServer interface {
-	Write(grpc.ClientStreamingServer[CapabilityDataWriteRequest, CapabilityDataWriteResponse]) error
-	Read(*CapabilityDataReadRequest, grpc.ServerStreamingServer[CapabilityDataReadResponse]) error
-	mustEmbedUnimplementedCapabilityDataServiceServer()
+type EngineDataServiceServer interface {
+	Write(grpc.ClientStreamingServer[EngineDataWriteRequest, EngineDataWriteResponse]) error
+	Read(*EngineDataReadRequest, grpc.ServerStreamingServer[EngineDataReadResponse]) error
+	mustEmbedUnimplementedEngineDataServiceServer()
 }
 
-// UnimplementedCapabilityDataServiceServer must be embedded to have
+// UnimplementedEngineDataServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedCapabilityDataServiceServer struct{}
+type UnimplementedEngineDataServiceServer struct{}
 
-func (UnimplementedCapabilityDataServiceServer) Write(grpc.ClientStreamingServer[CapabilityDataWriteRequest, CapabilityDataWriteResponse]) error {
+func (UnimplementedEngineDataServiceServer) Write(grpc.ClientStreamingServer[EngineDataWriteRequest, EngineDataWriteResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Write not implemented")
 }
-func (UnimplementedCapabilityDataServiceServer) Read(*CapabilityDataReadRequest, grpc.ServerStreamingServer[CapabilityDataReadResponse]) error {
+func (UnimplementedEngineDataServiceServer) Read(*EngineDataReadRequest, grpc.ServerStreamingServer[EngineDataReadResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Read not implemented")
 }
-func (UnimplementedCapabilityDataServiceServer) mustEmbedUnimplementedCapabilityDataServiceServer() {}
-func (UnimplementedCapabilityDataServiceServer) testEmbeddedByValue()                               {}
+func (UnimplementedEngineDataServiceServer) mustEmbedUnimplementedEngineDataServiceServer() {}
+func (UnimplementedEngineDataServiceServer) testEmbeddedByValue()                           {}
 
-// UnsafeCapabilityDataServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to CapabilityDataServiceServer will
+// UnsafeEngineDataServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EngineDataServiceServer will
 // result in compilation errors.
-type UnsafeCapabilityDataServiceServer interface {
-	mustEmbedUnimplementedCapabilityDataServiceServer()
+type UnsafeEngineDataServiceServer interface {
+	mustEmbedUnimplementedEngineDataServiceServer()
 }
 
-func RegisterCapabilityDataServiceServer(s grpc.ServiceRegistrar, srv CapabilityDataServiceServer) {
-	// If the following call pancis, it indicates UnimplementedCapabilityDataServiceServer was
+func RegisterEngineDataServiceServer(s grpc.ServiceRegistrar, srv EngineDataServiceServer) {
+	// If the following call pancis, it indicates UnimplementedEngineDataServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&CapabilityDataService_ServiceDesc, srv)
+	s.RegisterService(&EngineDataService_ServiceDesc, srv)
 }
 
-func _CapabilityDataService_Write_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(CapabilityDataServiceServer).Write(&grpc.GenericServerStream[CapabilityDataWriteRequest, CapabilityDataWriteResponse]{ServerStream: stream})
+func _EngineDataService_Write_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EngineDataServiceServer).Write(&grpc.GenericServerStream[EngineDataWriteRequest, EngineDataWriteResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CapabilityDataService_WriteServer = grpc.ClientStreamingServer[CapabilityDataWriteRequest, CapabilityDataWriteResponse]
+type EngineDataService_WriteServer = grpc.ClientStreamingServer[EngineDataWriteRequest, EngineDataWriteResponse]
 
-func _CapabilityDataService_Read_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(CapabilityDataReadRequest)
+func _EngineDataService_Read_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(EngineDataReadRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(CapabilityDataServiceServer).Read(m, &grpc.GenericServerStream[CapabilityDataReadRequest, CapabilityDataReadResponse]{ServerStream: stream})
+	return srv.(EngineDataServiceServer).Read(m, &grpc.GenericServerStream[EngineDataReadRequest, EngineDataReadResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type CapabilityDataService_ReadServer = grpc.ServerStreamingServer[CapabilityDataReadResponse]
+type EngineDataService_ReadServer = grpc.ServerStreamingServer[EngineDataReadResponse]
 
-// CapabilityDataService_ServiceDesc is the grpc.ServiceDesc for CapabilityDataService service.
+// EngineDataService_ServiceDesc is the grpc.ServiceDesc for EngineDataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var CapabilityDataService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "dubi.internal.raft.v1.CapabilityDataService",
-	HandlerType: (*CapabilityDataServiceServer)(nil),
+var EngineDataService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dubi.internal.raft.v1.EngineDataService",
+	HandlerType: (*EngineDataServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Write",
-			Handler:       _CapabilityDataService_Write_Handler,
+			Handler:       _EngineDataService_Write_Handler,
 			ClientStreams: true,
 		},
 		{
 			StreamName:    "Read",
-			Handler:       _CapabilityDataService_Read_Handler,
+			Handler:       _EngineDataService_Read_Handler,
 			ServerStreams: true,
 		},
 	},

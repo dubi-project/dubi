@@ -1,4 +1,4 @@
-// Package regiongroups forms capability-neutral regional Groups from immutable
+// Package regiongroups forms engine-neutral regional Groups from immutable
 // Root plans. Formation/routing publication does not enable LocalReady/GeoReady.
 package regiongroups
 
@@ -172,10 +172,10 @@ func (c *Coordinator) plan(ctx context.Context) error {
 			return err
 		}
 		if !found {
-			if err := c.submit(ctx, rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: id, StateKind: rootstate.GroupStateCapability}}); err != nil {
+			if err := c.submit(ctx, rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: id, StateKind: rootstate.GroupStateEngine}}); err != nil {
 				return err
 			}
-		} else if group.StateKind != rootstate.GroupStateCapability || group.Epoch != 1 || len(group.Members) != 0 {
+		} else if group.StateKind != rootstate.GroupStateEngine || group.Epoch != 1 || len(group.Members) != 0 {
 			return errors.New("automatic regional GroupID is occupied by another formation")
 		}
 		if err := c.submit(ctx, rootstate.Command{Type: rootstate.PlanRegionCohort, RegionPlan: &rootstate.RegionCohortPlan{RegionID: region, GroupID: id, Nodes: nodes}}); err != nil {

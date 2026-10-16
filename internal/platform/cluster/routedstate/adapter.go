@@ -1,4 +1,4 @@
-// Package routedstate binds capability data commands to an immutable DUBI
+// Package routedstate binds engine data commands to an immutable DUBI
 // Route Target before they enter a Raft StateMachine.
 package routedstate
 
@@ -28,8 +28,8 @@ const (
 	MirrorGeo     = "mirror_geo"
 )
 
-// Command is the platform envelope for a capability mutation. Payload remains
-// capability-owned and opaque to the Raft and routing layers.
+// Command is the platform envelope for a engine mutation. Payload remains
+// engine-owned and opaque to the Raft and routing layers.
 type Command struct {
 	Version     int                         `json:"version"`
 	RequestID   string                      `json:"request_id"`
@@ -44,9 +44,9 @@ type Command struct {
 	GeoMetadata *GeoMetadataMirror          `json:"geo_metadata,omitempty"`
 }
 
-// Machine owns one capability Group's durable state. ApplyRouted must compare
+// Machine owns one engine Group's durable state. ApplyRouted must compare
 // target with the Range fence stored in that same state and commit that check,
-// the capability mutation, its result, and AppliedIndex atomically. A stale
+// the engine mutation, its result, and AppliedIndex atomically. A stale
 // target is a persisted command rejection and must not be returned as a fatal
 // storage error.
 type Machine interface {
@@ -62,8 +62,8 @@ type Machine interface {
 	Close() error
 }
 
-// Adapter prevents capability Groups from accepting an unscoped raw command.
-// It deliberately has no public method that applies a bare capability payload.
+// Adapter prevents engine Groups from accepting an unscoped raw command.
+// It deliberately has no public method that applies a bare engine payload.
 type Adapter struct{ machine Machine }
 
 type handoffMachine interface {
@@ -98,7 +98,7 @@ func EncodeMutation(requestID string, target router.Target, payload []byte) ([]b
 		return nil, errors.New("invalid routed mutation identity")
 	}
 	if len(payload) == 0 {
-		return nil, errors.New("routed capability payload is empty")
+		return nil, errors.New("routed engine payload is empty")
 	}
 	return json.Marshal(Command{Version: FormatVersion, RequestID: requestID, Type: Mutation,
 		Target: &target, Payload: payload})

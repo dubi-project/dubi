@@ -48,14 +48,14 @@ func (d Descriptor) Validate() error {
 
 // ID includes full logical attribution and content. Length prefixes and the
 // versioned domain separator prevent ambiguous concatenation and cross-domain
-// reuse. Equal content in a different Tenant/Capability/Dataset is NOT deduped.
+// reuse. Equal content in a different Tenant/Engine/Dataset is NOT deduped.
 func (d Descriptor) ID() (string, error) {
 	if err := d.Validate(); err != nil {
 		return "", err
 	}
 	h := sha256.New()
 	h.Write([]byte("DUBI immutable record v1\x00"))
-	for _, v := range [][]byte{[]byte(d.Keyspace.TenantID), []byte(d.Keyspace.CapabilityID), []byte(d.Keyspace.DatasetID), []byte(d.GroupID), d.Key} {
+	for _, v := range [][]byte{[]byte(d.Keyspace.TenantID), []byte(d.Keyspace.EngineID), []byte(d.Keyspace.DatasetID), []byte(d.GroupID), d.Key} {
 		writeField(h, v)
 	}
 	var n [8]byte

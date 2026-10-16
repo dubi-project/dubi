@@ -132,7 +132,7 @@ func TestFillPendingRecordCutPinsTargetAndChecksReport(t *testing.T) {
 				t.Fatal("wrong TLS target received an application request")
 			}
 			if mode == "good" {
-				d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "record", DatasetID: "data"}, "data-1", []byte("repair-key"), []byte("repair-body"))
+				d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "data"}, "data-1", []byte("repair-key"), []byte("repair-body"))
 				if err != nil {
 					t.Fatal(err)
 				}

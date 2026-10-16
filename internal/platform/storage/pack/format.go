@@ -19,18 +19,18 @@ const (
 	MaxPayloadSize          = 64 << 20
 	MaxKeySize              = 64 << 10
 	MaxTenantSize           = 256
-	MaxCapabilitySize       = 128
+	MaxEngineSize           = 128
 	headerSize              = 1024
 	stateSize               = 256
 	recordHeaderSize        = 28
 )
 
 var (
-	crcTable          = crc32.MakeTable(crc32.Castagnoli)
-	capabilityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
-	idPattern         = regexp.MustCompile(`^pack_[0-9a-f]{32}$`)
-	ErrSealed         = errors.New("pack is sealed; create the next pack")
-	ErrCorrupt        = errors.New("pack corruption")
+	crcTable      = crc32.MakeTable(crc32.Castagnoli)
+	enginePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	idPattern     = regexp.MustCompile(`^pack_[0-9a-f]{32}$`)
+	ErrSealed     = errors.New("pack is sealed; create the next pack")
+	ErrCorrupt    = errors.New("pack corruption")
 )
 
 type Scope struct {
@@ -52,13 +52,13 @@ type checkpoint struct {
 	Sealed bool   `json:"sealed"`
 }
 
-// Record carries Capability/Tenant attribution and otherwise opaque module bytes. Keys
+// Record carries Engine/Tenant attribution and otherwise opaque module bytes. Keys
 // need not be unique; callers own their index, Range mapping and retry policy.
 type Record struct {
-	CapabilityID string
-	TenantID     string
-	Key          []byte
-	Payload      []byte
+	EngineID string
+	TenantID string
+	Key      []byte
+	Payload  []byte
 }
 
 type Location struct {
@@ -110,14 +110,14 @@ func encodeRecord(r Record) ([]byte, error) {
 	if err := validateRecord(r); err != nil {
 		return nil, err
 	}
-	b := make([]byte, recordHeaderSize+len(r.CapabilityID)+len(r.TenantID)+len(r.Key)+len(r.Payload))
+	b := make([]byte, recordHeaderSize+len(r.EngineID)+len(r.TenantID)+len(r.Key)+len(r.Payload))
 	copy(b, "DPR2")
-	binary.BigEndian.PutUint32(b[4:8], uint32(len(r.CapabilityID)))
+	binary.BigEndian.PutUint32(b[4:8], uint32(len(r.EngineID)))
 	binary.BigEndian.PutUint32(b[8:12], uint32(len(r.TenantID)))
 	binary.BigEndian.PutUint32(b[12:16], uint32(len(r.Key)))
 	binary.BigEndian.PutUint32(b[16:20], uint32(len(r.Payload)))
 	pos := recordHeaderSize
-	pos += copy(b[pos:], r.CapabilityID)
+	pos += copy(b[pos:], r.EngineID)
 	pos += copy(b[pos:], r.TenantID)
 	pos += copy(b[pos:], r.Key)
 	copy(b[pos:], r.Payload)
@@ -127,19 +127,19 @@ func encodeRecord(r Record) ([]byte, error) {
 }
 
 func validateRecord(r Record) error {
-	if !capabilityPattern.MatchString(r.CapabilityID) || len(r.TenantID) == 0 || len(r.TenantID) > MaxTenantSize || len(r.Key) == 0 || len(r.Key) > MaxKeySize || len(r.Payload) > MaxPayloadSize {
-		return errors.New("invalid pack record capability, tenant, key or payload length")
+	if !enginePattern.MatchString(r.EngineID) || len(r.TenantID) == 0 || len(r.TenantID) > MaxTenantSize || len(r.Key) == 0 || len(r.Key) > MaxKeySize || len(r.Payload) > MaxPayloadSize {
+		return errors.New("invalid pack record engine, tenant, key or payload length")
 	}
 	return nil
 }
 
-func decodeRecordHeader(b []byte) (capability, tenant, key, payload int, checksum uint32, err error) {
+func decodeRecordHeader(b []byte) (engine, tenant, key, payload int, checksum uint32, err error) {
 	if len(b) != recordHeaderSize || string(b[:4]) != "DPR2" || binary.BigEndian.Uint32(b[24:]) != crc32.Checksum(b[:24], crcTable) {
 		err = ErrCorrupt
 		return
 	}
-	capability, tenant, key, payload = int(binary.BigEndian.Uint32(b[4:8])), int(binary.BigEndian.Uint32(b[8:12])), int(binary.BigEndian.Uint32(b[12:16])), int(binary.BigEndian.Uint32(b[16:20]))
-	if capability <= 0 || capability > MaxCapabilitySize || tenant <= 0 || tenant > MaxTenantSize || key <= 0 || key > MaxKeySize || payload < 0 || payload > MaxPayloadSize {
+	engine, tenant, key, payload = int(binary.BigEndian.Uint32(b[4:8])), int(binary.BigEndian.Uint32(b[8:12])), int(binary.BigEndian.Uint32(b[12:16])), int(binary.BigEndian.Uint32(b[16:20]))
+	if engine <= 0 || engine > MaxEngineSize || tenant <= 0 || tenant > MaxTenantSize || key <= 0 || key > MaxKeySize || payload < 0 || payload > MaxPayloadSize {
 		err = ErrCorrupt
 		return
 	}

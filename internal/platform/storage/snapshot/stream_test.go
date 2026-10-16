@@ -11,7 +11,7 @@ import (
 )
 
 func streamHeader() Header {
-	return Header{Version: StreamVersion, Format: "capstate-v3", GroupID: "data-1", Index: 42, Conf: []byte("membership")}
+	return Header{Version: StreamVersion, Format: "enginestate-v3", GroupID: "data-1", Index: 42, Conf: []byte("membership")}
 }
 
 func streamFixture(t testing.TB) []byte {
@@ -58,7 +58,7 @@ func TestStreamRoundTripAndHeaderOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	header := decoder.Header()
-	if header.Index != 42 || header.Format != "capstate-v3" || header.GroupID != "data-1" {
+	if header.Index != 42 || header.Format != "enginestate-v3" || header.GroupID != "data-1" {
 		t.Fatal(header)
 	}
 	header.Conf[0] = 'x'

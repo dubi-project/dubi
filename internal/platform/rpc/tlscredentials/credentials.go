@@ -172,7 +172,7 @@ func (c *boundedConn) Close() error {
 	return err
 }
 
-// Preserve the syscall capability that gRPC's TLS wrapper exposes for socket
+// Preserve the syscall engine that gRPC's TLS wrapper exposes for socket
 // diagnostics. Pipe/test transports may not support it.
 func (c *boundedConn) SyscallConn() (syscall.RawConn, error) {
 	if conn, ok := c.raw.(syscall.Conn); ok {

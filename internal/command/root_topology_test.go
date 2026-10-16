@@ -205,7 +205,7 @@ func TestManagedRootTopologyAutomaticQuorumFailoverAndColdRestart(t *testing.T) 
 							return false
 						}
 						{
-							state, found := runtime.Capabilities.Resolve(id)
+							state, found := runtime.Engines.Resolve(id)
 							if !found {
 								return false
 							}

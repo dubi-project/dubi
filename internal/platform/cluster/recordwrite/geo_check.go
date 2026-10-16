@@ -6,7 +6,7 @@ import (
 	"errors"
 	"reflect"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
@@ -18,7 +18,7 @@ import (
 // coverage account. The caller supplies a fresh Root-derived GeoPlan and direct
 // physical observations; stale evidence or a changed Owner reference fails.
 // The returned coverage is still an internal observation, not a public lease.
-func CheckCommittedGeo(ctx context.Context, barrier Barrier, owner *capstate.State,
+func CheckCommittedGeo(ctx context.Context, barrier Barrier, owner *enginestate.State,
 	target router.Target, descriptor records.Descriptor, publication placement.PublicationCut,
 	plan placement.GeoPlan, evidence []placement.RegionHoldings,
 	confirmationRequestID string, claim routedstate.GeoConfirmation) (placement.GeoDataCoverage, error) {
@@ -40,7 +40,7 @@ func CheckCommittedGeo(ctx context.Context, barrier Barrier, owner *capstate.Sta
 	if err != nil || !reflect.DeepEqual(fresh, claim) {
 		return placement.GeoDataCoverage{}, errors.New("committed geo coverage is for an obsolete Region plan or publication")
 	}
-	err = readOwner(ctx, barrier, owner, target, func(view capstate.ReadView) error {
+	err = readOwner(ctx, barrier, owner, target, func(view enginestate.ReadView) error {
 		ref, found, readErr := view.RecordReference(descriptor.Key)
 		if readErr != nil || !found || ref.RequestID != publication.RequestID || ref.Index != publication.Index ||
 			ref.CommandHash != publication.CommandHash || ref.RangeID != publication.RangeID || ref.RangeEpoch != publication.RangeEpoch ||

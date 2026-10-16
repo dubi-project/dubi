@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/auth"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilitydata"
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginedata"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/cluster/enrollmentauthority"
 	"github.com/dubi-project/dubi/internal/platform/cluster/groupmembership"
 	"github.com/dubi-project/dubi/internal/platform/cluster/noderemoval"
@@ -53,7 +53,7 @@ type Options struct {
 	ServerTLS          *tls.Config
 	ClientTLS          *tls.Config
 	AuthorizePeer      raftrpc.AuthorizePeer
-	CapabilityMux      *capabilityruntime.Mux
+	EngineMux          *engineruntime.Mux
 	RootBootstrapPeers []uint64
 	BootstrapDirectory raftrpc.Directory
 	TickInterval       time.Duration
@@ -71,7 +71,7 @@ type Options struct {
 type Server struct {
 	Runtime              *node.Runtime
 	GroupClient          *raftrpc.GroupClient
-	CapabilityData       *capabilitydata.Service // In-process only; not Tenant-authenticated.
+	EngineData           *enginedata.Service // In-process only; not Tenant-authenticated.
 	MembershipReconciler *groupmembership.Reconciler
 	NodeRemoval          *noderemoval.Coordinator
 
@@ -142,7 +142,7 @@ func Open(options Options) (*Server, error) {
 	transportSlot := newTransportSlot()
 	runtime, err := node.Open(node.Options{StoreRoot: options.StoreRoot,
 		TickInterval: options.TickInterval, Transport: transportSlot,
-		RootBootstrapPeers: options.RootBootstrapPeers, CapabilityMux: options.CapabilityMux})
+		RootBootstrapPeers: options.RootBootstrapPeers, EngineMux: options.EngineMux})
 	if err != nil {
 		_ = options.Listener.Close()
 		if options.PublicListener != nil {
@@ -219,7 +219,7 @@ func Open(options Options) (*Server, error) {
 	if err != nil {
 		return fail(err, transport, nil)
 	}
-	localData, err := capabilitydata.New(runtime, client)
+	localData, err := enginedata.New(runtime, client)
 	if err != nil {
 		return fail(err, transport, client)
 	}
@@ -336,13 +336,13 @@ func Open(options Options) (*Server, error) {
 	rootjoinwire.RegisterRootJoinServiceServer(grpcServer, rootJoinServer)
 	dataServer := newDataService(runtime, client, rootDirectory)
 	datawire.RegisterDataServiceServer(grpcServer, dataServer)
-	routedData, err := raftrpc.NewCapabilityDataServer(runtime.Identity, runtime.Host, runtime.Root,
+	routedData, err := raftrpc.NewEngineDataServer(runtime.Identity, runtime.Host, runtime.Root,
 		runtime.Records, options.AuthorizePeer, localData, options.MaxMessageSize)
 	if err != nil {
 		grpcServer.Stop()
 		return fail(err, transport, client)
 	}
-	raftwire.RegisterCapabilityDataServiceServer(grpcServer, routedData)
+	raftwire.RegisterEngineDataServiceServer(grpcServer, routedData)
 	raftwire.RegisterRecordRepairServiceServer(grpcServer, newRecordRepairService(runtime, client, options.AuthorizePeer))
 	enrollmentServer, err = enrollmentrpc.NewServer(runtime.Host, runtime.Root, options.EnrollmentSigner, runtime.Identity)
 	if err != nil {
@@ -422,7 +422,7 @@ func Open(options Options) (*Server, error) {
 		publicTLS.ClientCAs = nil
 		publicTLS.NextProtos = []string{"http/1.1"}
 	}
-	return &Server{Runtime: runtime, GroupClient: client, CapabilityData: localData, MembershipReconciler: reconciler, NodeRemoval: nodeRemoval,
+	return &Server{Runtime: runtime, GroupClient: client, EngineData: localData, MembershipReconciler: reconciler, NodeRemoval: nodeRemoval,
 		listener: options.Listener, publicListener: options.PublicListener, publicHTTP: publicHTTP, publicTLS: publicTLS,
 		grpc: grpcServer, transport: transport,
 		scheduler: scheduler, certificates: certificates, regional: regional, liveRepair: liveRepair, ready: make(chan struct{}), localNode: localNode,
@@ -773,8 +773,8 @@ func closeListener(listener net.Listener) error {
 
 func validateOptions(options Options) error {
 	if options.StoreRoot == "" || options.Listener == nil || options.AuthorizePeer == nil ||
-		options.CapabilityMux == nil || options.TickInterval < 0 || options.MembershipInterval < 0 {
-		return errors.New("server requires StoreRoot, listener, peer authorizer, Capability Mux, and valid intervals")
+		options.EngineMux == nil || options.TickInterval < 0 || options.MembershipInterval < 0 {
+		return errors.New("server requires StoreRoot, listener, peer authorizer, Engine Mux, and valid intervals")
 	}
 	if len(options.RootBootstrapPeers) > 1 && options.BootstrapDirectory == nil {
 		return errors.New("multi-node Root bootstrap requires a peer address directory")

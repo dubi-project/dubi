@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func candidateFixture(t *testing.T) (capstate.RecordCut, []capstate.RecordReference, []rootstate.Node) {
+func candidateFixture(t *testing.T) (enginestate.RecordCut, []enginestate.RecordReference, []rootstate.Node) {
 	t.Helper()
 	seal, _, cut := pendingFixture(t)
 	refs := testReferences(t)

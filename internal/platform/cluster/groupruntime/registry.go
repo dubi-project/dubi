@@ -1,5 +1,5 @@
 // Package groupruntime maps persistent Group StateKind descriptors to local
-// StateMachine factories without introducing capability dependencies into the
+// StateMachine factories without introducing engine dependencies into the
 // Raft or cluster platform layers.
 package groupruntime
 

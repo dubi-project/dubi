@@ -1,4 +1,4 @@
-// Package snapshot defines capability-neutral bounded streaming snapshot
+// Package snapshot defines engine-neutral bounded streaming snapshot
 // primitives. A stream is a logical state image, not a Node backup or a Pack.
 package snapshot
 

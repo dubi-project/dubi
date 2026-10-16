@@ -59,7 +59,7 @@ func TestManagedCertificateRenewalBootstrapAndJoinedNode(t *testing.T) {
 		// elections, shorter than ordinary concurrent fsync/TLS work; it
 		// manufactures leadership churn instead of testing managed renewal.
 		options := Options{StoreRoot: store, Listener: listener, ServerTLS: serverTLS, ClientTLS: clientTLS, AuthorizePeer: authorize,
-			CapabilityMux: serverTestMux(t), Network: &NetworkOptions{}, EnrollmentSigner: signer,
+			EngineMux: serverTestMux(t), Network: &NetworkOptions{}, EnrollmentSigner: signer,
 			ReportError: func(err error) {
 				select {
 				case errorsSeen <- err:
@@ -372,7 +372,7 @@ func TestServerCloseJoinsCertificateRenewalBeforeReleasingStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	process, err := Open(Options{StoreRoot: store, Listener: listener, ServerTLS: serverTLS, ClientTLS: clientTLS, AuthorizePeer: authorize,
-		CapabilityMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Millisecond, Network: &NetworkOptions{}, EnrollmentSigner: signer})
+		EngineMux: serverTestMux(t), RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Millisecond, Network: &NetworkOptions{}, EnrollmentSigner: signer})
 	if err != nil {
 		t.Fatal(err)
 	}

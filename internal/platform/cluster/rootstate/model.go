@@ -1,4 +1,4 @@
-// Package rootstate holds DUBI's capability-neutral Root Group directory.
+// Package rootstate holds DUBI's engine-neutral Root Group directory.
 package rootstate
 
 import (
@@ -69,9 +69,9 @@ type Group struct {
 }
 
 const (
-	GroupMemberVoter     = "voter"
-	GroupMemberLearner   = "learner"
-	GroupStateCapability = "capability"
+	GroupMemberVoter   = "voter"
+	GroupMemberLearner = "learner"
+	GroupStateEngine   = "engine"
 )
 
 type GroupMember struct {
@@ -182,27 +182,27 @@ type TenantCredentialRevocation struct {
 // Keyspace is an internal routing domain, not a user-facing resource or a
 // separately allocated persistent ID. A Tenant may own many Keyspaces.
 type Keyspace struct {
-	TenantID     string
-	CapabilityID string
-	DatasetID    string
+	TenantID  string
+	EngineID  string
+	DatasetID string
 }
 
 type Dataset struct {
 	TenantID     string `json:"tenant_id"`
-	CapabilityID string `json:"capability_id"`
+	EngineID     string `json:"engine_id"`
 	DatasetID    string `json:"dataset_id"`
 	RangeID      string `json:"range_id"`
 	OwnerGroupID string `json:"owner_group_id"`
 }
 
 func (value Dataset) Keyspace() Keyspace {
-	return Keyspace{TenantID: value.TenantID, CapabilityID: value.CapabilityID, DatasetID: value.DatasetID}
+	return Keyspace{TenantID: value.TenantID, EngineID: value.EngineID, DatasetID: value.DatasetID}
 }
 
 type Range struct {
 	RangeID             string `json:"range_id"`
 	TenantID            string `json:"tenant_id"`
-	CapabilityID        string `json:"capability_id"`
+	EngineID            string `json:"engine_id"`
 	DatasetID           string `json:"dataset_id"`
 	Start               []byte `json:"start"`
 	End                 []byte `json:"end"`
@@ -238,11 +238,11 @@ type RangePlacement struct {
 }
 
 func (value Range) Keyspace() Keyspace {
-	return Keyspace{TenantID: value.TenantID, CapabilityID: value.CapabilityID, DatasetID: value.DatasetID}
+	return Keyspace{TenantID: value.TenantID, EngineID: value.EngineID, DatasetID: value.DatasetID}
 }
 
 func (value Keyspace) Validate() error {
-	if !validID(value.TenantID) || !validID(value.CapabilityID) || !validID(value.DatasetID) {
+	if !validID(value.TenantID) || !validID(value.EngineID) || !validID(value.DatasetID) {
 		return errors.New("invalid internal Keyspace identity")
 	}
 	return nil
@@ -255,9 +255,9 @@ func ValidateRangeID(value string) error {
 	return nil
 }
 
-func ValidateCapabilityID(value string) error {
+func ValidateEngineID(value string) error {
 	if !validID(value) {
-		return errors.New("invalid CapabilityID")
+		return errors.New("invalid EngineID")
 	}
 	return nil
 }
@@ -302,7 +302,7 @@ func (value Range) Validate() error {
 	return nil
 }
 
-// Command is an internal Root Group command, not a public capability API.
+// Command is an internal Root Group command, not a public engine API.
 // Exactly one payload matching Type must be present.
 type Command struct {
 	Version             int                         `json:"version"`
@@ -457,7 +457,7 @@ func (command Command) validate() error {
 			return errors.New("create_dataset requires only Dataset payload")
 		}
 		value := command.Dataset
-		if !validID(value.TenantID) || !validID(value.CapabilityID) || !validID(value.DatasetID) || !validID(value.RangeID) {
+		if !validID(value.TenantID) || !validID(value.EngineID) || !validID(value.DatasetID) || !validID(value.RangeID) {
 			return errors.New("invalid Dataset or initial Range ID")
 		}
 		if err := raft.ValidateGroupID(value.OwnerGroupID); err != nil {

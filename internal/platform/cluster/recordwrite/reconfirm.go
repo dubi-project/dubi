@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/router"
@@ -19,7 +19,7 @@ import (
 // current receipt is left untouched; reads still recheck live physical data.
 // Managed Nodes call this only from the current Owner leader to avoid every
 // member emitting an independent confirmation command for the same cut.
-func (w Writer) EnsureCurrentLocalConfirmation(ctx context.Context, ref capstate.RecordReference) (bool, error) {
+func (w Writer) EnsureCurrentLocalConfirmation(ctx context.Context, ref enginestate.RecordReference) (bool, error) {
 	if ctx == nil || w.Barrier == nil || w.Root == nil || w.Owner == nil || w.Store == nil ||
 		w.Observer == nil || w.Submit == nil || w.LocalID == 0 || w.LocalNodeID == "" ||
 		ref.OwnerGroupID != w.Owner.GroupID() ||
@@ -39,9 +39,9 @@ func (w Writer) EnsureCurrentLocalConfirmation(ctx context.Context, ref capstate
 	if err != nil {
 		return false, err
 	}
-	var receipt capstate.LocalConfirmationRecord
+	var receipt enginestate.LocalConfirmationRecord
 	var found bool
-	err = readOwner(ctx, w.Barrier, w.Owner, target, func(view capstate.ReadView) error {
+	err = readOwner(ctx, w.Barrier, w.Owner, target, func(view enginestate.ReadView) error {
 		current, exists, readErr := view.RecordReference(ref.Descriptor.Key)
 		if readErr != nil {
 			return readErr
@@ -90,7 +90,7 @@ func (w Writer) EnsureCurrentLocalConfirmation(ctx context.Context, ref capstate
 	if err := w.Submit(ctx, target.OwnerGroupID, command); err != nil {
 		return false, fmt.Errorf("submit repaired local confirmation: %w", err)
 	}
-	result, err := w.awaitResult(ctx, target.OwnerGroupID, func() (capstate.Result, bool, error) {
+	result, err := w.awaitResult(ctx, target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForLocalConfirmation(confirmID, claim)
 	})
 	if err != nil {

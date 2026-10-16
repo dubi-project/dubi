@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -35,12 +35,12 @@ type OwnerResolver func(groupID string) (OwnerControl, bool)
 
 type LocalOwner struct {
 	host  Host
-	state *capstate.State
+	state *enginestate.State
 }
 
-func NewLocalOwner(host Host, state *capstate.State) (*LocalOwner, error) {
+func NewLocalOwner(host Host, state *enginestate.State) (*LocalOwner, error) {
 	if host == nil || state == nil {
-		return nil, errors.New("local Range Owner requires Host and capability state")
+		return nil, errors.New("local Range Owner requires Host and engine state")
 	}
 	return &LocalOwner{host: host, state: state}, nil
 }
@@ -143,7 +143,7 @@ func (owner *LocalOwner) EnsureInitialRange(ctx context.Context, descriptor root
 			return OwnerProof{}, fmt.Errorf("submit Owner Range Fence: %w", err)
 		}
 	}
-	var result capstate.Result
+	var result enginestate.Result
 	if err := waitResult(ctx, func() (bool, string, error) {
 		if _, err := owner.host.ReadIndex(ctx, descriptor.OwnerGroupID); err != nil {
 			return false, "", err

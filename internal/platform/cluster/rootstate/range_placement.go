@@ -121,7 +121,7 @@ func (s *State) applyRangePlacement(batch *pebble.Batch, placement RangePlacemen
 			return "Range placement Group is not registered", nil
 		}
 		var group Group
-		if err := decodeStreamJSON(groupEncoded, &group); err != nil || group.StateKind != GroupStateCapability {
+		if err := decodeStreamJSON(groupEncoded, &group); err != nil || group.StateKind != GroupStateEngine {
 			return "Range placement Group is invalid", nil
 		}
 		cohort, found, err := s.regionCohort(region.RegionID, region.Generation)

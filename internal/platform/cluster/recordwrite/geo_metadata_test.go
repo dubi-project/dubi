@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
@@ -22,17 +22,17 @@ type geoMirrorTransport struct {
 	mirrors  []routedstate.GeoMetadataMirror
 }
 
-func (t *geoMirrorTransport) MirrorGeo(_ context.Context, node uint64, _ string, encoded []byte) (capstate.Result, error) {
+func (t *geoMirrorTransport) MirrorGeo(_ context.Context, node uint64, _ string, encoded []byte) (enginestate.Result, error) {
 	t.attempts = append(t.attempts, node)
 	if t.failed[node] {
-		return capstate.Result{}, errors.New("node unavailable")
+		return enginestate.Result{}, errors.New("node unavailable")
 	}
 	command, err := routedstate.DecodeCommand(encoded)
 	if err != nil || command.Type != routedstate.MirrorGeo {
-		return capstate.Result{}, err
+		return enginestate.Result{}, err
 	}
 	t.mirrors = append(t.mirrors, *command.GeoMetadata)
-	return capstate.Result{RequestID: command.RequestID, Index: node, Applied: true}, nil
+	return enginestate.Result{RequestID: command.RequestID, Index: node, Applied: true}, nil
 }
 
 func geoThreeRegionPlan(t *testing.T) (placement.GeoPlan, router.Target, records.Descriptor) {
@@ -60,7 +60,7 @@ func geoThreeRegionPlan(t *testing.T) (placement.GeoPlan, router.Target, records
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items"},
+	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"},
 		RangeID: "range-a", OwnerGroupID: "region-west", Epoch: 3, RoutingKey: []byte("key")}
 	descriptor, err := records.Describe(target.Keyspace, "origin-group", []byte("key"), []byte("body"))
 	if err != nil {
@@ -180,10 +180,10 @@ func TestGeoReceiptMatchesCurrentRegionGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := capstate.RecordReference{Version: 2, Descriptor: descriptor, OwnerGroupID: target.OwnerGroupID,
+	ref := enginestate.RecordReference{Version: 2, Descriptor: descriptor, OwnerGroupID: target.OwnerGroupID,
 		RangeID: target.RangeID, RangeEpoch: target.Epoch, RoutingKey: target.RoutingKey,
 		RequestID: publication.RequestID, CommandHash: publication.CommandHash, Index: publication.Index}
-	receipt := capstate.GeoCoverageRecord{Version: 1, Claim: claim, ReferenceCommandHash: publication.CommandHash,
+	receipt := enginestate.GeoCoverageRecord{Version: 1, Claim: claim, ReferenceCommandHash: publication.CommandHash,
 		RequestID: "geo-reconfirm-receipt", Index: 18}
 	if !GeoReceiptMatchesPlan(receipt, ref, target, plan) {
 		t.Fatal("current Geo receipt was rejected")

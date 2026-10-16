@@ -7,28 +7,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-func testReferences(t *testing.T) []capstate.RecordReference {
+func testReferences(t *testing.T) []enginestate.RecordReference {
 	t.Helper()
-	var out []capstate.RecordReference
+	var out []enginestate.RecordReference
 	for _, key := range []string{"one", "two"} {
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "record", DatasetID: "items"}, "region-west", []byte(key), []byte(key))
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}, "region-west", []byte(key), []byte(key))
 		if err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, capstate.RecordReference{Descriptor: d})
+		out = append(out, enginestate.RecordReference{Descriptor: d})
 	}
 	return out
 }
 
-func testWalk(refs []capstate.RecordReference) cutWalker {
-	return func(visit func(capstate.RecordReference) error) error {
+func testWalk(refs []enginestate.RecordReference) cutWalker {
+	return func(visit func(enginestate.RecordReference) error) error {
 		for _, ref := range refs {
 			if err := visit(ref); err != nil {
 				return err
@@ -260,7 +260,7 @@ func TestFillLocalCutDoesNotClaimCompletionOnFailedFetchOrWalk(t *testing.T) {
 		t.Fatal("successful fetch without actual local data was accepted", err)
 	}
 	walkFailure := errors.New("manifest close failed")
-	_, err = fill(context.Background(), []uint64{1, 2, 3}, []uint64{1, 2, 3, 4}, 4, testSources(), func(visit func(capstate.RecordReference) error) error {
+	_, err = fill(context.Background(), []uint64{1, 2, 3}, []uint64{1, 2, 3, 4}, 4, testSources(), func(visit func(enginestate.RecordReference) error) error {
 		if err := visit(refs[0]); err != nil {
 			return err
 		}

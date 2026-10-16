@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
@@ -21,13 +21,13 @@ import (
 
 type confirmationHandler struct{}
 
-func (confirmationHandler) Apply(*capstate.Transaction, router.Target, []byte) (capstate.Outcome, error) {
-	return capstate.Outcome{}, errors.New("fence called module handler")
+func (confirmationHandler) Apply(*enginestate.Transaction, router.Target, []byte) (enginestate.Outcome, error) {
+	return enginestate.Outcome{}, errors.New("fence called module handler")
 }
 
 type testParticipants struct {
 	root          *rootstate.State
-	states        map[string]map[uint64]*capstate.State
+	states        map[string]map[uint64]*enginestate.State
 	proposals     map[string]int
 	observed      map[string][]uint64
 	beforeObserve func(context.Context, uint64, string) error
@@ -80,16 +80,16 @@ func confirmationFixture(t *testing.T) (*Confirmer, *testHost, *testParticipants
 			t.Fatal(err)
 		}
 	}
-	p := &testParticipants{root: h.root, states: map[string]map[uint64]*capstate.State{}, proposals: map[string]int{}, observed: map[string][]uint64{}}
+	p := &testParticipants{root: h.root, states: map[string]map[uint64]*enginestate.State{}, proposals: map[string]int{}, observed: map[string][]uint64{}}
 	for _, region := range []string{"west", "east"} {
 		id := GroupID(region)
 		v, found, err := h.root.PendingRegionConfirmation(id)
 		if err != nil || !found {
 			t.Fatal(v, found, err)
 		}
-		p.states[id] = map[uint64]*capstate.State{}
+		p.states[id] = map[uint64]*enginestate.State{}
 		for _, node := range v.Cohort.Nodes {
-			s, err := capstate.Open(t.TempDir(), id, confirmationHandler{})
+			s, err := enginestate.Open(t.TempDir(), id, confirmationHandler{})
 			if err != nil {
 				t.Fatal(err)
 			}

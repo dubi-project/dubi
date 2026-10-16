@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -24,7 +24,7 @@ type Fetcher interface {
 type Reader struct {
 	Barrier     Barrier
 	Root        Root
-	Owner       *capstate.State
+	Owner       *enginestate.State
 	LocalID     uint64
 	LocalNodeID string
 	Store       *records.Store
@@ -34,7 +34,7 @@ type Reader struct {
 
 type LocalRead struct {
 	Body             []byte
-	Reference        capstate.RecordReference
+	Reference        enginestate.RecordReference
 	RegionGeneration uint64
 	State            string
 }
@@ -45,10 +45,10 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 		target.Validate() != nil || r.Owner.GroupID() != target.OwnerGroupID || len(key) == 0 || len(key) > 4096 {
 		return LocalRead{}, errors.New("local read requires a valid Owner, route and Node runtime")
 	}
-	var ref capstate.RecordReference
-	var receipt capstate.LocalConfirmationRecord
+	var ref enginestate.RecordReference
+	var receipt enginestate.LocalConfirmationRecord
 	var hasRef, hasReceipt bool
-	err := readOwner(ctx, r.Barrier, r.Owner, target, func(view capstate.ReadView) error {
+	err := readOwner(ctx, r.Barrier, r.Owner, target, func(view enginestate.ReadView) error {
 		var readErr error
 		ref, hasRef, readErr = view.RecordReference(key)
 		if readErr != nil {

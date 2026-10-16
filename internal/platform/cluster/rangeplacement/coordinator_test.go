@@ -10,12 +10,12 @@ func progressFixture(region, group string, generation uint64) rootstate.RegionPr
 	return rootstate.RegionProgress{Eligible: true, Current: rootstate.RegionCohort{RegionID: region, GroupID: group,
 		Generation: generation, State: rootstate.RegionCohortConfirmed, Nodes: []uint64{1, 2, 3},
 		PlannedIndex: 1, ConfirmedIndex: 2, GroupEpoch: 2, GroupFenceRequestID: "fence", GroupFenceIndex: 2},
-		Group: rootstate.Group{GroupID: group, StateKind: rootstate.GroupStateCapability, Epoch: 2,
+		Group: rootstate.Group{GroupID: group, StateKind: rootstate.GroupStateEngine, Epoch: 2,
 			Members: []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}}}
 }
 
 func TestPlanRangeUsesOnlyStableConfirmedRegions(t *testing.T) {
-	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items",
+	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
 		OwnerGroupID: "region-east", Epoch: 3, State: rootstate.RangeStateActive}
 	placement, err := PlanRange(r, []rootstate.RegionProgress{
 		progressFixture("west", "region-west", 1), progressFixture("east", "region-east", 2),

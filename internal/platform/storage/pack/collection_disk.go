@@ -13,7 +13,7 @@ import (
 
 const packDirectory = "packs"
 
-var ErrLegacyLayout = errors.New("legacy capability-partitioned Pack layout requires explicit migration")
+var ErrLegacyLayout = errors.New("legacy engine-partitioned Pack layout requires explicit migration")
 
 // Do not hide old development data behind a newly initialized flat catalog.
 func rejectLegacyLayout(root *os.Root) error {

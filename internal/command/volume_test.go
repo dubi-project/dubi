@@ -121,7 +121,7 @@ func TestVolumeCLIOnlineAddWritesAfterLostDefault(t *testing.T) {
 	stop, ready := startJoinTestServer(t, process)
 	ready()
 	address := process.LocalAddress()
-	space := rootstate.Keyspace{TenantID: "online-volume", CapabilityID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "online-volume", EngineID: "data-alpha", DatasetID: "shared"}
 	first, err := records.Describe(space, "default", []byte("before"), []byte("old-pack"))
 	if err != nil {
 		t.Fatal(err)

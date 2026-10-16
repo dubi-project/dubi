@@ -175,7 +175,7 @@ func (s *State) authorizeMaintenanceTask(task GroupChange) error {
 	if err := decodeStreamJSON(encoded, &group); err != nil {
 		return err
 	}
-	if group.Epoch != task.ExpectedEpoch || group.StateKind != GroupStateCapability {
+	if group.Epoch != task.ExpectedEpoch || group.StateKind != GroupStateEngine {
 		return ErrGroupMutationUnauthorized
 	}
 	return validateMaintenanceRemoval(group, task.Members)
@@ -228,7 +228,7 @@ func (s *State) applyRegionGrowth(batch *pebble.Batch, command Command, hash str
 		return "", errors.New("regional growth Group missing or corrupt")
 	}
 	recovery := group.Epoch > previous.GroupEpoch && cohortContainsMembers(previous, group.Members) && len(group.Members) < len(previous.Nodes)
-	if group.StateKind != GroupStateCapability || group.Epoch != p.ExpectedEpoch || p.Recovery != recovery || !cohortExtends(previous, next, group.Members) || !cohortContainsMembers(previous, group.Members) {
+	if group.StateKind != GroupStateEngine || group.Epoch != p.ExpectedEpoch || p.Recovery != recovery || !cohortExtends(previous, next, group.Members) || !cohortContainsMembers(previous, group.Members) {
 		return "regional growth old Group changed", nil
 	}
 	for _, key := range [][]byte{groupChangeKey(p.ChangeID), activeGroupChangeKey(p.GroupID)} {

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilitydata"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginedata"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regiongroups"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -87,7 +87,7 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	space := rootstate.Keyspace{TenantID: "volume-repair", CapabilityID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "volume-repair", EngineID: "data-alpha", DatasetID: "shared"}
 	tenant, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
 		RequestID: "volume-repair-tenant", Type: rootstate.RegisterTenant,
 		Tenant: &rootstate.Tenant{TenantID: space.TenantID}})
@@ -112,15 +112,15 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 			break
 		}
 	}
-	activateCapabilityTestDataset(t, ctx, first, group, space)
+	activateEngineTestDataset(t, ctx, first, group, space)
 	key, body := []byte("lost-volume-key"), []byte("repair-on-restart-body")
-	request := capabilitydata.WriteRequest{RequestID: "write-before-volume-loss", Keyspace: space,
+	request := enginedata.WriteRequest{RequestID: "write-before-volume-loss", Keyspace: space,
 		Key: key, Body: body, Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) }}
 	for {
 		attempt, done := context.WithTimeout(ctx, 10*time.Second)
-		result, err := first.CapabilityData.Write(attempt, request)
+		result, err := first.EngineData.Write(attempt, request)
 		done()
-		if err == nil && result.State == capabilitydata.WriteLocalReady {
+		if err == nil && result.State == enginedata.WriteLocalReady {
 			break
 		}
 		select {
@@ -179,7 +179,7 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 		t.Fatal(err)
 	}
 	readCtx, readDone := context.WithTimeout(ctx, 45*time.Second)
-	survivingRead, readErr := first.CapabilityData.Read(readCtx, space, key)
+	survivingRead, readErr := first.EngineData.Read(readCtx, space, key)
 	readDone()
 	if readErr != nil || !bytes.Equal(survivingRead.Body, body) {
 		for _, member := range nodes {
@@ -192,12 +192,12 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 		t.Fatal("healthy physical majority could not read after one Node lost its Volume", readErr)
 	}
 	writeCtx, writeDone := context.WithTimeout(ctx, 45*time.Second)
-	degraded := capabilitydata.WriteRequest{RequestID: "write-during-volume-outage", Keyspace: space,
+	degraded := enginedata.WriteRequest{RequestID: "write-during-volume-outage", Keyspace: space,
 		Key: []byte("new-key-during-outage"), Body: []byte("surviving-majority-write"),
 		Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) }}
-	degradedResult, writeErr := first.CapabilityData.Write(writeCtx, degraded)
+	degradedResult, writeErr := first.EngineData.Write(writeCtx, degraded)
 	writeDone()
-	if writeErr != nil || degradedResult.State != capabilitydata.WriteLocalReady {
+	if writeErr != nil || degradedResult.State != enginedata.WriteLocalReady {
 		t.Fatal("healthy majority could not publish a new record during Volume outage", degradedResult, writeErr)
 	}
 	if online {
@@ -207,9 +207,9 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 		fromDamaged.RequestID = "write-through-damaged-node"
 		fromDamaged.Key = []byte("new-key-through-damaged-node")
 		writeCtx, writeDone = context.WithTimeout(ctx, 45*time.Second)
-		forwarded, forwardErr := damaged.CapabilityData.Write(writeCtx, fromDamaged)
+		forwarded, forwardErr := damaged.EngineData.Write(writeCtx, fromDamaged)
 		writeDone()
-		if forwardErr != nil || forwarded.State != capabilitydata.WriteLocalReady {
+		if forwardErr != nil || forwarded.State != enginedata.WriteLocalReady {
 			t.Fatal("damaged Node could not route write to healthy physical majority", forwarded, forwardErr)
 		}
 	}
@@ -272,7 +272,7 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 	if err != nil || len(status.Volumes) != 2 || status.Volumes[0].State != volume.Removed || status.Volumes[0].Health != "removed" || status.Volumes[1].Health != "healthy" {
 		t.Fatal("Volume registration/health changed during repair", status, err)
 	}
-	read, err := repairNode.CapabilityData.Read(ctx, space, key)
+	read, err := repairNode.EngineData.Read(ctx, space, key)
 	if err != nil || !bytes.Equal(read.Body, body) {
 		t.Fatal("repaired Node cannot serve original data", err)
 	}

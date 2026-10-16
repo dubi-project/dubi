@@ -10,10 +10,10 @@ const (
 	CurrentVersion = 1
 	MinimumVersion = 1
 
-	CapabilityStateFormatVersion = 7
-	PackContainerFormatVersion   = 2
-	PackCatalogFormatVersion     = 2
-	RecordIndexFormatVersion     = 1
+	EngineStateFormatVersion   = 7
+	PackContainerFormatVersion = 2
+	PackCatalogFormatVersion   = 2
+	RecordIndexFormatVersion   = 1
 )
 
 type Advertisement struct {
@@ -26,12 +26,12 @@ type Advertisement struct {
 
 func CurrentAdvertisement() Advertisement {
 	return Advertisement{ProtocolMin: MinimumVersion, ProtocolMax: CurrentVersion,
-		StateFormat: CapabilityStateFormatVersion, PackFormat: PackContainerFormatVersion, RecordIndex: RecordIndexFormatVersion}
+		StateFormat: EngineStateFormatVersion, PackFormat: PackContainerFormatVersion, RecordIndex: RecordIndexFormatVersion}
 }
 
 func (a Advertisement) Validate() error {
 	if a.ProtocolMin < 1 || a.ProtocolMax < a.ProtocolMin || a.ProtocolMax > CurrentVersion ||
-		a.StateFormat != CapabilityStateFormatVersion || a.PackFormat != PackContainerFormatVersion || a.RecordIndex != RecordIndexFormatVersion {
+		a.StateFormat != EngineStateFormatVersion || a.PackFormat != PackContainerFormatVersion || a.RecordIndex != RecordIndexFormatVersion {
 		return errors.New("unsupported DUBI protocol or durable format")
 	}
 	return nil

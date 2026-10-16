@@ -156,7 +156,7 @@ func newHoldingFixture(t *testing.T) *holdingFixture {
 	if err := root.ApplyMembership(index+1, &raftpb.ConfState{Voters: []uint64{local.RaftID}, Learners: []uint64{caller.RaftID, other.RaftID}}); err != nil {
 		t.Fatal(err)
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "index"}, "origin-not-hosted-here", []byte("opaque/key\x00"), []byte("data"))
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "index"}, "origin-not-hosted-here", []byte("opaque/key\x00"), []byte("data"))
 	if err != nil {
 		t.Fatal(err)
 	}

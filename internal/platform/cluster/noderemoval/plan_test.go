@@ -59,7 +59,7 @@ func TestBuildRequiresExplicitRebuildForLastRegionVoter(t *testing.T) {
 func TestBuildRetiresConfirmedSingleNodeRegion(t *testing.T) {
 	root := openFixtureWithRoot(t, []uint64{2}, []uint64{1, 2, 3})
 	groupID := regiongroups.GroupID("west")
-	apply(t, root, rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateCapability}})
+	apply(t, root, rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateEngine}})
 	apply(t, root, rootstate.Command{Type: rootstate.PlanRegionCohort, RegionPlan: &rootstate.RegionCohortPlan{
 		RegionID: "west", GroupID: groupID, Nodes: []uint64{1},
 	}})
@@ -93,7 +93,7 @@ func openFixtureWithRoot(t *testing.T, members, rootMembers []uint64) *rootstate
 			NodeID: fmt.Sprintf("node_%032x", id), RaftID: id, RegionID: "west", Address: fmt.Sprintf("n%d:7443", id),
 		}})
 	}
-	applyAt(t, root, &index, rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+	applyAt(t, root, &index, rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	groupMembers := make([]rootstate.GroupMember, 0, len(members))
 	for _, id := range members {
 		groupMembers = append(groupMembers, rootstate.GroupMember{RaftID: id, Role: rootstate.GroupMemberVoter})

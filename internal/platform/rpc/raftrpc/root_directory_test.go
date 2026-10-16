@@ -126,7 +126,7 @@ func TestRootDirectoryProjectsPersistentMembershipAndTransientLeader(t *testing.
 	}
 	if result := applyRootCommand(t, state, &index, rootstate.Command{Version: rootstate.FormatVersion,
 		RequestID: "group-data", Type: rootstate.RegisterGroup,
-		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateCapability}}); result.Error != "" {
+		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}}); result.Error != "" {
 		t.Fatal(result.Error)
 	}
 	if result := applyRootCommand(t, state, &index, rootstate.Command{Version: rootstate.FormatVersion,

@@ -38,27 +38,27 @@ func TestRegistryConstructsStateFromPersistentKindAfterRootBarrier(t *testing.T)
 	defer root.Close()
 	applyRegistryRoot(t, root, 1, rootstate.Command{Version: 1, RequestID: "group-data",
 		Type: rootstate.RegisterGroup, Group: &rootstate.Group{
-			GroupID: "data-1", StateKind: rootstate.GroupStateCapability}})
+			GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	barrier := &registryBarrier{}
 	registry, err := New(root, barrier)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var received rootstate.Group
-	if err := registry.Register(rootstate.GroupStateCapability,
+	if err := registry.Register(rootstate.GroupStateEngine,
 		func(_ context.Context, descriptor rootstate.Group) (raft.StateMachine, error) {
 			received = descriptor
 			return &registryState{}, nil
 		}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Register(rootstate.GroupStateCapability,
+	if err := registry.Register(rootstate.GroupStateEngine,
 		func(context.Context, rootstate.Group) (raft.StateMachine, error) { return &registryState{}, nil }); err == nil {
 		t.Fatal("duplicate StateKind factory was accepted")
 	}
 	state, err := registry.NewState(context.Background(), "data-1")
 	if err != nil || state == nil || barrier.calls != 1 || received.GroupID != "data-1" ||
-		received.StateKind != rootstate.GroupStateCapability {
+		received.StateKind != rootstate.GroupStateEngine {
 		t.Fatalf("constructed state = %T, descriptor %+v, barriers %d, err %v",
 			state, received, barrier.calls, err)
 	}

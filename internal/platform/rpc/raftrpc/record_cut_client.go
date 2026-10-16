@@ -10,7 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
@@ -30,8 +30,8 @@ const recordCutIdleTimeout = 15 * time.Second
 // named by the caller. The returned cut is authenticated transport evidence
 // from that Node, not proof that it remains the current Root authority; the
 // coordinator must revalidate its pending handoff before using it for repair.
-func (c *GroupClient) FetchRecordCut(ctx context.Context, source rootstate.Node, seal regionfence.Handoff, artifacts *snapshot.Store) (capstate.RecordCut, error) {
-	var zero capstate.RecordCut
+func (c *GroupClient) FetchRecordCut(ctx context.Context, source rootstate.Node, seal regionfence.Handoff, artifacts *snapshot.Store) (enginestate.RecordCut, error) {
+	var zero enginestate.RecordCut
 	if c == nil || ctx == nil || artifacts == nil || seal.Validate() != nil || seal.Activation != nil ||
 		!slices.Contains(seal.Intent.Previous.Fence.Nodes(), source.RaftID) ||
 		!slices.Contains(seal.Intent.Next.Nodes, c.options.RaftID) ||
@@ -81,7 +81,7 @@ func (c *GroupClient) FetchRecordCut(ctx context.Context, source rootstate.Node,
 	}
 	decoder := json.NewDecoder(bytes.NewReader(header.CutDescriptor))
 	decoder.DisallowUnknownFields()
-	var cut capstate.RecordCut
+	var cut enginestate.RecordCut
 	if decoder.Decode(&cut) != nil || decoder.Decode(new(struct{})) != io.EOF || cut.Validate() != nil ||
 		!reflect.DeepEqual(cut.Seal, seal) || cut.Artifact.GroupID != seal.Intent.Previous.Fence.GroupID {
 		return zero, errors.New("record cut descriptor differs from requested handoff")
@@ -95,7 +95,7 @@ func (c *GroupClient) FetchRecordCut(ctx context.Context, source rootstate.Node,
 	if err := artifacts.Import(ctx, cut.Artifact, reader); err != nil {
 		return zero, err
 	}
-	if err := capstate.WalkVerifiedRecordCut(ctx, artifacts, cut, nil); err != nil {
+	if err := enginestate.WalkVerifiedRecordCut(ctx, artifacts, cut, nil); err != nil {
 		return zero, errors.New("imported record cut failed full validation")
 	}
 	if err := recordCutPeer(ctx, transportPeer, c.options.ClusterID, source); err != nil {

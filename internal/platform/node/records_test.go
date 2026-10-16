@@ -22,7 +22,7 @@ func TestRuntimeRecordsInitializeRestartAndRelease(t *testing.T) {
 	if err := InitializeRoot(root); err != nil {
 		t.Fatal(err)
 	}
-	options := Options{StoreRoot: root, TickInterval: time.Hour, CapabilityMux: nodeTestMux(t)}
+	options := Options{StoreRoot: root, TickInterval: time.Hour, EngineMux: nodeTestMux(t)}
 	r, err := Open(options)
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestRuntimeRecordsInitializeRestartAndRelease(t *testing.T) {
 	if r.Records == nil {
 		t.Fatal("missing records")
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "dataset"}, "origin-group", []byte("key"), []byte("data"))
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "dataset"}, "origin-group", []byte("key"), []byte("data"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestRuntimeRecordsLostResourceRejectsInitAndOpen(t *testing.T) {
 	if err := InitializeRoot(root); err == nil {
 		t.Fatal("repeat init recreated active records")
 	}
-	options := Options{StoreRoot: root, TickInterval: time.Hour, CapabilityMux: nodeTestMux(t)}
+	options := Options{StoreRoot: root, TickInterval: time.Hour, EngineMux: nodeTestMux(t)}
 	for i := 0; i < 2; i++ {
 		if r, err := Open(options); err == nil {
 			r.Close()

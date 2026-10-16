@@ -53,7 +53,7 @@ func (s *State) regionProgress(groupID string) (RegionProgress, bool, error) {
 	if err != nil {
 		return view, false, err
 	}
-	if !found || decodeStreamJSON(encoded, &view.Group) != nil || view.Group.GroupID != groupID || view.Group.StateKind != GroupStateCapability {
+	if !found || decodeStreamJSON(encoded, &view.Group) != nil || view.Group.GroupID != groupID || view.Group.StateKind != GroupStateEngine {
 		return view, false, errors.New("invalid regional progress Group")
 	}
 	loadGrowth := func(generation uint64) (*RegionGrowth, error) {

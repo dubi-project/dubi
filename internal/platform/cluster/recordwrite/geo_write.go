@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
@@ -28,7 +28,7 @@ type GeoWriteRequest struct {
 }
 
 type GeoWrite struct {
-	Reference         capstate.RecordReference
+	Reference         enginestate.RecordReference
 	ConfirmationIndex uint64
 	RegionGeneration  uint64
 	RequiredRegions   int
@@ -75,7 +75,7 @@ func (w Writer) WriteGeo(ctx context.Context, request GeoWriteRequest) (GeoWrite
 	if err != nil {
 		return GeoWrite{}, err
 	}
-	publication, found, err := w.resultAtCut(ctx, request.Target.OwnerGroupID, func() (capstate.Result, bool, error) {
+	publication, found, err := w.resultAtCut(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForMutation(request.RequestID, request.Target, request.Payload)
 	})
 	if err != nil {
@@ -92,7 +92,7 @@ func (w Writer) WriteGeo(ctx context.Context, request GeoWriteRequest) (GeoWrite
 		if err := w.Submit(ctx, request.Target.OwnerGroupID, mutation); err != nil {
 			return GeoWrite{}, fmt.Errorf("submit geo immutable reference publication: %w", err)
 		}
-		publication, err = w.awaitResult(ctx, request.Target.OwnerGroupID, func() (capstate.Result, bool, error) {
+		publication, err = w.awaitResult(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 			return w.Owner.ResultForMutation(request.RequestID, request.Target, request.Payload)
 		})
 		if err != nil {
@@ -128,9 +128,9 @@ func (w Writer) WriteGeo(ctx context.Context, request GeoWriteRequest) (GeoWrite
 	if err != nil {
 		return GeoWrite{}, err
 	}
-	var prior capstate.GeoCoverageRecord
+	var prior enginestate.GeoCoverageRecord
 	var hasPrior bool
-	if err := readOwner(ctx, w.Barrier, w.Owner, request.Target, func(view capstate.ReadView) error {
+	if err := readOwner(ctx, w.Barrier, w.Owner, request.Target, func(view enginestate.ReadView) error {
 		var readErr error
 		prior, hasPrior, readErr = view.GeoCoverage(request.Descriptor.Key)
 		return readErr
@@ -154,7 +154,7 @@ func (w Writer) WriteGeo(ctx context.Context, request GeoWriteRequest) (GeoWrite
 	if err := w.Submit(ctx, request.Target.OwnerGroupID, command); err != nil {
 		return GeoWrite{}, fmt.Errorf("submit geo coverage confirmation: %w", err)
 	}
-	confirmation, err := w.awaitResult(ctx, request.Target.OwnerGroupID, func() (capstate.Result, bool, error) {
+	confirmation, err := w.awaitResult(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForGeoConfirmation(confirmID, claim)
 	})
 	if err != nil {

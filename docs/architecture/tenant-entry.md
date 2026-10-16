@@ -5,9 +5,9 @@
 ## 已确定的边界
 
 - Node 证书仅证明集群节点身份，不是 Tenant 应用凭据。现有 `record put/get` 和 Dataset 命令仍是 Node 认证的开发/管理入口，不能改名后作为租户 API 暴露。
-- 公共请求的 TenantID 由验证过的凭据得出，不信任请求体、路径或 Header 中自报的 TenantID。授权检查发生在任何 Root 路由、Owner 转发和 Pack 读写之前；跨 Tenant 请求不进入内部 Capability RPC。
-- Dataset 属于 `(TenantID, CapabilityID, DatasetID)`。同一 Tenant 的多个业务项目可共享 Dataset 和内容；底座不创建 Project 资源，也不要求业务方为隔离额外拼键前缀。
-- 平台不能把客户端提供的任意能力 mutation 当作通用写入 API。模块必须注册受约束的公开操作和编码器；由模块从已授权请求构造不透明内部命令，底座只负责 Keyspace、路由、确认、资源门禁与结果。现有 `capabilitydata.Publication` 是受信进程内模块接口，不直接序列化到网络。
+- 公共请求的 TenantID 由验证过的凭据得出，不信任请求体、路径或 Header 中自报的 TenantID。授权检查发生在任何 Root 路由、Owner 转发和 Pack 读写之前；跨 Tenant 请求不进入内部 Engine RPC。
+- Dataset 属于 `(TenantID, EngineID, DatasetID)`。同一 Tenant 的多个业务项目可共享 Dataset 和内容；底座不创建 Project 资源，也不要求业务方为隔离额外拼键前缀。
+- 平台不能把客户端提供的任意能力 mutation 当作通用写入 API。模块必须注册受约束的公开操作和编码器；由模块从已授权请求构造不透明内部命令，底座只负责 Keyspace、路由、确认、资源门禁与结果。现有 `enginedata.Publication` 是受信进程内模块接口，不直接序列化到网络。
 - 对外 API 与节点内部 RPC 必须隔离。不能为了允许无 Node 证书的应用连接，就把当前内部 mTLS 服务改为可匿名握手而依赖每个现存 RPC 恰好自行检查身份。
 - 写入的稳定 RequestID 由客户端或 SDK 在重试期间保留；只有 Owner 最终核验当前引用、持久确认和实时多数后才能呈现 `LocalReady`。未知结果必须明确标注可用同一 RequestID 重试，不能翻译成“未写入”。
 

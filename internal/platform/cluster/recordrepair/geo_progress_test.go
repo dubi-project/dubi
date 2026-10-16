@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -26,14 +26,14 @@ func (t *geoRetryTransport) FetchRecordOnNode(context.Context, rootstate.Node, r
 	return records.Holding{}, context.Canceled
 }
 
-func geoRepairReference(t *testing.T) capstate.RecordReference {
+func geoRepairReference(t *testing.T) enginestate.RecordReference {
 	t.Helper()
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
 		"region-west", []byte("geo-repair"), []byte("body"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return capstate.RecordReference{Version: 2, Descriptor: d, OwnerGroupID: "region-west", RangeID: "range-a",
+	return enginestate.RecordReference{Version: 2, Descriptor: d, OwnerGroupID: "region-west", RangeID: "range-a",
 		RangeEpoch: 3, RoutingKey: []byte("geo-repair"), RequestID: "geo-repair-request", Index: 7,
 		CommandHash: hex.EncodeToString(make([]byte, 32))}
 }
@@ -97,7 +97,7 @@ func TestRetryPendingGeoRecordsDeletesOnlyAfterFreshGeoMajority(t *testing.T) {
 		return raftrpc.HoldingObservation{RaftID: node.RaftID, NodeID: node.NodeID, RootConfirmedIndex: 9,
 			Holding: records.Holding{RecordID: id, Descriptor: d, StoreID: "store-" + node.NodeID, VolumeID: "volume-" + node.NodeID}}, nil
 	}
-	resolve := func(context.Context, capstate.RecordReference) (placement.GeoPlan, string, error) {
+	resolve := func(context.Context, enginestate.RecordReference) (placement.GeoPlan, string, error) {
 		return plan, "west", nil
 	}
 	report, err := RetryPendingGeoRecords(context.Background(), store, resolve, observer, transport)
@@ -159,7 +159,7 @@ func TestRetryPendingGeoRecordsRepairsReformedSingleNodeRegion(t *testing.T) {
 		return raftrpc.HoldingObservation{RaftID: node.RaftID, NodeID: node.NodeID, RootConfirmedIndex: 9,
 			Holding: records.Holding{RecordID: id, Descriptor: d, StoreID: "store-" + node.NodeID, VolumeID: "volume-" + node.NodeID}}, nil
 	}
-	resolve := func(context.Context, capstate.RecordReference) (placement.GeoPlan, string, error) {
+	resolve := func(context.Context, enginestate.RecordReference) (placement.GeoPlan, string, error) {
 		return plan, "west", nil
 	}
 	report, err := RetryPendingGeoRecords(context.Background(), store, resolve, observer, transport)

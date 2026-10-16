@@ -12,25 +12,25 @@ import (
 	"testing"
 )
 
-func TestCapabilitiesShareVolumeCatalogAndActivePack(t *testing.T) {
+func TestEnginesShareVolumeCatalogAndActivePack(t *testing.T) {
 	r, v, m := collection(t, 4096)
-	capabilities := []string{"record", "file", "search", "message", "cache", "file", "record"}
+	engines := []string{"record", "file", "search", "message", "cache", "file", "record"}
 	var records []Record
 	var locations []Location
-	for i, capability := range capabilities {
-		record := Record{CapabilityID: capability, TenantID: "shared-tenant", Key: []byte("same-key"), Payload: []byte{byte(i)}}
+	for i, engine := range engines {
+		record := Record{EngineID: engine, TenantID: "shared-tenant", Key: []byte("same-key"), Payload: []byte{byte(i)}}
 		loc, err := m.Append(record)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if i > 0 && (loc.PackID != locations[0].PackID || loc.Offset != locations[i-1].Offset+locations[i-1].Length) {
-			t.Fatal("Capability change split Pack or broke append order")
+			t.Fatal("Engine change split Pack or broke append order")
 		}
 		records = append(records, record)
 		locations = append(locations, loc)
 	}
 	if len(m.catalog.Packs) != 1 {
-		t.Fatal("created per-Capability Packs")
+		t.Fatal("created per-Engine Packs")
 	}
 	entries, err := os.ReadDir(v.Path)
 	if err != nil {
@@ -38,7 +38,7 @@ func TestCapabilitiesShareVolumeCatalogAndActivePack(t *testing.T) {
 	}
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), "packs-") || strings.HasPrefix(entry.Name(), collectionMarkerName+"-") {
-			t.Fatal("Capability partition remains", entry.Name())
+			t.Fatal("Engine partition remains", entry.Name())
 		}
 	}
 	if _, err := os.Stat(filepath.Join(v.Path, "packs", locations[0].PackID+".pack")); err != nil {
@@ -68,17 +68,17 @@ func TestCapabilitiesShareVolumeCatalogAndActivePack(t *testing.T) {
 	if !reflect.DeepEqual(got, records) {
 		t.Fatal("mixed Scan changed attribution or order")
 	}
-	loc, err := m.Append(Record{CapabilityID: "metric", TenantID: "other-tenant", Key: []byte("next")})
+	loc, err := m.Append(Record{EngineID: "metric", TenantID: "other-tenant", Key: []byte("next")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if loc.PackID != locations[0].PackID {
-		t.Fatal("restart/new Capability did not reuse active Pack")
+		t.Fatal("restart/new Engine did not reuse active Pack")
 	}
 	if err := m.Seal(); err != nil {
 		t.Fatal(err)
 	}
-	loc, err = m.Append(Record{CapabilityID: "trace", TenantID: "t", Key: []byte("next")})
+	loc, err = m.Append(Record{EngineID: "trace", TenantID: "t", Key: []byte("next")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,24 +87,24 @@ func TestCapabilitiesShareVolumeCatalogAndActivePack(t *testing.T) {
 	}
 }
 
-func TestMixedCapabilitiesRolloverAndCrashTail(t *testing.T) {
+func TestMixedEnginesRolloverAndCrashTail(t *testing.T) {
 	r, v, m := collection(t, headerSize+80)
 	var locs []Location
 	for i := range 7 {
-		capability := []string{"file", "message", "search"}[i%3]
-		loc, err := m.Append(Record{CapabilityID: capability, TenantID: "t", Key: []byte("k"), Payload: []byte{byte(i)}})
+		engine := []string{"file", "message", "search"}[i%3]
+		loc, err := m.Append(Record{EngineID: engine, TenantID: "t", Key: []byte("k"), Payload: []byte{byte(i)}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		locs = append(locs, loc)
 	}
 	if locs[0].PackID != locs[1].PackID || locs[0].PackID != locs[2].PackID || locs[3].PackID == locs[2].PackID {
-		t.Fatal("rollover based on Capability, not bytes")
+		t.Fatal("rollover based on Engine, not bytes")
 	}
 	if m.active == nil {
 		t.Fatal("expected partially filled final Pack")
 	}
-	tail, err := encodeRecord(Record{CapabilityID: "log", TenantID: "t", Key: []byte("not-committed")})
+	tail, err := encodeRecord(Record{EngineID: "log", TenantID: "t", Key: []byte("not-committed")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestMixedCapabilitiesRolloverAndCrashTail(t *testing.T) {
 	defer m.Close()
 	count := 0
 	if err := m.Scan(func(loc Location, record Record) error {
-		if count >= len(locs) || loc != locs[count] || record.CapabilityID != []string{"file", "message", "search"}[count%3] {
+		if count >= len(locs) || loc != locs[count] || record.EngineID != []string{"file", "message", "search"}[count%3] {
 			t.Fatal("mixed recovery changed order or retained tail")
 		}
 		count++
@@ -137,7 +137,7 @@ func TestMixedCapabilitiesRolloverAndCrashTail(t *testing.T) {
 	}
 }
 
-func TestCapabilityAttributionIsChecksummedAndValidated(t *testing.T) {
+func TestEngineAttributionIsChecksummedAndValidated(t *testing.T) {
 	for _, repairCRC := range []bool{false, true} {
 		t.Run(map[bool]string{false: "checksum", true: "invalid-identifier"}[repairCRC], func(t *testing.T) {
 			r, v := setup(t)
@@ -178,7 +178,7 @@ func TestCapabilityAttributionIsChecksummedAndValidated(t *testing.T) {
 	}
 }
 
-func TestLegacyCapabilityLayoutIsPreservedAndRejected(t *testing.T) {
+func TestLegacyEngineLayoutIsPreservedAndRejected(t *testing.T) {
 	for _, name := range []string{"packs-file", "DUBI_PACKS_ID-record"} {
 		t.Run(name, func(t *testing.T) {
 			r, v := setup(t)

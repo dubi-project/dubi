@@ -1,6 +1,6 @@
 # 启动 DUBI 节点
 
-当前入口开放 Node 认证的内部集群服务和开发验证用 Record RPC；可选的独立 Tenant HTTPS 端口目前只有身份探针，仍没有面向租户的公开数据 API。正式进程注册了最小 `record` Capability，可在三节点同区域确认数据 Group 后，经 CLI 完成 Dataset 创建、Record 写读；其他 Capability 未注册。Node 证书持有者相当于集群内部操作者，不构成租户身份和权限隔离。
+当前入口开放 Node 认证的内部集群服务和开发验证用 Record RPC；可选的独立 Tenant HTTPS 端口目前只有身份探针，仍没有面向租户的公开数据 API。正式进程注册了最小 `record` Engine，可在三节点同区域确认数据 Group 后，经 CLI 完成 Dataset 创建、Record 写读；其他 Engine 未注册。Node 证书持有者相当于集群内部操作者，不构成租户身份和权限隔离。
 
 ## 1. 初始化首节点
 
@@ -14,7 +14,7 @@ dubi init
 
 Group/日志现在有独立持久登记，已登记目录或日志丢失时拒绝重建。旧开发格式没有自动迁移通道，不要直接覆盖重要 Store 升级，也不要手工删除登记让初始化通过；详见 [Group 存储边界](../architecture/group-storage.md)。
 
-当前 Store/Volume 元数据为 v2，首次 init 自动在既有 Store 清单中登记并建立不可变记录索引；启动和加入使用同一持久意图恢复，不增加参数。v1 开发目录明确拒绝打开，未提供自动迁移。已 active 的记录登记/索引丢失，重复 init 也不能重新创建空资源；应保留故障现场，不要删改身份文件来绕过检查。Pack 容器仍为 `DUBIPK02`，Capability 状态当前为 v7；见[不可变记录与资源生命周期](../architecture/immutable-records.md)。
+当前 Store/Volume 元数据为 v2，首次 init 自动在既有 Store 清单中登记并建立不可变记录索引；启动和加入使用同一持久意图恢复，不增加参数。v1 开发目录明确拒绝打开，未提供自动迁移。已 active 的记录登记/索引丢失，重复 init 也不能重新创建空资源；应保留故障现场，不要删改身份文件来绕过检查。Pack 容器仍为 `DUBIPK02`，Engine 状态当前为 v7；见[不可变记录与资源生命周期](../architecture/immutable-records.md)。
 
 ## 2. 准备加入已有集群
 

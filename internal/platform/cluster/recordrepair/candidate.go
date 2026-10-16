@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -28,17 +28,17 @@ func VerifyPendingCandidateLocal(ctx context.Context, barrier PendingBarrier, ro
 		return Report{}, errors.New("candidate verification requires artifacts, destination and authenticated client")
 	}
 	return fillPendingLocal(ctx, barrier, root, local, seal,
-		func(ctx context.Context, source rootstate.Node) (capstate.RecordCut, error) {
+		func(ctx context.Context, source rootstate.Node) (enginestate.RecordCut, error) {
 			return client.FetchRecordCut(ctx, source, seal, artifacts)
 		},
-		func(ctx context.Context, cut capstate.RecordCut, _ []rootstate.Node) (Report, error) {
+		func(ctx context.Context, cut enginestate.RecordCut, _ []rootstate.Node) (Report, error) {
 			candidates, err := pendingCandidateMembers(root, seal)
 			if err != nil {
 				return Report{}, err
 			}
 			report, err := verifyCandidateReferences(ctx, cut, candidates, local, destination.Verify,
-				client.ObserveRecordHolding, func(visit func(capstate.RecordReference) error) error {
-					return capstate.WalkVerifiedRecordCut(ctx, artifacts, cut, visit)
+				client.ObserveRecordHolding, func(visit func(enginestate.RecordReference) error) error {
+					return enginestate.WalkVerifiedRecordCut(ctx, artifacts, cut, visit)
 				})
 			if err != nil {
 				return Report{}, err
@@ -71,7 +71,7 @@ func pendingCandidateMembers(root PendingRoot, seal regionfence.Handoff) ([]root
 type candidateLocalVerify func(context.Context, records.Descriptor) (records.Holding, error)
 type candidateRemoteObserve func(context.Context, uint64, records.Descriptor) (raftrpc.HoldingObservation, error)
 
-func verifyCandidateReferences(ctx context.Context, cut capstate.RecordCut, candidates []rootstate.Node, local uint64,
+func verifyCandidateReferences(ctx context.Context, cut enginestate.RecordCut, candidates []rootstate.Node, local uint64,
 	verify candidateLocalVerify, observe candidateRemoteObserve, walk cutWalker) (Report, error) {
 	var report Report
 	if ctx == nil || cut.Validate() != nil || len(candidates) == 0 || local == 0 || verify == nil || observe == nil || walk == nil {
@@ -91,7 +91,7 @@ func verifyCandidateReferences(ctx context.Context, cut capstate.RecordCut, cand
 		return report, errors.New("physical verifier is not a pending cohort member")
 	}
 	required := len(candidates)/2 + 1
-	err := walk(func(ref capstate.RecordReference) error {
+	err := walk(func(ref enginestate.RecordReference) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

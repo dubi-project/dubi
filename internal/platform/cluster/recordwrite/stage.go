@@ -1,5 +1,5 @@
 // Package recordwrite prepares immutable bytes on a stable local Node
-// majority before a capability publishes an authoritative reference.
+// majority before a engine publishes an authoritative reference.
 package recordwrite
 
 import (

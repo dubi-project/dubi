@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capabilityruntime"
+	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
 	"github.com/dubi-project/dubi/internal/platform/storage/storelock"
@@ -25,11 +25,11 @@ func TestRuntimeSnapshotRegistrationLossFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mux, err := capabilityruntime.NewRegistry().Seal()
+			mux, err := engineruntime.NewRegistry().Seal()
 			if err != nil {
 				t.Fatal(err)
 			}
-			runtime, err := Open(Options{StoreRoot: root, TickInterval: time.Hour, CapabilityMux: mux, RootBootstrapPeers: []uint64{id.RaftID}})
+			runtime, err := Open(Options{StoreRoot: root, TickInterval: time.Hour, EngineMux: mux, RootBootstrapPeers: []uint64{id.RaftID}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -58,7 +58,7 @@ func TestRuntimeSnapshotRegistrationLossFailsClosed(t *testing.T) {
 			if err := os.Rename(path, path+".retained"); err != nil {
 				t.Fatal(err)
 			}
-			if opened, err := Open(Options{StoreRoot: root, TickInterval: time.Hour, CapabilityMux: mux}); err == nil {
+			if opened, err := Open(Options{StoreRoot: root, TickInterval: time.Hour, EngineMux: mux}); err == nil {
 				opened.Close()
 				t.Fatal("node recreated lost registered artifact resource")
 			}
@@ -80,11 +80,11 @@ func TestRuntimeRejectsFileImportForUnpreparedGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux, err := capabilityruntime.NewRegistry().Seal()
+	mux, err := engineruntime.NewRegistry().Seal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := Open(Options{StoreRoot: root, TickInterval: time.Hour, CapabilityMux: mux, RootBootstrapPeers: []uint64{id.RaftID}})
+	runtime, err := Open(Options{StoreRoot: root, TickInterval: time.Hour, EngineMux: mux, RootBootstrapPeers: []uint64{id.RaftID}})
 	if err != nil {
 		t.Fatal(err)
 	}

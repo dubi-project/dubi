@@ -47,7 +47,7 @@ func TestRepairSelectedTargetsWritesOnlyConfirmedGeoTargets(t *testing.T) {
 			east = region
 		}
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
 		"region-west", []byte("geo-key"), []byte("geo-body"))
 	if err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-// Package regionfence defines the capability-neutral, generation-bound Group
+// Package regionfence defines the engine-neutral, generation-bound Group
 // barrier. A local applied barrier is not a data durability receipt.
 package regionfence
 

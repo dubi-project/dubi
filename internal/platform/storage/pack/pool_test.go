@@ -10,9 +10,9 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 )
 
-func poolAppend(t *testing.T, p *Pool, capability, key string) Location {
+func poolAppend(t *testing.T, p *Pool, engine, key string) Location {
 	t.Helper()
-	loc, err := p.Append(context.Background(), Record{CapabilityID: capability, TenantID: "tenant", Key: []byte(key), Payload: []byte("data")})
+	loc, err := p.Append(context.Background(), Record{EngineID: engine, TenantID: "tenant", Key: []byte(key), Payload: []byte("data")})
 	if errors.Is(err, volume.ErrInsufficientSpace) {
 		t.Skip("integration test requires disk headroom above the safety floor")
 	}
@@ -49,7 +49,7 @@ func TestPoolSelectsVolumesAndPreservesMixedPacks(t *testing.T) {
 	defer p.Close()
 	for i, loc := range []Location{a, b, c} {
 		record, err := p.Read(loc)
-		if err != nil || record.CapabilityID != []string{"file", "message", "search"}[i] {
+		if err != nil || record.EngineID != []string{"file", "message", "search"}[i] {
 			t.Fatal(record, err)
 		}
 	}
@@ -77,7 +77,7 @@ func TestPoolDrainSealsWritesButPreservesPackReads(t *testing.T) {
 	if err := p.DrainVolume(context.Background(), v.ID); err != nil {
 		t.Fatal("drain failed", err)
 	}
-	if _, err := p.Append(context.Background(), Record{CapabilityID: "file", TenantID: "tenant", Key: []byte("after-drain"), Payload: []byte("data")}); err == nil {
+	if _, err := p.Append(context.Background(), Record{EngineID: "file", TenantID: "tenant", Key: []byte("after-drain"), Payload: []byte("data")}); err == nil {
 		t.Fatal("draining Volume accepted a new Pack write")
 	}
 	if record, err := p.Read(loc); err != nil || string(record.Key) != "before-drain" {
@@ -112,7 +112,7 @@ func TestPoolNoCrossVolumeRetryAfterWriteError(t *testing.T) {
 	if err := os.Rename(state, state+".lost"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Append(context.Background(), Record{CapabilityID: "file", TenantID: "t", Key: []byte("uncertain")}); err == nil {
+	if _, err := p.Append(context.Background(), Record{EngineID: "file", TenantID: "t", Key: []byte("uncertain")}); err == nil {
 		t.Fatal("damaged write accepted")
 	}
 	if len(p.WriteErrors()) != 1 || p.WriteErrors()[v.ID] == "" {
@@ -131,7 +131,7 @@ func TestPoolNoCrossVolumeRetryAfterWriteError(t *testing.T) {
 
 func TestPoolReadNeedsNoSpaceAndDefersPendingCreation(t *testing.T) {
 	r, v, m := collection(t, headerSize+1)
-	loc, err := m.Append(Record{CapabilityID: "file", TenantID: "t", Key: []byte("confirmed")})
+	loc, err := m.Append(Record{EngineID: "file", TenantID: "t", Key: []byte("confirmed")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestPoolReadNeedsNoSpaceAndDefersPendingCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if _, err := p.Append(context.Background(), Record{CapabilityID: "record", TenantID: "t", Key: []byte("no-space")}); !errors.Is(err, volume.ErrInsufficientSpace) {
+	if _, err := p.Append(context.Background(), Record{EngineID: "record", TenantID: "t", Key: []byte("no-space")}); !errors.Is(err, volume.ErrInsufficientSpace) {
 		t.Fatal("reservation did not block append", err)
 	}
 	if _, err := p.Read(loc); err != nil {
@@ -194,7 +194,7 @@ func TestPoolCancellationValidationAndClose(t *testing.T) {
 	defer p.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := p.Append(ctx, Record{CapabilityID: "file", TenantID: "t", Key: []byte("k")}); !errors.Is(err, context.Canceled) {
+	if _, err := p.Append(ctx, Record{EngineID: "file", TenantID: "t", Key: []byte("k")}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, err := p.Append(context.Background(), Record{}); err == nil {
@@ -203,7 +203,7 @@ func TestPoolCancellationValidationAndClose(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(v.Path, packDirectory)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("cancelled/invalid append created files")
 	}
-	if appendBudget(Record{CapabilityID: "file", TenantID: "t", Key: []byte("k")}) != (4<<20)+(64<<10) {
+	if appendBudget(Record{EngineID: "file", TenantID: "t", Key: []byte("k")}) != (4<<20)+(64<<10) {
 		t.Fatal("unexpected append budget")
 	}
 	loc := poolAppend(t, p, "record", "ok")
@@ -213,7 +213,7 @@ func TestPoolCancellationValidationAndClose(t *testing.T) {
 	if _, err := p.Read(loc); err == nil {
 		t.Fatal("read through closed Pool")
 	}
-	if _, err := p.Append(context.Background(), Record{CapabilityID: "file", TenantID: "t", Key: []byte("k")}); err == nil {
+	if _, err := p.Append(context.Background(), Record{EngineID: "file", TenantID: "t", Key: []byte("k")}); err == nil {
 		t.Fatal("append through closed Pool")
 	}
 	// Collection locks are released; the registry remains usable.

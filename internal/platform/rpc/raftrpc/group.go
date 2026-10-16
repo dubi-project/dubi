@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
@@ -118,7 +118,7 @@ type groupPeer struct {
 	conn         *grpc.ClientConn
 	client       raftwire.GroupServiceClient
 	ranges       raftwire.RangeControlServiceClient
-	capabilities raftwire.CapabilityServiceClient
+	engines      raftwire.EngineServiceClient
 	memberships  raftwire.GroupMembershipServiceClient
 	recordConn   *grpc.ClientConn
 	recordNodeID string
@@ -183,15 +183,15 @@ func (client *GroupClient) ReadIndex(ctx context.Context, target uint64, groupID
 }
 
 // MirrorGeo submits the platform-owned Geo metadata checkpoint through the
-// destination capability Group. The routed capability endpoint waits for the
+// destination engine Group. The routed engine endpoint waits for the
 // destination StateMachine Result, so a successful return means the command
 // is durably applied (or has a durable rejection), not merely queued.
-func (client *GroupClient) MirrorGeo(ctx context.Context, target uint64, groupID string, encoded []byte) (capstate.Result, error) {
-	capability, err := client.Capability(target, groupID)
+func (client *GroupClient) MirrorGeo(ctx context.Context, target uint64, groupID string, encoded []byte) (enginestate.Result, error) {
+	engine, err := client.Engine(target, groupID)
 	if err != nil {
-		return capstate.Result{}, err
+		return enginestate.Result{}, err
 	}
-	return capability.MirrorGeo(ctx, encoded)
+	return engine.MirrorGeo(ctx, encoded)
 }
 
 func (client *GroupClient) observeLeader(groupID string, leader uint64) {
@@ -229,7 +229,7 @@ func (client *GroupClient) peer(raftID uint64) (raftwire.GroupServiceClient, err
 		return nil, err
 	}
 	peer = &groupPeer{address: address, conn: conn, client: raftwire.NewGroupServiceClient(conn),
-		ranges: raftwire.NewRangeControlServiceClient(conn), capabilities: raftwire.NewCapabilityServiceClient(conn),
+		ranges: raftwire.NewRangeControlServiceClient(conn), engines: raftwire.NewEngineServiceClient(conn),
 		memberships: raftwire.NewGroupMembershipServiceClient(conn)}
 	client.peers[raftID] = peer
 	return peer.client, nil

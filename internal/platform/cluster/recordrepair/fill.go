@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
@@ -31,7 +31,7 @@ type Report struct {
 // individually authenticated by FetchRecord, and every local result is
 // physically re-read. The supplied cut must already have trusted provenance;
 // its local file digest alone does not establish authority or retention.
-func FillLocalCut(ctx context.Context, artifacts *snapshot.Store, cut capstate.RecordCut, localRaftID uint64, sources []rootstate.Node, destination *records.Store, client *raftrpc.GroupClient) (Report, error) {
+func FillLocalCut(ctx context.Context, artifacts *snapshot.Store, cut enginestate.RecordCut, localRaftID uint64, sources []rootstate.Node, destination *records.Store, client *raftrpc.GroupClient) (Report, error) {
 	if ctx == nil || artifacts == nil || destination == nil || client == nil || cut.Validate() != nil {
 		return Report{}, errors.New("record fill requires a valid cut, Store and authenticated client")
 	}
@@ -42,8 +42,8 @@ func FillLocalCut(ctx context.Context, artifacts *snapshot.Store, cut capstate.R
 		}
 	}
 	report, err := fillMode(ctx, cut.Seal.Intent.Previous.Fence.Nodes(), cut.Seal.Intent.Next.Nodes, localRaftID, sources, cut.Seal.Intent.Recovery,
-		func(visit func(capstate.RecordReference) error) error {
-			return capstate.WalkVerifiedRecordCut(ctx, artifacts, cut, visit)
+		func(visit func(enginestate.RecordReference) error) error {
+			return enginestate.WalkVerifiedRecordCut(ctx, artifacts, cut, visit)
 		},
 		func(d records.Descriptor) error { _, err := destination.Verify(ctx, d); return err },
 		func(attempt context.Context, source rootstate.Node, d records.Descriptor) error {
@@ -59,7 +59,7 @@ func FillLocalCut(ctx context.Context, artifacts *snapshot.Store, cut capstate.R
 	return report, nil
 }
 
-type cutWalker func(func(capstate.RecordReference) error) error
+type cutWalker func(func(enginestate.RecordReference) error) error
 type verifier func(records.Descriptor) error
 type fetcher func(context.Context, rootstate.Node, records.Descriptor) error
 
@@ -88,7 +88,7 @@ func fillMode(ctx context.Context, oldIDs, nextIDs []uint64, localRaftID uint64,
 	if len(remaining) != 0 && !recoverySources {
 		return report, errors.New("record fill omits an old participant")
 	}
-	err := walk(func(ref capstate.RecordReference) error {
+	err := walk(func(ref enginestate.RecordReference) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

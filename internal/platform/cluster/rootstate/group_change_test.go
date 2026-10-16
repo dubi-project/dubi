@@ -37,7 +37,7 @@ func TestGroupMembershipChangeIsPersistentAndCompletesAtomically(t *testing.T) {
 		}
 	}
 	if result := applyDirect(t, state, &index, Command{Version: FormatVersion, RequestID: "register-group",
-		Type: RegisterGroup, Group: &Group{GroupID: "data-1", StateKind: GroupStateCapability}}); result.Error != "" {
+		Type: RegisterGroup, Group: &Group{GroupID: "data-1", StateKind: GroupStateEngine}}); result.Error != "" {
 		t.Fatal(result.Error)
 	}
 	if result := applyDirect(t, state, &index, Command{Version: FormatVersion, RequestID: "publish-initial",

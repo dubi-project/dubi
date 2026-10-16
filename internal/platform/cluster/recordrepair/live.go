@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -19,7 +19,7 @@ import (
 // later mutation or physical loss has occurred. A failed pass returns no
 // completed report even if some immutable bytes were already fetched.
 type LiveReport struct {
-	Cut         capstate.LiveReferenceCut
+	Cut         enginestate.LiveReferenceCut
 	AlreadyHeld uint64
 	Fetched     uint64
 }
@@ -27,13 +27,13 @@ type LiveReport struct {
 // LivePageReport covers one bounded Owner state cut, not a whole-Group sweep.
 // Page.Done means traversal ended, not that Unrepaired is zero.
 type LivePageReport struct {
-	Page        capstate.LiveReferencePage
+	Page        enginestate.LiveReferencePage
 	AlreadyHeld uint64
 	Fetched     uint64
 	Unrepaired  uint64
-	Failures    []error                    // Bounded by the page limit; debt is retried next sweep.
-	References  []capstate.RecordReference // Bounded by the requested page limit.
-	Unresolved  []capstate.RecordReference // Bounded references eligible for Geo repair retry.
+	Failures    []error                       // Bounded by the page limit; debt is retried next sweep.
+	References  []enginestate.RecordReference // Bounded by the requested page limit.
+	Unresolved  []enginestate.RecordReference // Bounded references eligible for Geo repair retry.
 }
 
 // SourceClient is the authenticated Node transport needed by live repair.
@@ -62,7 +62,7 @@ var errRemoteRepairCompleted = errors.New("remote repair completed; local holdin
 // index or unusable Store is never overwritten. This does not update LocalReady
 // receipts or schedule itself.
 func RepairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root placement.RootReader,
-	owner *capstate.State, groupID string, localID uint64, localNodeID string,
+	owner *enginestate.State, groupID string, localID uint64, localNodeID string,
 	destination *records.Store, client SourceClient) (LiveReport, error) {
 	page, err := repairCurrentLocal(ctx, barrier, root, owner, groupID, localID, localNodeID, destination, client, nil, 0)
 	if err != nil {
@@ -77,17 +77,17 @@ func RepairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root
 // Unrepaired debt so later references are not starved. Each call rechecks the
 // Root cohort before returning a structurally valid page.
 func RepairCurrentLocalPage(ctx context.Context, barrier placement.ReadBarrier, root placement.RootReader,
-	owner *capstate.State, groupID string, localID uint64, localNodeID string,
+	owner *enginestate.State, groupID string, localID uint64, localNodeID string,
 	destination *records.Store, client SourceClient, cursor []byte,
 	limit uint32) (LivePageReport, error) {
-	if limit == 0 || limit > capstate.MaxLiveReferencePage {
+	if limit == 0 || limit > enginestate.MaxLiveReferencePage {
 		return LivePageReport{}, errors.New("invalid live repair page limit")
 	}
 	return repairCurrentLocal(ctx, barrier, root, owner, groupID, localID, localNodeID, destination, client, cursor, limit)
 }
 
 func repairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root placement.RootReader,
-	owner *capstate.State, groupID string, localID uint64, localNodeID string,
+	owner *enginestate.State, groupID string, localID uint64, localNodeID string,
 	destination *records.Store, client SourceClient, cursor []byte,
 	limit uint32) (LivePageReport, error) {
 	if ctx == nil || barrier == nil || root == nil || owner == nil || localID == 0 ||
@@ -111,19 +111,19 @@ func repairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root
 		return LivePageReport{}, errors.New("repair destination is not in the confirmed cohort")
 	}
 	var report LivePageReport
-	visit := func(ref capstate.RecordReference) error {
+	visit := func(ref enginestate.RecordReference) error {
 		return processRepairReference(ctx, plan, ref, localID, destination, client, limit, &report)
 	}
-	var page capstate.LiveReferencePage
+	var page enginestate.LiveReferencePage
 	for {
 		if limit == 0 {
-			var cut capstate.LiveReferenceCut
+			var cut enginestate.LiveReferenceCut
 			cut, err = owner.WalkCurrentReferences(ctx, barrier, visit)
-			page = capstate.LiveReferencePage{Cut: cut, Done: err == nil}
+			page = enginestate.LiveReferencePage{Cut: cut, Done: err == nil}
 		} else {
 			page, err = owner.WalkCurrentReferencesPage(ctx, barrier, cursor, limit, visit)
 		}
-		if !errors.Is(err, capstate.ErrStateBehind) {
+		if !errors.Is(err, enginestate.ErrStateBehind) {
 			break
 		}
 		timer := time.NewTimer(20 * time.Millisecond)
@@ -148,7 +148,7 @@ func repairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root
 	return report, nil
 }
 
-func processRepairReference(ctx context.Context, plan placement.LocalPlan, ref capstate.RecordReference,
+func processRepairReference(ctx context.Context, plan placement.LocalPlan, ref enginestate.RecordReference,
 	localID uint64, destination *records.Store, client SourceClient, limit uint32, report *LivePageReport) error {
 	fetched, err := repairReference(ctx, plan, ref, localID, destination, client)
 	if err != nil {
@@ -171,7 +171,7 @@ func processRepairReference(ctx context.Context, plan placement.LocalPlan, ref c
 	return nil
 }
 
-func repairReference(ctx context.Context, plan placement.LocalPlan, ref capstate.RecordReference,
+func repairReference(ctx context.Context, plan placement.LocalPlan, ref enginestate.RecordReference,
 	localID uint64, destination *records.Store, client SourceClient) (bool, error) {
 	d := ref.Descriptor
 	relocate := false

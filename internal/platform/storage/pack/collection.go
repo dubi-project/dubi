@@ -49,7 +49,7 @@ type catalog struct {
 	Pending    string   `json:"pending,omitempty"` // Durable creation intent; never contains user records.
 }
 
-// Collection owns all Packs for one Volume, shared by all Capabilities. It rotates transparently
+// Collection owns all Packs for one Volume, shared by all Engines. It rotates transparently
 // but does not choose volumes, deduplicate module keys, or publish logical indexes.
 // Methods serialize; Scan callbacks must not re-enter Collection or Registry.
 type Collection struct {

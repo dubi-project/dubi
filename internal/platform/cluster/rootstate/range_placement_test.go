@@ -33,7 +33,7 @@ func TestRangePlacementRefreshesSameRegionGeneration(t *testing.T) {
 	applyRootFileCommand(t, state, cohortPlan(0, 1, 2, 3))
 	applyRootFileCommand(t, state, cohortConfirm(1, 2, 100))
 	applyRootFileCommand(t, state, Command{Type: RegisterTenant, Tenant: &Tenant{TenantID: "tenant"}})
-	applyRootFileCommand(t, state, Command{Type: CreateDataset, Dataset: &Dataset{TenantID: "tenant", CapabilityID: "record", DatasetID: "items", RangeID: "range-a", OwnerGroupID: "regional-west"}})
+	applyRootFileCommand(t, state, Command{Type: CreateDataset, Dataset: &Dataset{TenantID: "tenant", EngineID: "record", DatasetID: "items", RangeID: "range-a", OwnerGroupID: "regional-west"}})
 	applyRootFileCommand(t, state, Command{Type: ActivateRange, Activation: &RangeActivation{RangeID: "range-a", OwnerGroupID: "regional-west", Epoch: 1, OwnerRequestID: "owner-range-a", OwnerAppliedIndex: 1000}})
 
 	initial := RangePlacement{RangeID: "range-a", RangeEpoch: 1, OwnerGroupID: "regional-west", Regions: []RangeRegionPlacement{{RegionID: "west", GroupID: "regional-west", Generation: 1}}}

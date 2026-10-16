@@ -36,7 +36,7 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	missing := Command{Version: FormatVersion, RequestID: "missing-tenant", Type: CreateDataset,
-		Dataset: &Dataset{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items",
+		Dataset: &Dataset{TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
 			RangeID: "range-a", OwnerGroupID: "data-1"}}
 	submit(t, group, missing)
 	if result, found, err := state.Result(missing.RequestID); err != nil || !found || result.Error == "" {
@@ -69,9 +69,9 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 		t.Fatalf("conflicting Node rename result = %+v, %v, %v", result, found, err)
 	}
 	submit(t, group, Command{Version: FormatVersion, RequestID: "group-1", Type: RegisterGroup,
-		Group: &Group{GroupID: "data-1", StateKind: GroupStateCapability}})
+		Group: &Group{GroupID: "data-1", StateKind: GroupStateEngine}})
 	if registered, found, err := state.Group("data-1"); err != nil || !found ||
-		registered.StateKind != GroupStateCapability || registered.Epoch != 1 || len(registered.Members) != 0 {
+		registered.StateKind != GroupStateEngine || registered.Epoch != 1 || len(registered.Members) != 0 {
 		t.Fatalf("new Group descriptor = %+v, %v, %v", registered, found, err)
 	}
 	unknownMember := Command{Version: FormatVersion, RequestID: "members-unknown", Type: PublishGroupMembers,
@@ -144,10 +144,10 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 	submit(t, group, Command{Version: FormatVersion, RequestID: "tenant-2", Type: RegisterTenant,
 		Tenant: &Tenant{TenantID: "tenant-b"}})
 	submit(t, group, Command{Version: FormatVersion, RequestID: "dataset-2", Type: CreateDataset,
-		Dataset: &Dataset{TenantID: "tenant-b", CapabilityID: "search", DatasetID: "items",
+		Dataset: &Dataset{TenantID: "tenant-b", EngineID: "search", DatasetID: "items",
 			RangeID: "range-b", OwnerGroupID: "data-1"}})
 	submit(t, group, Command{Version: FormatVersion, RequestID: "dataset-3", Type: CreateDataset,
-		Dataset: &Dataset{TenantID: "tenant-a", CapabilityID: "search", DatasetID: "items",
+		Dataset: &Dataset{TenantID: "tenant-a", EngineID: "search", DatasetID: "items",
 			RangeID: "range-c", OwnerGroupID: "data-1"}})
 	for _, activation := range []RangeActivation{
 		{RangeID: "range-b", OwnerGroupID: "data-1", Epoch: 1, OwnerRequestID: "owner-range-b", OwnerAppliedIndex: 8},
@@ -161,13 +161,13 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 		routed.State != RangeStateActive || len(routed.Start) != 0 || len(routed.End) != 0 {
 		t.Fatalf("initial full Range = %+v, %v, %v", routed, found, err)
 	}
-	for _, check := range []struct{ tenant, capability, rangeID string }{
+	for _, check := range []struct{ tenant, engine, rangeID string }{
 		{"tenant-b", "search", "range-b"}, {"tenant-a", "search", "range-c"},
 	} {
-		keyspace := Keyspace{TenantID: check.tenant, CapabilityID: check.capability, DatasetID: "items"}
+		keyspace := Keyspace{TenantID: check.tenant, EngineID: check.engine, DatasetID: "items"}
 		value, found, err := state.RouteKeyspace(keyspace, []byte("same-key"))
 		if err != nil || !found || value.RangeID != check.rangeID {
-			t.Fatalf("isolated route %s/%s = %+v, %v, %v", check.tenant, check.capability, value, found, err)
+			t.Fatalf("isolated route %s/%s = %+v, %v, %v", check.tenant, check.engine, value, found, err)
 		}
 		if value.Keyspace() != keyspace {
 			t.Fatalf("Range %s Keyspace = %+v, want %+v", value.RangeID, value.Keyspace(), keyspace)
@@ -177,7 +177,7 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 		t.Fatalf("registered Node = %+v, %v, %v", registered, found, err)
 	}
 	if registered, found, err := state.Group("data-1"); err != nil || !found || registered.GroupID != "data-1" ||
-		registered.StateKind != GroupStateCapability || registered.Epoch != 2 ||
+		registered.StateKind != GroupStateEngine || registered.Epoch != 2 ||
 		len(registered.Members) != 1 || registered.Members[0].Role != GroupMemberVoter {
 		t.Fatalf("registered Group = %+v, %v, %v", registered, found, err)
 	}

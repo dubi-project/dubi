@@ -12,7 +12,7 @@ import (
 
 func descriptor(t *testing.T, key, payload string) Descriptor {
 	t.Helper()
-	d, err := Describe(rootstate.Keyspace{TenantID: "tenant", CapabilityID: "cache", DatasetID: "data"}, "group-records", []byte(key), []byte(payload))
+	d, err := Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "cache", DatasetID: "data"}, "group-records", []byte(key), []byte(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,13 +26,13 @@ func TestDescriptorIdentityAndOwnership(t *testing.T) {
 		t.Fatal(id, err)
 	}
 	for name, change := range map[string]func(*Descriptor){
-		"tenant":     func(v *Descriptor) { v.Keyspace.TenantID += "2" },
-		"capability": func(v *Descriptor) { v.Keyspace.CapabilityID += "2" },
-		"dataset":    func(v *Descriptor) { v.Keyspace.DatasetID += "2" },
-		"group":      func(v *Descriptor) { v.GroupID += "2" },
-		"key":        func(v *Descriptor) { v.Key = []byte("another") },
-		"size":       func(v *Descriptor) { v.Size++ },
-		"digest":     func(v *Descriptor) { v.SHA256 = strings.Repeat("0", 64) },
+		"tenant":  func(v *Descriptor) { v.Keyspace.TenantID += "2" },
+		"engine":  func(v *Descriptor) { v.Keyspace.EngineID += "2" },
+		"dataset": func(v *Descriptor) { v.Keyspace.DatasetID += "2" },
+		"group":   func(v *Descriptor) { v.GroupID += "2" },
+		"key":     func(v *Descriptor) { v.Key = []byte("another") },
+		"size":    func(v *Descriptor) { v.Size++ },
+		"digest":  func(v *Descriptor) { v.SHA256 = strings.Repeat("0", 64) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			other := d.clone()
@@ -44,8 +44,8 @@ func TestDescriptorIdentityAndOwnership(t *testing.T) {
 		})
 	}
 	a, b := d.clone(), d.clone()
-	a.Keyspace.TenantID, a.Keyspace.CapabilityID = "ab", "c"
-	b.Keyspace.TenantID, b.Keyspace.CapabilityID = "a", "bc"
+	a.Keyspace.TenantID, a.Keyspace.EngineID = "ab", "c"
+	b.Keyspace.TenantID, b.Keyspace.EngineID = "a", "bc"
 	aID, _ := a.ID()
 	bID, _ := b.ID()
 	if aID == bID {
@@ -71,7 +71,7 @@ func TestDescriptorValidation(t *testing.T) {
 	d := descriptor(t, "key", "data")
 	for name, change := range map[string]func(*Descriptor){
 		"tenant":       func(v *Descriptor) { v.Keyspace.TenantID = "" },
-		"capability":   func(v *Descriptor) { v.Keyspace.CapabilityID = "../file" },
+		"engine":       func(v *Descriptor) { v.Keyspace.EngineID = "../file" },
 		"dataset":      func(v *Descriptor) { v.Keyspace.DatasetID = "" },
 		"group":        func(v *Descriptor) { v.GroupID = "../raft" },
 		"root":         func(v *Descriptor) { v.GroupID = raft.RootGroupID },

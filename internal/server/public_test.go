@@ -36,7 +36,7 @@ func TestPublicHTTPSIsolatedTokenIdentityAndRevocation(t *testing.T) {
 	}
 	process, err := Open(Options{StoreRoot: store, Listener: internal, PublicListener: public,
 		ServerTLS: serverTLS, ClientTLS: clientTLS,
-		AuthorizePeer: func(context.Context, uint64) error { return nil }, CapabilityMux: serverTestMux(t),
+		AuthorizePeer: func(context.Context, uint64) error { return nil }, EngineMux: serverTestMux(t),
 		RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +200,7 @@ func TestPublicHTTPSListenerFailureInterruptsStartup(t *testing.T) {
 	process, err := Open(Options{StoreRoot: store, Listener: internal,
 		PublicListener: failedListener{Listener: public, err: fault},
 		ServerTLS:      serverTLS, ClientTLS: clientTLS,
-		AuthorizePeer: func(context.Context, uint64) error { return nil }, CapabilityMux: serverTestMux(t),
+		AuthorizePeer: func(context.Context, uint64) error { return nil }, EngineMux: serverTestMux(t),
 		RootBootstrapPeers: []uint64{id.RaftID}, TickInterval: time.Hour})
 	if err != nil {
 		t.Fatal(err)

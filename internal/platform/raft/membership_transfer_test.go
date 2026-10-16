@@ -10,7 +10,7 @@ import (
 )
 
 // testTransferState tracks applied ConfChanges under the owning Group lock.
-// Persistent cut/reopen coverage lives in capstate/membership_raft_test.go.
+// Persistent cut/reopen coverage lives in enginestate/membership_raft_test.go.
 type testTransferState struct {
 	*testState
 	memberIndex uint64

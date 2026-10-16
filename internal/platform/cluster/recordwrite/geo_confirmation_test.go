@@ -9,7 +9,7 @@ import (
 )
 
 func TestGeoConfirmationClaimBindsAndSortsCoveredEvidence(t *testing.T) {
-	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items"}, RangeID: "range-a", OwnerGroupID: "data-1", Epoch: 3, RoutingKey: []byte("key")}
+	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}, RangeID: "range-a", OwnerGroupID: "data-1", Epoch: 3, RoutingKey: []byte("key")}
 	recordID := "record_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	coverage := placement.GeoDataCoverage{RecordID: recordID, ReferenceRequestID: "publish-1", ReferenceIndex: 8,
 		ReferenceCommandHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

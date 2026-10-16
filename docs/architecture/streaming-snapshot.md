@@ -4,7 +4,7 @@
 
 ## 当前已实现：有界流格式
 
-`internal/platform/storage/snapshot` 定义 `DUBISN01`，已接入正式 Node/Server 的 Root 与 Capability Group 快照链路。未附加 artifact Store 的独立测试/嵌入式 adapter 仍使用有界内联镜像。该路径的完成不代表整个基座已取得生产资格。
+`internal/platform/storage/snapshot` 定义 `DUBISN01`，已接入正式 Node/Server 的 Root 与 Engine Group 快照链路。未附加 artifact Store 的独立测试/嵌入式 adapter 仍使用有界内联镜像。该路径的完成不代表整个基座已取得生产资格。
 
 流头包含格式版本、状态格式标识、GroupID、Raft index 和不透明 Conf；不含本地路径、Pack 位置或 Node 身份。键按字节严格升序；每条记录用长度前缀及 CRC32C 包含键、值；结束标记包含记录数。头部必须是规范编码并校验 CRC。消费者必须读到有效结束标记，外层还必须核验整个持久文件的 SHA-256、确切长度和预期 Group/index/conf。
 
@@ -28,23 +28,23 @@
 
 ## 当前已实现：Raft 两阶段快照生成边界
 
-Raft Group 提供可选 `SnapshotPreparer`：在 Group 锁内快速固定 index/conf 与不可变视图，随后在锁外构建镜像，同 Group 同时只允许一个构建。正常提交、ReadIndex 和 Tick 可在构建期间运行；关闭取消构建并等待其资源释放，再关闭状态机与日志。构建/释放失败不会截断日志，也不单独毒化正常共识。正式 capability runtime 和 Node Root adapter 均已接入。
+Raft Group 提供可选 `SnapshotPreparer`：在 Group 锁内快速固定 index/conf 与不可变视图，随后在锁外构建镜像，同 Group 同时只允许一个构建。正常提交、ReadIndex 和 Tick 可在构建期间运行；关闭取消构建并等待其资源释放，再关闭状态机与日志。构建/释放失败不会截断日志，也不单独毒化正常共识。正式 engine runtime 和 Node Root adapter 均已接入。
 
 `logstore.SaveLocalSnapshot` 区分本地历史 cut 与接收到的快照：本地快照只能取已持久提交且 term 相符的位置，保留构建期间更新的当前 ConfState 和 cut 之后的日志；快照自身仍携带该历史 cut 的成员信息。测试覆盖慢构建期间的写/读/Tick、并发构建拒绝、关闭取消、失败后重试，以及构建期间加入 Learner 后重启不回退成员信息。
 
-## 当前已实现：capstate 的一致性文件输出
+## 当前已实现：enginestate 的一致性文件输出
 
-`capstate.PrepareSnapshotTo` 固定 Pebble Snapshot 与准确 index/conf，文件构建不持有 capstate 锁。按逻辑键归并内联记录和 Pack 引用，再输出不透明真实值；一条条校验归属、摘要、Fence 和 Result，使用同一 Pebble 视图的点查验证关联，不为所有值或所有 Range 建立内存索引。Pack 仍按 Node 共享，不按此输出格式拆分物理 Pack。
+`enginestate.PrepareSnapshotTo` 固定 Pebble Snapshot 与准确 index/conf，文件构建不持有 enginestate 锁。按逻辑键归并内联记录和 Pack 引用，再输出不透明真实值；一条条校验归属、摘要、Fence 和 Result，使用同一 Pebble 视图的点查验证关联，不为所有值或所有 Range 建立内存索引。Pack 仍按 Node 共享，不按此输出格式拆分物理 Pack。
 
 捕获的视图有明确释放责任，State.Close 等待它释放后才关数据库；调用者还须保持节点的共享 Pack Pool 和 artifact Store 存活。底座未来接入 GC 前仍需将这些引用加入持久资源保护。
 
-本地测试验证了真实 capstate 中 80 MiB 值的文件输出及恢复到真实磁盘 Pack、捕获后新写入不混入旧 cut、相同逻辑状态在内联和外置布局下生成完全相同的引用/摘要、坏 Fence/冲突引用/取消不发布文件，以及关闭时的视图生命周期。大值源端使用测试内存 Pack，目的端使用真实 Pool；不是多节点大状态追赶验收。
+本地测试验证了真实 enginestate 中 80 MiB 值的文件输出及恢复到真实磁盘 Pack、捕获后新写入不混入旧 cut、相同逻辑状态在内联和外置布局下生成完全相同的引用/摘要、坏 Fence/冲突引用/取消不发布文件，以及关闭时的视图生命周期。大值源端使用测试内存 Pack，目的端使用真实 Pool；不是多节点大状态追赶验收。
 
-正式 Node 通过 snapshot-enabled capability runtime 使用该接口；不附加 artifact Store 的独立 runtime 保留旧内联协议。节点停止时取消生命周期恢复 Context，而不是用单次客户端 RPC 的超时撤销已经被 Raft 接收的恢复。
+正式 Node 通过 snapshot-enabled engine runtime 使用该接口；不附加 artifact Store 的独立 runtime 保留旧内联协议。节点停止时取消生命周期恢复 Context，而不是用单次客户端 RPC 的超时撤销已经被 Raft 接收的恢复。
 
-## 当前已实现：capstate 有界恢复与崩溃屏障
+## 当前已实现：enginestate 有界恢复与崩溃屏障
 
-`capstate.RestoreFrom` 已接到正式 snapshot-enabled adapter。先把流逐条写入私有临时 Pebble，并核验确切长度、完整 SHA（含 reader.Close 错误）、格式、Group、index、Conf 及所有逻辑 Fence/Result；这些预检不修改原状态、不追加 Pack。通过后才用一个同步 Batch 同时写入持久恢复标记并清除旧逻辑命名空间。
+`enginestate.RestoreFrom` 已接到正式 snapshot-enabled adapter。先把流逐条写入私有临时 Pebble，并核验确切长度、完整 SHA（含 reader.Close 错误）、格式、Group、index、Conf 及所有逻辑 Fence/Result；这些预检不修改原状态、不追加 Pack。通过后才用一个同步 Batch 同时写入持久恢复标记并清除旧逻辑命名空间。
 
 安装采用约 1 MiB 的批次（单条记录允许到格式硬上限 64 MiB），不把整个镜像装入内存或单 Batch。大值按目的节点共享 Pool 重新落 Pack；其余值、Fence 和 Result 落 Pebble，末尾 Sync 同时发布 applied/conf 并清除恢复标记。中途失败拒绝正常读写；重开发现标记时报告 applied=0，要求上层先从已持久化 Raft 引用重放相同 Group/index/SHA/Conf，不能换 Store、换图像、回退到内联镜像或把缺失文件视作空状态。最终提交结果不确定时也要求重开判断实际持久状态。
 
@@ -54,7 +54,7 @@ Raft Group 提供可选 `SnapshotPreparer`：在 Group 锁内快速固定 index/
 
 ## 当前已实现：Root 文件快照与目录校验
 
-`rootstate.PrepareSnapshotTo/RestoreFrom` 与 capability 共用有序流、持久 artifact 及私有 staging 组件。Root 使用 `rootstate-v1` 格式；固定 index/conf 后锁外输出，恢复前完整核验文件，并用同一 staging 视图的点查验证 Node/NodeID、Group 成员、成员变更/活动任务、Tenant/Dataset/Range/RangeID 的双向关联及请求结果。未知命名空间、无效 JSON、错归属和缺关联均在修改原状态前拒绝。OwnerFenceIndex 属于数据 Group，不错误地用 Root index 限制它。
+`rootstate.PrepareSnapshotTo/RestoreFrom` 与 engine 共用有序流、持久 artifact 及私有 staging 组件。Root 使用 `rootstate-v1` 格式；固定 index/conf 后锁外输出，恢复前完整核验文件，并用同一 staging 视图的点查验证 Node/NodeID、Group 成员、成员变更/活动任务、Tenant/Dataset/Range/RangeID 的双向关联及请求结果。未知命名空间、无效 JSON、错归属和缺关联均在修改原状态前拒绝。OwnerFenceIndex 属于数据 Group，不错误地用 Root index 限制它。
 
 安装同样采用持久恢复屏障、约 1 MiB 批次及最终 Sync；恢复中断后正常接口拒绝服务，重开报告 applied=0，仅允许同一引用及 Conf 重放。Root 不包含物理 Pack 位置，也不增加运维配置。旧独立 State 的内联格式继续保留；新文件格式不能交给不支持它的旧二进制。
 
@@ -95,7 +95,7 @@ Node 在 Pack Pool 之后打开 artifact Store，在关闭 Group 后关闭 artif
 ### 剩余接线
 
 1. 持久 artifact：已有自动节点登记，继续通用资源清单、Checkpoint/GC 引用保护和跨引擎容量预约；在保护完成前不回收旧镜像。
-2. 状态机：Root 与 capability 已接通。后续可在同一持久恢复屏障下优化 SST 导入，但不要求不可逆数据库格式升级、不累积无界 Batch。
+2. 状态机：Root 与 engine 已接通。后续可在同一持久恢复屏障下优化 SST 导入，但不要求不可逆数据库格式升级、不累积无界 Batch。
 3. Raft/传输：发送端已有分阶段有限超时；接收端已有首帧、空闲、总期限及有界 Recv worker，详见[资源界限](../operations/resource-limits.md)。继续实现连接/全入口准入、安装进度/重复传输、协议协商与滚动升级边界，验证引用持久化/日志压缩/安装 ACK 的故障组合。
 4. 资格：超过旧上限的真实多节点快照追赶，慢流/取消/坏文件/失盘/进程退出、重复导入、快照引用与资源保留一致性，以及真实目标介质的恢复和空间验收。
 

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordrepair"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -39,7 +39,7 @@ type liveRecordRepair struct {
 }
 
 type liveRepairCursor struct {
-	owner        *capstate.State
+	owner        *enginestate.State
 	cursor       []byte
 	unresolved   uint64
 	firstFailure string
@@ -161,7 +161,7 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 	groupIDs := make([]string, 0, len(descriptors))
 	regionViews := make(map[string]rootstate.RegionProgress, len(descriptors))
 	for _, descriptor := range descriptors {
-		owner, found := worker.runtime.Capabilities.Resolve(descriptor.GroupID)
+		owner, found := worker.runtime.Engines.Resolve(descriptor.GroupID)
 		if !found || owner == nil {
 			continue
 		}
@@ -200,7 +200,7 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 	groupID := groupIDs[worker.next%len(groupIDs)]
 	worker.next = (worker.next + 1) % len(groupIDs)
 	worker.lastGroup = groupID
-	owner, found := worker.runtime.Capabilities.Resolve(groupID)
+	owner, found := worker.runtime.Engines.Resolve(groupID)
 	if !found || owner == nil {
 		delete(worker.groups, groupID)
 		return nil

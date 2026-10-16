@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -36,13 +36,13 @@ type RegionFenceServer struct {
 	raftID    uint64
 	host      regionReadBarrier
 	root      *rootstate.State
-	states    CapabilityResolver
+	states    EngineResolver
 	authorize AuthorizePeer
 	slots     chan struct{}
 	timeout   time.Duration // Internal bound; shortened only by tests.
 }
 
-func NewRegionFenceServer(clusterID string, raftID uint64, host regionReadBarrier, root *rootstate.State, states CapabilityResolver, authorize AuthorizePeer) (*RegionFenceServer, error) {
+func NewRegionFenceServer(clusterID string, raftID uint64, host regionReadBarrier, root *rootstate.State, states EngineResolver, authorize AuthorizePeer) (*RegionFenceServer, error) {
 	if clusterID == "" || raftID == 0 || host == nil || root == nil || states == nil || authorize == nil {
 		return nil, errors.New("regional observation requires identity, Root, Host, states and peer authorization")
 	}
@@ -99,7 +99,7 @@ func (s *RegionFenceServer) Observe(ctx context.Context, req *raftwire.ObserveRe
 		return nil, status.Error(codes.Internal, "cannot encode regional membership")
 	}
 	response := &raftwire.ObserveRegionFenceResponse{ClusterId: s.clusterID, GroupId: req.GroupId, RaftId: s.raftID,
-		GroupConfirmedIndex: barrier, AppliedIndex: view.AppliedIndex, MembershipIndex: view.MembershipIndex, ConfState: conf, Active: view.Active, StateFormat: capstate.FormatVersion}
+		GroupConfirmedIndex: barrier, AppliedIndex: view.AppliedIndex, MembershipIndex: view.MembershipIndex, ConfState: conf, Active: view.Active, StateFormat: enginestate.FormatVersion}
 	if view.Found {
 		response.FenceRecord, err = json.Marshal(view.Record)
 		if err != nil {
@@ -151,7 +151,7 @@ func (s *RegionFenceServer) confirmRoot(ctx context.Context, caller uint64, grou
 	if err != nil {
 		return 0, status.Error(codes.Unavailable, "Root Group directory unavailable")
 	}
-	if !found || descriptor.StateKind != rootstate.GroupStateCapability {
+	if !found || descriptor.StateKind != rootstate.GroupStateEngine {
 		return 0, status.Error(codes.FailedPrecondition, "regional data Group is not registered")
 	}
 	return index, nil
@@ -160,7 +160,7 @@ func (s *RegionFenceServer) confirmRoot(ctx context.Context, caller uint64, grou
 type RegionObservation struct {
 	RootConfirmedIndex  uint64
 	GroupConfirmedIndex uint64
-	View                capstate.RegionFenceView
+	View                enginestate.RegionFenceView
 }
 
 // ObserveRegionFence is direct-to-participant, never redirected to a leader:
@@ -190,14 +190,14 @@ func (client *GroupClient) ObserveRegionFence(ctx context.Context, target uint64
 
 func decodeRegionObservation(cluster string, target uint64, group string, r *raftwire.ObserveRegionFenceResponse) (RegionObservation, error) {
 	bad := errors.New("invalid regional observation response")
-	if r == nil || r.StateFormat != capstate.FormatVersion || proto.Size(r) > regionObserveResponseBytes || r.ClusterId != cluster || r.RaftId != target || r.GroupId != group || r.RootConfirmedIndex == 0 || r.GroupConfirmedIndex == 0 || r.AppliedIndex < r.GroupConfirmedIndex || r.MembershipIndex == 0 || r.MembershipIndex > r.AppliedIndex || len(r.ConfState) > regionObserveConfBytes || len(r.FenceRecord) > regionfence.MaxRecordBytes || len(r.HandoffRecord) > regionfence.MaxRecordBytes {
+	if r == nil || r.StateFormat != enginestate.FormatVersion || proto.Size(r) > regionObserveResponseBytes || r.ClusterId != cluster || r.RaftId != target || r.GroupId != group || r.RootConfirmedIndex == 0 || r.GroupConfirmedIndex == 0 || r.AppliedIndex < r.GroupConfirmedIndex || r.MembershipIndex == 0 || r.MembershipIndex > r.AppliedIndex || len(r.ConfState) > regionObserveConfBytes || len(r.FenceRecord) > regionfence.MaxRecordBytes || len(r.HandoffRecord) > regionfence.MaxRecordBytes {
 		return RegionObservation{}, bad
 	}
 	conf := new(raftpb.ConfState)
 	if proto.Unmarshal(r.ConfState, conf) != nil || !stableRegionalObservation(conf, target) {
 		return RegionObservation{}, bad
 	}
-	v := capstate.RegionFenceView{AppliedIndex: r.AppliedIndex, MembershipIndex: r.MembershipIndex, Conf: conf, Found: len(r.FenceRecord) != 0, Active: r.Active}
+	v := enginestate.RegionFenceView{AppliedIndex: r.AppliedIndex, MembershipIndex: r.MembershipIndex, Conf: conf, Found: len(r.FenceRecord) != 0, Active: r.Active}
 	if v.Found {
 		d := json.NewDecoder(bytes.NewReader(r.FenceRecord))
 		d.DisallowUnknownFields()

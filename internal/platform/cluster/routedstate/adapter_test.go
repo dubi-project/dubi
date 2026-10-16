@@ -77,7 +77,7 @@ func TestAdapterRegionHandoffIsExclusiveAndRequiresSupport(t *testing.T) {
 	}
 }
 
-func TestAdapterRegionFenceCannotCarryCapabilityPayload(t *testing.T) {
+func TestAdapterRegionFenceCannotCarryEnginePayload(t *testing.T) {
 	d := regionfence.Descriptor{RegionID: "west", GroupID: "data-1", Generation: 1, PlannedIndex: 100, GroupEpoch: 2, MembershipIndex: 3,
 		Members: []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}}
 	encoded, err := EncodeRegionFence("barrier", d)
@@ -163,12 +163,12 @@ func (machine *testMachine) Close() error {
 
 func validTarget() router.Target {
 	return router.Target{
-		Keyspace: rootstate.Keyspace{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items"},
+		Keyspace: rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"},
 		RangeID:  "range-a", OwnerGroupID: "data-1", Epoch: 3, RoutingKey: []byte("key"),
 	}
 }
 
-func TestAdapterAppliesOnlyRoutedCapabilityCommands(t *testing.T) {
+func TestAdapterAppliesOnlyRoutedEngineCommands(t *testing.T) {
 	machine := &testMachine{conf: &raftpb.ConfState{Voters: []uint64{1}}}
 	adapter, err := New(machine)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestRoutedCommandRejectsMalformedTargetAndUnknownFields(t *testing.T) {
 func TestAdapterAppliesInitialRangeActivation(t *testing.T) {
 	machine := &testMachine{conf: &raftpb.ConfState{Voters: []uint64{1}}}
 	adapter, _ := New(machine)
-	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", CapabilityID: "record",
+	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
 		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	encoded, err := EncodeActivateRange("activate-1", descriptor)
 	if err != nil {

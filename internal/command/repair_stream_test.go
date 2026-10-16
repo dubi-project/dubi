@@ -111,7 +111,7 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	space := rootstate.Keyspace{TenantID: "stream-repair", CapabilityID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "stream-repair", EngineID: "data-alpha", DatasetID: "shared"}
 	tenant, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
 		RequestID: "stream-repair-tenant", Type: rootstate.RegisterTenant,
 		Tenant: &rootstate.Tenant{TenantID: space.TenantID}})
@@ -136,7 +136,7 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 			break
 		}
 	}
-	activateCapabilityTestDataset(t, ctx, first, group, space)
+	activateEngineTestDataset(t, ctx, first, group, space)
 	routes, err := router.New(first.Runtime.Host, first.Runtime.Root)
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +173,7 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 	if err := first.Runtime.Host.Submit(group, mutation); err != nil {
 		t.Fatal(err)
 	}
-	owner, found := first.Runtime.Capabilities.Resolve(group)
+	owner, found := first.Runtime.Engines.Resolve(group)
 	if !found {
 		t.Fatal("initial Owner Group is not open")
 	}
@@ -238,7 +238,7 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	readerOwner, found := nodes[2].Runtime.Capabilities.Resolve(group)
+	readerOwner, found := nodes[2].Runtime.Engines.Resolve(group)
 	if !found {
 		t.Fatal("target Owner Group is not open")
 	}

@@ -142,7 +142,7 @@ func open(registry *volume.Registry, volumeID, id string, target int64, mode ope
 		if err != nil {
 			return err
 		}
-		if p.state.PackID != id || p.state.End < headerSize || p.state.End > saved.TargetSize+recordHeaderSize+MaxCapabilitySize+MaxTenantSize+MaxKeySize+MaxPayloadSize || p.state.Count > uint64((p.state.End-headerSize)/recordHeaderSize) || (!p.state.Sealed && p.state.End >= saved.TargetSize) {
+		if p.state.PackID != id || p.state.End < headerSize || p.state.End > saved.TargetSize+recordHeaderSize+MaxEngineSize+MaxTenantSize+MaxKeySize+MaxPayloadSize || p.state.Count > uint64((p.state.End-headerSize)/recordHeaderSize) || (!p.state.Sealed && p.state.End >= saved.TargetSize) {
 			return ErrCorrupt
 		}
 		if mode.requireSealed && !p.state.Sealed {
@@ -348,11 +348,11 @@ func (p *Pack) readRecord(offset int64, materialize bool) (Location, Record, err
 	if _, err := p.file.ReadAt(b[:], offset); err != nil {
 		return loc, record, errors.Join(ErrCorrupt, err)
 	}
-	capability, tenant, key, payload, checksum, err := decodeRecordHeader(b[:])
+	engine, tenant, key, payload, checksum, err := decodeRecordHeader(b[:])
 	if err != nil {
 		return loc, record, err
 	}
-	length := int64(recordHeaderSize + capability + tenant + key + payload)
+	length := int64(recordHeaderSize + engine + tenant + key + payload)
 	if length > p.state.End-offset {
 		return loc, record, ErrCorrupt
 	}
@@ -365,22 +365,22 @@ func (p *Pack) readRecord(offset int64, materialize bool) (Location, Record, err
 		if int64(len(body)) != length-recordHeaderSize || crc32.Checksum(body, crcTable) != checksum {
 			return loc, record, ErrCorrupt
 		}
-		record = Record{CapabilityID: string(body[:capability]), TenantID: string(body[capability : capability+tenant]), Key: body[capability+tenant : capability+tenant+key], Payload: body[capability+tenant+key:]}
-		if !capabilityPattern.MatchString(record.CapabilityID) {
+		record = Record{EngineID: string(body[:engine]), TenantID: string(body[engine : engine+tenant]), Key: body[engine+tenant : engine+tenant+key], Payload: body[engine+tenant+key:]}
+		if !enginePattern.MatchString(record.EngineID) {
 			return loc, Record{}, ErrCorrupt
 		}
 	} else {
 		hash := crc32.New(crcTable)
-		attribution := make([]byte, capability)
+		attribution := make([]byte, engine)
 		if _, err := io.ReadFull(reader, attribution); err != nil {
 			return loc, record, errors.Join(ErrCorrupt, err)
 		}
-		if !capabilityPattern.Match(attribution) {
+		if !enginePattern.Match(attribution) {
 			return loc, record, ErrCorrupt
 		}
 		_, _ = hash.Write(attribution)
 		n, err := io.Copy(hash, reader)
-		n += int64(capability)
+		n += int64(engine)
 		if err != nil {
 			return loc, record, err
 		}

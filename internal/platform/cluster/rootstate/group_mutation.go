@@ -167,7 +167,7 @@ func (s *State) authorizeGroupMutation(caller, server uint64, m GroupMutation, t
 	if err := decodeStreamJSON(encoded, &group); err != nil {
 		return err
 	}
-	if group.GroupID != m.GroupID || group.StateKind != GroupStateCapability || group.Epoch != m.ExpectedEpoch {
+	if group.GroupID != m.GroupID || group.StateKind != GroupStateEngine || group.Epoch != m.ExpectedEpoch {
 		return ErrGroupMutationUnauthorized
 	}
 	if len(group.Members) == 0 && group.Epoch != 1 || len(group.Members) != 0 && validateGroupMembers(group.Members) != nil {

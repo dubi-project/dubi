@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"go.etcd.io/raft/v3/raftpb"
@@ -77,7 +77,7 @@ func completeGrowthTask(t *testing.T, h *testHost, p *testParticipants, group st
 			next.Learners = append(next.Learners, m.RaftID)
 		}
 		if p.states[group][m.RaftID] == nil {
-			s, err := capstate.Open(t.TempDir(), group, confirmationHandler{})
+			s, err := enginestate.Open(t.TempDir(), group, confirmationHandler{})
 			if err != nil {
 				t.Fatal(err)
 			}
