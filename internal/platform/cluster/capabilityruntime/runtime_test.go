@@ -3,6 +3,7 @@ package capabilityruntime
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
@@ -185,6 +186,61 @@ func TestRegistrySealsAndFactoryCreatesPerGroupState(t *testing.T) {
 	cancel()
 	if _, err := factory(cancelled, rootstate.Group{GroupID: "data-3", StateKind: rootstate.GroupStateCapability}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled factory = %v", err)
+	}
+}
+
+func TestConcurrentNewStateSerializesDurableOpen(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register("record", &valueHandler{}); err != nil {
+		t.Fatal(err)
+	}
+	mux, err := registry.Seal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntime(t.TempDir(), mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := rootstate.Group{GroupID: "concurrent", StateKind: rootstate.GroupStateCapability}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	states := make(chan raft.StateMachine, 2)
+	var group sync.WaitGroup
+	group.Add(2)
+	for range 2 {
+		go func() {
+			defer group.Done()
+			<-start
+			state, openErr := runtime.NewState(context.Background(), descriptor)
+			if state != nil {
+				states <- state
+			}
+			errs <- openErr
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(errs)
+	close(states)
+
+	var success int
+	for openErr := range errs {
+		if openErr == nil {
+			success++
+			continue
+		}
+		if !errors.Is(openErr, ErrGroupStateAlreadyOpen) {
+			t.Fatalf("concurrent open error = %v", openErr)
+		}
+	}
+	if success != 1 {
+		t.Fatalf("concurrent open successes = %d, want 1", success)
+	}
+	for state := range states {
+		if err := state.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
