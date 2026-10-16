@@ -9,7 +9,7 @@ cd -- "$lab_root"
 lab_dir=$(mktemp -d "${TMPDIR:-/tmp}/dubi-disk-pressure.XXXXXX")
 mount_dir="$lab_dir/mount"
 store_dir="$mount_dir/store"
-image="$lab_dir/dubi-pressure.img"
+image="$lab_dir/dubi-pressure.sparseimage"
 binary="$lab_dir/dubi"
 server_pid=""
 mounted=0
