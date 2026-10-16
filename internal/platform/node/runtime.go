@@ -174,9 +174,25 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 		if runtime.Host.HasGroup(groupID) {
 			continue
 		}
+		// A remote membership reconciler may be preparing this same local
+		// capability Group at the exact moment startup recovery reaches it. The
+		// capability state is registered before Host.AddGroup, so wait for that
+		// owner instead of opening a second state and colliding on its Store lock.
+		if _, open := runtime.Capabilities.Resolve(groupID); open {
+			if err := runtime.waitForGroupOpen(ctx, groupID); err != nil {
+				return err
+			}
+			continue
+		}
 		joining := targets[groupID]
 		state, err := runtime.Groups.NewState(ctx, groupID)
 		if err != nil {
+			if errors.Is(err, capabilityruntime.ErrGroupStateAlreadyOpen) {
+				if waitErr := runtime.waitForGroupOpen(ctx, groupID); waitErr != nil {
+					return waitErr
+				}
+				continue
+			}
 			return err
 		}
 		if err := runtime.Host.AddGroup(groupID, initialPeers[groupID], joining, state); err != nil {
@@ -185,6 +201,24 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (runtime *Runtime) waitForGroupOpen(ctx context.Context, groupID string) error {
+	if ctx == nil {
+		return errors.New("Group recovery context is required")
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if runtime.Host.HasGroup(groupID) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func containsMember(members []rootstate.GroupMember, raftID uint64) bool {

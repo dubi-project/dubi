@@ -20,8 +20,8 @@
 | 顺序 | 底座能力 | 可用验收 | 状态 |
 | --- | --- | --- | --- |
 | 1 | 通用数据写入与稳定本地多数 | 单 Region 三节点中，实际不可变字节落在稳定集合的严格多数独立 Node 后才能确认 `LocalReady`；权威引用与请求去重可恢复。仅一个位置成功或拓扑切换时失败关闭，不能把 Raft 提交、Pack 本地同步或响应 ACK 当成数据多数。 | 进行中：`Writer.WriteLocal`/`Reader.ReadLocal` 已接入能力中立的 `capabilitydata.Service`，`record put/get` 现在发布不可变 Pack 引用并经过物理多数门禁，不再绕过记录写入协议。`foundation_three_node_lab.sh` 已验证三节点真实进程的跨节点 Pack 读写、停一节点后继续读写、相同 RequestID 重试和原 Store 重启读取；仍需独立故障域、失卷/损坏和更长时间运行验收。Tenant API 是后续独立阶段。 |
-| 2 | 自动 Repair 与手动移除后的自动再平衡 | 持有状态与目标分离；来源缺失、中断、重启后任务自动续跑。节点失联只标记状态；管理员确认永久失效后手动移除，新节点以全新身份加入，底座自动补齐并恢复多数，旧盘重现不得直接入群。 | 进行中：Repair worker 现在允许 1/2 节点 Region 作为跨区域写入的物理目标；本地三节点仍只有严格多数才报告 `LocalReady`。手动移除后的新身份加入继续沿用持久游标、代际/epoch/fence 校验和旧引用重扫，不自动缩小多数分母。Volume Drain 的持久迁移账本、失败卷欠账和节点/区域降级状态继续保留；完整跨节点真实故障联测仍未完成。详见[Volume 故障与数据重平衡](architecture/volume-rebalance.md)。 |
-> enrollment authority 的 bootstrap 移除闭环已在真实三节点联测中通过：authority 自动扩展，bootstrap 手动移除并 Fence 后，幸存节点完成 authority 收缩并继续签发，第四节点可重新加入。表中阶段 2 的其余内容（独立进程故障门禁、真实再平衡和长期验收）仍保持未完成状态。
+| 2 | 自动 Repair 与手动移除后的自动再平衡 | 持有状态与目标分离；来源缺失、中断、重启后任务自动续跑。节点失联只标记状态；管理员确认永久失效后手动移除，新节点以全新身份加入，底座自动补齐并恢复多数，旧盘重现不得直接入群。 | 进行中：`scripts/node_removal_rebalance_lab.sh` 已在隔离稀疏卷通过真实三节点进程闭环：停止 `sh-03`，按名称显式移除并 Fence，`n4` 以全新 NodeID/RaftID 加入同一 Region，移除前及离线期间的旧 Pack 记录均可从新节点读回。Repair worker 现在允许 1/2 节点 Region 作为跨区域写入的物理目标；本地三节点仍只有严格多数才报告 `LocalReady`。持久游标、代际/epoch/fence 校验和旧引用重扫不自动缩小多数分母。Volume Drain 的持久迁移账本、失败卷欠账、跨机器/跨区域故障验收和长期容量均衡仍未完成。详见[Volume 故障与数据重平衡](architecture/volume-rebalance.md)。 |
+> enrollment authority 的 bootstrap 移除闭环已在真实三节点联测中通过：authority 自动扩展，bootstrap 手动移除并 Fence 后，幸存节点完成 authority 收缩并继续签发，第四节点可重新加入。数据层的“显式移除 → 全新身份普通加入 → 旧 Pack 自动补齐”也已有隔离稀疏卷实验；独立机器/区域故障域和长期容量验收仍保持未完成状态。
 
 补充：阶段 2 已新增跨 Node Repair 的内部传输原语。目标 Node 自己从认证来源拉取并写入本地 Pack；本机 Store/Volume 不可用时，当前确认 cohort 的其它 Node 可作为临时目标，但本地故障仍保留为 Repair debt，不会被误报为本机已恢复。跨 Region 目标、持久搬迁任务和最终多数复验仍未完成。
 

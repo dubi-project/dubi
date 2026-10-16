@@ -58,12 +58,27 @@ func (route *nodeAdminRoute) removeByName(ctx context.Context, name string) (boo
 	if leader {
 		return false, 0, nil
 	}
-	var target uint64
-	err = route.forward(ctx, func(callCtx context.Context, conn *grpc.ClientConn) error {
-		var callErr error
-		target, callErr = nodeadminrpc.RemoveNodeByNameForwarded(callCtx, conn, route.clusterID, route.localRaft, name)
-		return callErr
-	})
+	// Prefer resolving the label at the entry Node after a live Root barrier.
+	// This turns the rest of the request into the stable Raft-ID form. A Node
+	// can still have a lagging local Root state after ReadIndex (the status RPC
+	// may have come from another member), so fall back to trying the name at
+	// each Root candidate. The candidate loop then reaches the member whose
+	// applied Root state contains the label and whose Root group is leader.
+	if _, err := route.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		return true, 0, err
+	}
+	node, found, err := route.runtime.Root.NodeByName(name)
+	if err != nil {
+		return true, 0, err
+	}
+	if found {
+		target := node.RaftID
+		err = route.forward(ctx, func(callCtx context.Context, conn *grpc.ClientConn) error {
+			return nodeadminrpc.RemoveNodeForwarded(callCtx, conn, route.clusterID, route.localRaft, target)
+		})
+		return true, target, err
+	}
+	target, err := route.forwardByName(ctx, name)
 	return true, target, err
 }
 
@@ -108,4 +123,43 @@ func (route *nodeAdminRoute) forward(ctx context.Context, call func(context.Cont
 		return errors.New("Root has no reachable management candidate")
 	}
 	return errors.Join(failures...)
+}
+
+func (route *nodeAdminRoute) forwardByName(ctx context.Context, name string) (uint64, error) {
+	if route == nil || route.directory == nil || route.credentials == nil {
+		return 0, errors.New("Node admin route is not configured")
+	}
+	candidates := route.directory.Candidates(raft.RootGroupID)
+	if len(candidates) == 0 {
+		return 0, errors.New("Root has no management candidates")
+	}
+	var failures []error
+	for _, raftID := range candidates {
+		if raftID == 0 || raftID == route.localRaft {
+			continue
+		}
+		address, found := route.directory.Resolve(raftID)
+		if !found {
+			continue
+		}
+		conn, err := grpc.NewClient("passthrough:///"+address,
+			grpc.WithTransportCredentials(route.credentials),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(raftrpc.DefaultMaxMessageSize), grpc.MaxCallSendMsgSize(raftrpc.DefaultMaxMessageSize)))
+		if err != nil {
+			failures = append(failures, fmt.Errorf("Root Node %d: %w", raftID, err))
+			continue
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		target, callErr := nodeadminrpc.RemoveNodeByNameForwarded(attemptCtx, conn, route.clusterID, route.localRaft, name)
+		cancel()
+		_ = conn.Close()
+		if callErr == nil {
+			return target, nil
+		}
+		failures = append(failures, fmt.Errorf("Root Node %d: %w", raftID, callErr))
+	}
+	if len(failures) == 0 {
+		return 0, errors.New("Root has no reachable management candidate")
+	}
+	return 0, errors.Join(failures...)
 }

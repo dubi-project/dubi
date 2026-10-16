@@ -122,7 +122,7 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 
 func (c *Coordinator) publish(ctx context.Context, placement rootstate.RangePlacement) error {
 	command := rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.SetRangePlacement,
-		RangePlacement: &placement}
+		RequestID: "range-placement-intent", RangePlacement: &placement}
 	encoded, err := rootstate.EncodeCommand(command)
 	if err != nil {
 		return err

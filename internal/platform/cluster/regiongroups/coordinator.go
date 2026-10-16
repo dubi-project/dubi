@@ -314,13 +314,13 @@ func submitRoot(ctx context.Context, host Host, root *rootstate.State, command r
 	}
 	encoded, err := rootstate.EncodeCommand(command)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode regional Root command type=%q request=%q version=%d: %w", command.Type, command.RequestID, command.Version, err)
 	}
 	digest := sha256.Sum256(encoded)
 	command.RequestID = "regional-" + hex.EncodeToString(digest[:])
 	encoded, err = rootstate.EncodeCommand(command)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode regional Root command type=%q request=%q version=%d: %w", command.Type, command.RequestID, command.Version, err)
 	}
 	if err := host.Submit(raft.RootGroupID, encoded); err != nil {
 		return err
@@ -330,7 +330,7 @@ func submitRoot(ctx context.Context, host Host, root *rootstate.State, command r
 	}
 	result, found, err := root.ResultForCommand(encoded)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect regional Root command type=%q request=%q: %w", command.Type, command.RequestID, err)
 	}
 	if !found {
 		return errors.New("regional Root command not yet applied")

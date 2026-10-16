@@ -20,6 +20,12 @@ import (
 	"go.etcd.io/raft/v3/raftpb"
 )
 
+// ErrGroupStateAlreadyOpen means another local recovery/join path is already
+// constructing the durable state for this capability Group. Callers may wait
+// for the owning path to attach the Raft Group instead of treating the race as
+// a storage failure.
+var ErrGroupStateAlreadyOpen = errors.New("capability Group state is already open")
+
 const (
 	UnknownCapabilityRejection = "capability is not registered"
 	UnsupportedReadRejection   = "capability does not implement routed reads"
@@ -117,7 +123,11 @@ type Runtime struct {
 	artifacts       *snapshot.Store
 	recoveryContext context.Context
 
-	mu     sync.RWMutex
+	mu sync.RWMutex
+	// openMu serializes the check/open/register sequence. The durable capstate
+	// store is file-locked, so two startup or membership paths must not open the
+	// same Group concurrently before either one has registered it in states.
+	openMu sync.Mutex
 	states map[string]*capstate.State
 }
 
@@ -164,6 +174,8 @@ func (runtime *Runtime) NewState(ctx context.Context, descriptor rootstate.Group
 	if runtime == nil {
 		return nil, errors.New("capability runtime is nil")
 	}
+	runtime.openMu.Lock()
+	defer runtime.openMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -180,7 +192,7 @@ func (runtime *Runtime) NewState(ctx context.Context, descriptor rootstate.Group
 	existing := runtime.states[descriptor.GroupID]
 	runtime.mu.RUnlock()
 	if existing != nil {
-		return nil, fmt.Errorf("capability Group %q state is already open", descriptor.GroupID)
+		return nil, fmt.Errorf("%w: %q", ErrGroupStateAlreadyOpen, descriptor.GroupID)
 	}
 	state, err := capstate.OpenWithPacks(filepath.Join(runtime.stateRoot, "dubi-capability-groups", descriptor.GroupID),
 		descriptor.GroupID, runtime.mux, runtime.packs)
@@ -196,7 +208,7 @@ func (runtime *Runtime) NewState(ctx context.Context, descriptor rootstate.Group
 	if runtime.states[descriptor.GroupID] != nil {
 		runtime.mu.Unlock()
 		_ = state.Close()
-		return nil, fmt.Errorf("capability Group %q state is already open", descriptor.GroupID)
+		return nil, fmt.Errorf("%w: %q", ErrGroupStateAlreadyOpen, descriptor.GroupID)
 	}
 	runtime.states[descriptor.GroupID] = state
 	runtime.mu.Unlock()

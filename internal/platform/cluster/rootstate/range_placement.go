@@ -3,6 +3,7 @@ package rootstate
 import (
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -96,12 +97,19 @@ func (s *State) applyRangePlacement(batch *pebble.Batch, placement RangePlacemen
 	if err := placement.Validate(); err != nil {
 		return "invalid Range Region placement", nil
 	}
-	encoded, found, err := s.get(rangeIDKey(placement.RangeID))
+	rangePath, found, err := s.get(rangeIDKey(placement.RangeID))
 	if err != nil || !found {
 		return "Range is not registered", nil
 	}
+	if !strings.HasPrefix(string(rangePath), "data/range/") {
+		return "Range directory is invalid", nil
+	}
+	encoded, found, err := s.get(rangePath)
+	if err != nil || !found {
+		return "Range directory is invalid", nil
+	}
 	var descriptor Range
-	if err := decodeStreamJSON(encoded, &descriptor); err != nil {
+	if err := decodeStreamJSON(encoded, &descriptor); err != nil || descriptor.Validate() != nil || descriptor.RangeID != placement.RangeID {
 		return "Range directory is invalid", nil
 	}
 	if descriptor.State != RangeStateActive || descriptor.Epoch != placement.RangeEpoch || descriptor.OwnerGroupID != placement.OwnerGroupID {
