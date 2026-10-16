@@ -138,8 +138,13 @@ func pendingCut(ctx context.Context, barrier PendingBarrier, root PendingRoot, l
 			}
 		}
 	}
+	// A one-node old cohort is valid during the initial small-Region growth
+	// path: the Region may have formed before its other Nodes joined. Recovery
+	// from an already degraded cohort keeps its separate minimum-source gate in
+	// fillMode; this check only verifies that every sealed source is still a
+	// current Root member.
 	sources, all, err := root.RootMembers(sourceIDs...)
-	if err != nil || !all || len(sources) != len(sourceIDs) || len(sourceIDs) < 2 {
+	if err != nil || !all || len(sources) != len(sourceIDs) || len(sourceIDs) == 0 {
 		return rootstate.RegionProgress{}, nil, errors.Join(err, errors.New("sealed old participants are not current Root members"))
 	}
 	for i, source := range sources {

@@ -103,6 +103,26 @@ func TestFillPendingLocalUsesFullOldCohortAndRechecksRoot(t *testing.T) {
 	}
 }
 
+func TestPendingCutAllowsSingleNodeInitialRegionGrowth(t *testing.T) {
+	seal, root, _ := pendingFixture(t)
+	seal.Intent.Previous.Fence.Members = []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}}
+	seal.Intent.Next.Nodes = []uint64{1, 4}
+	root.view.Current.Nodes = []uint64{1}
+	root.view.Pending = &seal.Intent.Next
+	root.sources = []rootstate.Node{{RaftID: 1, RegionID: "west", NodeID: "node-1", Address: "node-1:7443"}}
+	if err := seal.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	view, sources, err := pendingCut(context.Background(), &pendingTestBarrier{}, root, 4, "region-west", seal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(view, root.view) || !reflect.DeepEqual(sources, root.sources) {
+		t.Fatalf("single-node old cohort was not retained: view=%+v sources=%+v", view, sources)
+	}
+}
+
 func TestFillPendingLocalLeavesTimeForAnotherSealedCutSource(t *testing.T) {
 	seal, root, cut := pendingFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
