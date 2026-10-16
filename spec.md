@@ -203,6 +203,8 @@ Node/Store/Volume 的 Drain 都是持久、可恢复的操作：`请求与预检
 
 ## 8. 数据安全与故障策略
 
+Region 明确退休并以同名新代际重新确认后，Range placement 只刷新同一 Range epoch、同一 Region/Group 集合的 generation；不会借刷新偷偷改变 Range Owner 或 Region 集合。
+
 当前已落地跨 Region 数据多数的规划与显式写入原语：Root 在同一 applied cut 固定选定的 Region cohort、Node 集合及其 generation/Group epoch/fence，并持久化 Range→Region Group 映射；`rangeplacement` 后台协调器从稳定 confirmed cohort 自动生成确定性映射，不按在线数量缩小集合。Placement 再按每个 Region 的本地严格多数计算同一 RecordID 的物理覆盖，并按 Active Region 的严格多数判断 `GeoDataCoverage`，现已覆盖 1/2 节点小 Region。`StageGeo`/`Writer.WriteGeoFromRange` 可在显式选择时从该映射先写入 Owner Region，再取得固定计划中的 Region 严格多数；目标 Region 的 `GeoMetadataMirror` 账目可保存当前引用切点和本地 fence，供来源 Region 丢失后的恢复判断；`SelectWritePolicy` 明确至少三个本地 Node 时采用本地优先，小 Region 必须等待 Region 严格多数，默认本地优先写入不被悄悄改变。覆盖可绑定到单一权威引用的 RequestID、Index、Hash、Range epoch 和路由键，防止引用替换后复用旧观察；Owner Group 还能持久保存并在两种快照中校验 `GeoCoverageRecord`，引用替换/删除会原子清除。`GeoMetadataMirror` 现在可通过经认证的 capability RPC 提交到已覆盖 Region 的任一当前 voter，并等待目标 StateMachine 的持久 Result；未覆盖 Region 留在后续修复账中。`Writer.WriteGeo` 在提供该传输器时会先完成已覆盖 Region 镜像，再发布 GeoReady 账目。该账目仍只是能力中立的物理观察，不等同于完整恢复流程；日志尾部追赶和来源 Region 丢失后的重建仍需独立协议，不能因为区域字节覆盖达到多数就提前发布 `GeoReady`。
 
 底座统一维护“按持久拓扑应达到的多数派目标”和“当前已证实的存放状态”两套状态。多数门槛由稳定参与集合、Active Region 和能力的权威持久性推导，健康观察只影响可选目标，不能自动缩小分母；用户不输入副本数。Group 成员、实际数据拷贝及其校验结果描述事实；计划、暂存或未同步的拷贝不算已确认。能力可声明权威持久、可由权威来源重建或纯易失，但不得把 Cache 或派生索引当作权威数据的多数派证明。

@@ -90,10 +90,9 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, r := range ranges {
-		if _, found, err := c.root.RangePlacement(r.RangeID); err != nil {
+		prior, found, err := c.root.RangePlacement(r.RangeID)
+		if err != nil {
 			return err
-		} else if found {
-			continue
 		}
 		var progress []rootstate.RegionProgress
 		for _, group := range groups {
@@ -112,12 +111,27 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 		if err != nil {
 			// A Range can exist before all Region cohorts are confirmed. Leave it
 			// pending for the next reconciliation round rather than publishing a
-			// partial placement.
+			// partial placement or generation refresh.
+			continue
+		}
+		if found && rangePlacementEqual(prior, placement) {
 			continue
 		}
 		return c.publish(ctx, placement)
 	}
 	return nil
+}
+
+func rangePlacementEqual(a, b rootstate.RangePlacement) bool {
+	if a.RangeID != b.RangeID || a.RangeEpoch != b.RangeEpoch || a.OwnerGroupID != b.OwnerGroupID || len(a.Regions) != len(b.Regions) {
+		return false
+	}
+	for i := range a.Regions {
+		if a.Regions[i] != b.Regions[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Coordinator) publish(ctx context.Context, placement rootstate.RangePlacement) error {

@@ -125,7 +125,8 @@ func (s *State) applyRangePlacement(batch *pebble.Batch, placement RangePlacemen
 			return "Range placement Group is invalid", nil
 		}
 		cohort, found, err := s.regionCohort(region.RegionID, region.Generation)
-		if err != nil || !found || cohort.GroupID != region.GroupID || cohort.State != RegionCohortConfirmed {
+		head, headFound, headErr := s.regionCohortHead(region.RegionID)
+		if err != nil || headErr != nil || !found || !headFound || cohort.GroupID != region.GroupID || cohort.State != RegionCohortConfirmed || head.CurrentGeneration != region.Generation {
 			return "Range placement Region cohort is not confirmed", nil
 		}
 	}
@@ -136,10 +137,29 @@ func (s *State) applyRangePlacement(batch *pebble.Batch, placement RangePlacemen
 		if err := decodeStreamJSON(current, &prior); err != nil {
 			return "", err
 		}
-		if !slices.Equal(prior.Regions, placement.Regions) || prior.RangeEpoch != placement.RangeEpoch || prior.OwnerGroupID != placement.OwnerGroupID {
+		if prior.RangeEpoch != placement.RangeEpoch || prior.OwnerGroupID != placement.OwnerGroupID || !sameRangeRegionSet(prior.Regions, placement.Regions) {
 			return "Range placement is already fixed for this Range epoch", nil
 		}
-		return "", nil
+		if slices.Equal(prior.Regions, placement.Regions) {
+			return "", nil
+		}
+		// A confirmed Region cohort may advance generation after an explicit
+		// retirement and same-name reformation. Refresh only those generation
+		// fences; changing the Range epoch, Owner, or Region set requires a
+		// separate Range-level placement transition.
+		return "", setJSON(batch, rangePlacementKey(placement.RangeID), placement)
 	}
 	return "", setJSON(batch, rangePlacementKey(placement.RangeID), placement)
+}
+
+func sameRangeRegionSet(a, b []RangeRegionPlacement) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].RegionID != b[i].RegionID || a[i].GroupID != b[i].GroupID {
+			return false
+		}
+	}
+	return true
 }

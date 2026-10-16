@@ -27,3 +27,33 @@ func TestRangePlacementValidationRequiresSortedRegionsAndOwner(t *testing.T) {
 		t.Fatal("duplicate Region placement accepted")
 	}
 }
+
+func TestRangePlacementRefreshesSameRegionGeneration(t *testing.T) {
+	state, _ := cohortFixture(t)
+	applyRootFileCommand(t, state, cohortPlan(0, 1, 2, 3))
+	applyRootFileCommand(t, state, cohortConfirm(1, 2, 100))
+	applyRootFileCommand(t, state, Command{Type: RegisterTenant, Tenant: &Tenant{TenantID: "tenant"}})
+	applyRootFileCommand(t, state, Command{Type: CreateDataset, Dataset: &Dataset{TenantID: "tenant", CapabilityID: "record", DatasetID: "items", RangeID: "range-a", OwnerGroupID: "regional-west"}})
+	applyRootFileCommand(t, state, Command{Type: ActivateRange, Activation: &RangeActivation{RangeID: "range-a", OwnerGroupID: "regional-west", Epoch: 1, OwnerRequestID: "owner-range-a", OwnerAppliedIndex: 1000}})
+
+	initial := RangePlacement{RangeID: "range-a", RangeEpoch: 1, OwnerGroupID: "regional-west", Regions: []RangeRegionPlacement{{RegionID: "west", GroupID: "regional-west", Generation: 1}}}
+	applyRootFileCommand(t, state, Command{Type: SetRangePlacement, RangePlacement: &initial})
+
+	applyRootFileCommand(t, state, cohortPlan(1, 1, 2, 3, 4))
+	cohortPublish(t, state, 2, []uint64{1, 2, 3, 4})
+	applyRootFileCommand(t, state, cohortConfirm(2, 3, 1003))
+	refreshed := initial
+	refreshed.Regions = append([]RangeRegionPlacement(nil), initial.Regions...)
+	refreshed.Regions[0].Generation = 2
+	applyRootFileCommand(t, state, Command{Type: SetRangePlacement, RangePlacement: &refreshed})
+	got, found, err := state.RangePlacement("range-a")
+	if err != nil || !found || got.Regions[0].Generation != 2 {
+		t.Fatalf("refreshed Range placement = %+v, found=%v, err=%v", got, found, err)
+	}
+	index := state.AppliedIndex()
+	stale := applyDirect(t, state, &index, Command{Version: FormatVersion, RequestID: "stale-range-placement",
+		Type: SetRangePlacement, RangePlacement: &initial})
+	if stale.Error == "" {
+		t.Fatal("historical Region generation was accepted after refresh")
+	}
+}
