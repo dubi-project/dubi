@@ -14,7 +14,7 @@ Root 投票角色、区域 Group 的投票角色、数据参与集合分别记�
 
 跨 Region 物理覆盖现在有一个能力中立的规划和写入原语：Root 在同一 applied cut 返回明确选定的已确认 Region cohort 及其注册 Node，`placement.PlanGeo` 固定 Region、Group、generation、epoch 和 fence。Range placement 在 Region 明确退休并以同名新代际确认后，只刷新同一 Range epoch、同一 Region/Group 集合的 generation；不会借刷新偷偷改变 Range Owner 或 Region 集合。`StageGeo` 先在本地 Region 写入严格多数，再在固定计划中取得足够的 Region 严格多数；离线的非必要 Region 不会缩小分母，而是留下后续修复账。`AssessPublication` 还把覆盖绑定到单一 RecordID、引用 RequestID/Index/Hash、Range epoch 和路由键，引用替换或代际变化时不能复用旧观察。Owner Group 现在可持久保存 `GeoCoverageRecord`，`CheckCommittedGeo` 会在使用前重新核验新鲜计划、已覆盖区域证据和 Owner 当前引用；快照会校验引用回链，引用替换/删除会原子清除旧账目。`Writer.WriteGeo` 是显式 opt-in 的同步跨区写入路径，不改变默认本地多数优先行为，并要求元数据镜像传输器在已覆盖 Region 保存引用切点后才进入 coverage 确认。该账目只证明同一不可变 RecordID 的物理持有观察，不能直接发布 `GeoReady`，因为权威引用/日志切点的跨区可恢复性仍需后续接通。
 
-Geo 元数据镜像现在支持节点本地的持久 retry ledger 和有界 worker round：临时无法联系任何目标 voter 时，确定性的 mirror 请求会保留在有界账目中；某一目标 Region 成功应用后才删除对应项，目标状态机的持久拒绝不会盲目切换节点重试。每轮重试必须由调用方用当前 Root 计划解析 Region generation/epoch/fence；旧计划无法解析时欠账保留，不会被丢弃。托管 Server 已接入该账目的周期 worker；它只处理当前 Root placement 能重新匹配的任务。该账目本身不改变 Region 多数、不发布 GeoReady；源 Region 丢失后的重建流程仍需接入。
+Geo 元数据镜像现在支持节点本地的持久 retry ledger 和有界 worker round：临时无法联系任何目标 voter 时，确定性的 mirror 请求会保留在有界账目中；某一目标 Region 成功应用后才删除对应项，目标状态机的持久拒绝不会盲目切换节点重试。每轮重试必须由调用方用当前 Root 计划解析 Region generation/epoch/fence；同名 Region 明确退休后重新形成时，只要 Region、Group、Owner 路由和引用仍一致，欠账会自动重绑定到当前 generation/epoch/fence，再投递给新节点；不同 Region 或过期 Owner 引用则继续挂起。托管 Server 已接入该账目的周期 worker；它只处理当前 Root placement 能重新匹配的任务。该账目本身不改变 Region 多数、不发布 GeoReady；源 Region 丢失后的重建流程仍需接入。
 
 ## 持久状态与转换
 

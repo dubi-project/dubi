@@ -32,9 +32,10 @@ type GeoMetadataRetryStore struct {
 	closed bool
 }
 
-// GeoMirrorPlanResolver must derive a fresh current Region plan from Root. It
-// must reject stale generation/epoch/fence data rather than adapting the old
-// mirror to whatever nodes happen to be online.
+// GeoMirrorPlanResolver must derive a fresh current Region plan from Root. A
+// retry may rebind a mirror to a later generation of the same Region/Group,
+// but the resolver remains responsible for rejecting a stale Owner route or
+// publication reference.
 type GeoMirrorPlanResolver func(context.Context, routedstate.GeoMetadataMirror) (placement.LocalPlan, error)
 
 type GeoMirrorRetryReport struct {
@@ -44,8 +45,10 @@ type GeoMirrorRetryReport struct {
 }
 
 // RetryPendingGeoMetadata is one bounded worker round. Successful mirrors are
-// removed only after a durable destination Result. Failed or stale entries
-// remain available for a later Root-authorized round.
+// removed only after a durable destination Result. Failed entries remain
+// available for a later Root-authorized round. A mirror from an older
+// generation is re-bound only to the current generation of the same Region
+// and Group; it is never moved to a different Region or routing Owner.
 func RetryPendingGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransport,
 	store *GeoMetadataRetryStore, resolve GeoMirrorPlanResolver) (GeoMirrorRetryReport, error) {
 	if ctx == nil || transport == nil || store == nil || resolve == nil {
@@ -65,7 +68,11 @@ func RetryPendingGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTra
 		if err != nil {
 			continue
 		}
-		if _, err := RetryGeoMetadata(ctx, transport, plan, mirror); err != nil {
+		current, ok := rebindGeoMetadataMirror(mirror, plan)
+		if !ok {
+			continue
+		}
+		if _, err := RetryGeoMetadata(ctx, transport, plan, current); err != nil {
 			continue
 		}
 		if err := store.Delete(mirror); err != nil {
@@ -75,6 +82,29 @@ func RetryPendingGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTra
 	}
 	report.Pending -= report.Completed
 	return report, nil
+}
+
+func rebindGeoMetadataMirror(mirror routedstate.GeoMetadataMirror, plan placement.LocalPlan) (routedstate.GeoMetadataMirror, bool) {
+	if mirror.Validate() != nil || mirror.RegionID != plan.RegionID || mirror.DestinationGroupID != plan.GroupID ||
+		plan.Generation == 0 || plan.GroupEpoch == 0 || plan.FenceIndex == 0 {
+		return routedstate.GeoMetadataMirror{}, false
+	}
+	// A task from the future cannot be made current by a later retry. This
+	// protects against a stale Root cut or a corrupted local ledger.
+	if mirror.Generation > plan.Generation {
+		return routedstate.GeoMetadataMirror{}, false
+	}
+	if mirror.Generation == plan.Generation && mirror.GroupEpoch == plan.GroupEpoch && mirror.FenceIndex == plan.FenceIndex {
+		return mirror, true
+	}
+	current := mirror
+	current.Generation = plan.Generation
+	current.GroupEpoch = plan.GroupEpoch
+	current.FenceIndex = plan.FenceIndex
+	if current.Validate() != nil {
+		return routedstate.GeoMetadataMirror{}, false
+	}
+	return current, true
 }
 
 type geoRetryEntry struct {

@@ -18,6 +18,7 @@ import (
 type geoMirrorTransport struct {
 	failed   map[uint64]bool
 	attempts []uint64
+	mirrors  []routedstate.GeoMetadataMirror
 }
 
 func (t *geoMirrorTransport) MirrorGeo(_ context.Context, node uint64, _ string, encoded []byte) (capstate.Result, error) {
@@ -29,6 +30,7 @@ func (t *geoMirrorTransport) MirrorGeo(_ context.Context, node uint64, _ string,
 	if err != nil || command.Type != routedstate.MirrorGeo {
 		return capstate.Result{}, err
 	}
+	t.mirrors = append(t.mirrors, *command.GeoMetadata)
 	return capstate.Result{RequestID: command.RequestID, Index: node, Applied: true}, nil
 }
 
@@ -226,5 +228,85 @@ func TestRetryPendingGeoMetadataKeepsStalePlanDebt(t *testing.T) {
 	}
 	if pending, err := store.List(); err != nil || len(pending) != 2 {
 		t.Fatal("stale mirror debt was dropped", pending, err)
+	}
+}
+
+func TestRetryPendingGeoMetadataRebindsSameNameRegionGeneration(t *testing.T) {
+	plan, target, descriptor := geoStagePlanWithSizes(t, 1, 1)
+	staged, err := StageGeo(context.Background(), plan, 1, "node_00000000000000000000000000000001", &testStore{}, &geoStageSender{}, descriptor, []byte("body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordID, err := descriptor.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication := placement.PublicationCut{RecordID: recordID, RequestID: "publish-reformed", Index: 14,
+		CommandHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		RangeID:     target.RangeID, RangeEpoch: target.Epoch, RoutingKey: target.RoutingKey}
+	mirrors, err := GeoMetadataMirrors(target, descriptor, publication, plan, staged.Evidence)
+	if err != nil || len(mirrors) != 2 {
+		t.Fatal(mirrors, err)
+	}
+	store, err := OpenGeoMetadataRetryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, mirror := range mirrors {
+		if err := store.Save(mirror); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The west Region keeps its name and deterministic GroupID, but has a
+	// confirmed generation-2 cohort after the old Region was retired.
+	view := rootstate.RegionPlacementView{AppliedIndex: 8}
+	for _, region := range plan.Regions() {
+		nodes := region.Nodes()
+		generation := region.Generation
+		reformation := false
+		if region.RegionID == "west" {
+			nodes = []rootstate.Node{{RaftID: 7, NodeID: "node_00000000000000000000000000000007", RegionID: "west", Address: "w-new"}}
+			generation = 2
+			reformation = true
+		}
+		ids := make([]uint64, len(nodes))
+		members := make([]rootstate.GroupMember, len(nodes))
+		for i, node := range nodes {
+			ids[i] = node.RaftID
+			members[i] = rootstate.GroupMember{RaftID: node.RaftID, Role: rootstate.GroupMemberVoter}
+		}
+		current := rootstate.RegionCohort{RegionID: region.RegionID, GroupID: region.GroupID, Generation: generation, Reformation: reformation, Nodes: ids,
+			State: rootstate.RegionCohortConfirmed, PlannedIndex: 1, ConfirmedIndex: 5,
+			GroupEpoch: region.GroupEpoch, GroupFenceRequestID: "fence-1", GroupFenceIndex: region.FenceIndex}
+		view.Regions = append(view.Regions, rootstate.RegionPlacement{Progress: rootstate.RegionProgress{AppliedIndex: 8,
+			Eligible: true, Head: rootstate.RegionCohortHead{RegionID: region.RegionID, CurrentGeneration: generation}, Current: current,
+			Group: rootstate.Group{GroupID: region.GroupID, Epoch: region.GroupEpoch, Members: members}}, Nodes: nodes})
+	}
+	fresh, err := placement.PlanGeo(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &geoMirrorTransport{}
+	resolve := func(_ context.Context, mirror routedstate.GeoMetadataMirror) (placement.LocalPlan, error) {
+		for _, region := range fresh.Regions() {
+			if region.RegionID == mirror.RegionID {
+				return region, nil
+			}
+		}
+		return placement.LocalPlan{}, errors.New("Region disappeared")
+	}
+	report, err := RetryPendingGeoMetadata(context.Background(), transport, store, resolve)
+	if err != nil || report.Completed != 2 || report.Pending != 0 || len(transport.mirrors) != 2 {
+		t.Fatal(report, transport.mirrors, err)
+	}
+	for _, mirror := range transport.mirrors {
+		if mirror.RegionID == "west" && (mirror.Generation != 2 || mirror.GroupEpoch != 2 || mirror.FenceIndex != 4) {
+			t.Fatalf("west mirror was not rebound to the current cohort: %+v", mirror)
+		}
+	}
+	if pending, err := store.List(); err != nil || len(pending) != 0 {
+		t.Fatal("rebound mirror debt was not cleared", pending, err)
 	}
 }
