@@ -71,6 +71,22 @@ func TestJoinManagerOpensJoiningGroupOnce(t *testing.T) {
 	}
 }
 
+func TestJoinManagerTreatsConcurrentOpenAsIdempotent(t *testing.T) {
+	host := &joinHost{open: make(map[string]bool)}
+	manager, err := NewJoinManager(host, 7, func(context.Context, rootstate.GroupTaskReference) (raft.StateMachine, error) {
+		return nil, ErrJoiningGroupAlreadyOpen
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.PrepareJoining(context.Background(), joinTask(), 7); err != nil {
+		t.Fatal(err)
+	}
+	if host.groupID != "" || len(host.open) != 0 {
+		t.Fatal("concurrent open path attempted a duplicate local Group attach")
+	}
+}
+
 func TestJoinManagerClosesStateWhenHostRejectsOpen(t *testing.T) {
 	host := &joinHost{open: make(map[string]bool), addErr: errors.New("closed Host")}
 	state := &joinState{}

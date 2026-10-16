@@ -204,13 +204,19 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 }
 
 func (runtime *Runtime) waitForGroupOpen(ctx context.Context, groupID string) error {
-	if ctx == nil {
+	return waitForGroupOpen(ctx, runtime.Host, groupID)
+}
+
+type groupPresence interface{ HasGroup(string) bool }
+
+func waitForGroupOpen(ctx context.Context, host groupPresence, groupID string) error {
+	if ctx == nil || host == nil {
 		return errors.New("Group recovery context is required")
 	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if runtime.Host.HasGroup(groupID) {
+		if host.HasGroup(groupID) {
 			return nil
 		}
 		select {
@@ -374,7 +380,17 @@ func Open(options Options) (*Runtime, error) {
 		if err := root.AuthorizeGroupPreparation(value.RaftID, value.RaftID, task, value.RaftID); err != nil {
 			return nil, err
 		}
-		return groups.NewState(ctx, task.GroupID)
+		state, err := groups.NewState(ctx, task.GroupID)
+		if !errors.Is(err, capabilityruntime.ErrGroupStateAlreadyOpen) {
+			return state, err
+		}
+		// Startup recovery may have registered the durable capability state a
+		// moment before attaching the Raft Group. Wait for that owner instead of
+		// reporting a transient duplicate-open failure to the scheduler.
+		if waitErr := waitForGroupOpen(ctx, host, task.GroupID); waitErr != nil {
+			return nil, waitErr
+		}
+		return nil, groupmembership.ErrJoiningGroupAlreadyOpen
 	}
 	joiner, err := groupmembership.NewJoinManager(host, value.RaftID, joiningFactory)
 	if err != nil {

@@ -21,6 +21,12 @@ type JoiningHost interface {
 
 type StateFactory func(ctx context.Context, task rootstate.GroupTaskReference) (raft.StateMachine, error)
 
+// ErrJoiningGroupAlreadyOpen tells the membership coordinator that another
+// local recovery path is already attaching this exact Group. The caller can
+// treat preparation as idempotently complete after the owner publishes the
+// Group to the local Raft Host.
+var ErrJoiningGroupAlreadyOpen = errors.New("joining Group is already being opened")
+
 // JoinManager opens an empty local Group before its RaftID is proposed as a
 // Learner. The injected factory owns capability-specific state construction;
 // the Raft layer never guesses a module's persistent format.
@@ -56,6 +62,9 @@ func (manager *JoinManager) PrepareJoining(ctx context.Context, task rootstate.G
 	}
 	state, err := manager.factory(ctx, task)
 	if err != nil {
+		if errors.Is(err, ErrJoiningGroupAlreadyOpen) {
+			return nil
+		}
 		return fmt.Errorf("create joining Group state: %w", err)
 	}
 	if state == nil {
