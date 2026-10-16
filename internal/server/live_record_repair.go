@@ -170,7 +170,7 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 			return err
 		}
 		if !confirmed || !progress.Eligible || progress.Pending != nil ||
-			progress.Head.PendingGeneration != 0 || len(progress.Current.Nodes) == 0 ||
+			progress.Head.PendingGeneration != 0 || len(progress.Current.Nodes) < 3 ||
 			!slices.Contains(progress.Current.Nodes, worker.runtime.Identity.RaftID) {
 			continue
 		}
@@ -254,9 +254,10 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 		return fmt.Errorf("Group %s leader status: %w", groupID, err)
 	}
 	failures := slices.Clone(page.Failures)
-	// A one- or two-Node Region may still need physical repair after a new
-	// Node joins, but it cannot publish LocalReady: the foreground policy
-	// requires a local majority only for a Region with at least three Nodes.
+	// The local foreground repair path is only for Regions that can publish a
+	// local physical-majority confirmation. One- and two-Node Regions use the
+	// cross-Region/Geo repair path; treating them as local-repair failures would
+	// create a false background error even when their configured policy is sound.
 	if status.LeaderID == worker.runtime.Identity.RaftID && len(regionViews[groupID].Current.Nodes) >= 3 {
 		writer := recordwrite.Writer{Barrier: worker.runtime.Host, Root: worker.runtime.Root,
 			Owner: owner, LocalID: worker.runtime.Identity.RaftID,
