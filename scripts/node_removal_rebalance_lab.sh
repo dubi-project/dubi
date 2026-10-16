@@ -152,6 +152,26 @@ retry_command() {
 	die "$label did not succeed"
 }
 
+# A generation handoff may deliberately reject a mutation while the data
+# Group is fenced. That rejection is durably tied to its RequestID, so retrying
+# the same ID would correctly replay the rejection forever. The lab is testing
+# eventual readiness, not client-side retry identity; use a fresh ID for each
+# rejected readiness attempt and keep the stable IDs for the actual success
+# path once the Group is writable.
+retry_record_put() {
+	local label=$1 store=$2 address=$3 request_prefix=$4 tenant=$5 dataset=$6 key=$7 value=$8
+	local out="$lab_dir/$label.json" err="$lab_dir/$label.err"
+	for attempt in $(seq 1 240); do
+		if "$binary" record put --store "$store" --server "$address" \
+			--request-id "${request_prefix}-${attempt}" "$tenant" "$dataset" "$key" "$value" >"$out" 2>"$err"; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	tail -30 "$err" >&2 || true
+	die "$label did not succeed"
+}
+
 wait_record() {
 	local label=$1 store=$2 address=$3 key=$4 expected=$5
 	local out="$lab_dir/$label.get.json" err="$lab_dir/$label.get.err"
@@ -206,16 +226,14 @@ printf 'identity gate: captured sh-03 as %s\n' "$old_id"
 
 retry_command "dataset create" "$lab_dir/dataset.json" "$lab_dir/dataset.err" \
 	"$binary" dataset create --store "$n1_store" --server "$n1_addr" --request-id removal-dataset demo items
-retry_command "write before removal" "$lab_dir/before.json" "$lab_dir/before.err" \
-	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id removal-before demo items before survives
+retry_record_put "before" "$n1_store" "$n1_addr" removal-before demo items before survives
 wait_record before-from-n3 "$n3_store" "$n3_addr" before survives
 printf 'data gate: old three-Node cohort holds the initial record\n'
 
 kill "$n3_pid" 2>/dev/null || true
 wait "$n3_pid" 2>/dev/null || true
 n3_pid=""
-retry_command "write with failed Node offline" "$lab_dir/offline.json" "$lab_dir/offline.err" \
-	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id removal-offline demo items offline majority
+retry_record_put "offline" "$n1_store" "$n1_addr" removal-offline demo items offline majority
 
 retry_command "manual node removal" "$lab_dir/remove.json" "$lab_dir/remove.err" \
 	"$binary" node remove --store "$n1_store" --server "$n1_addr" sh-03
