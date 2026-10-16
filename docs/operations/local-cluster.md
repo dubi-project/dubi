@@ -2,6 +2,14 @@
 
 这是在一台开发机上验证底座命令和第一条数据读写链路的最小流程。三个 Store 和三个端口模拟三个 Node，但仍共用一台机器、磁盘与网络；不能据此判断真实故障域耐久性。可验证初始化、自动加入、Root 多数、数据 Group、Range、Record 写读与重启恢复。这里重复写 `--store` / `--server` **仅因为同一账号在一台机器上模拟三个节点**；正常一机一节点时运行 `dubi init`、`dubi server`、`dubi status`、`dubi volume list` 都不用这些参数。Record 命令使用 Node 证书，仅用于开发验证，不是租户客户端 API。
 
+要自动跑完启动、三节点加入、Pack 多数读写、停一节点继续写、同 RequestID 重试和重启追平，可在仓库根目录执行：
+
+```sh
+bash scripts/foundation_three_node_lab.sh
+```
+
+脚本会在 macOS/Linux 上创建临时稀疏卷，避免开发机根卷余量触发正常的磁盘保护门禁；默认只占用实际写入的空间，结束后自动卸载和清理。可用 `DUBI_LAB_PORT_BASE=18443` 改端口，`DUBI_LAB_SIZE_GIB=32` 调整测试卷的逻辑容量。该脚本是开发证据，不替代跨机器、跨区域或长时间故障验收。
+
 本地示例只指定 `--listen` 来区分三个端口；节点对外发布的地址会从实际监听地址自动确定。只有监听地址与其他节点应连接的地址不同（如 NAT 或端口映射）时，才需要额外指定 `--advertise`。
 
 先在仓库 `dubi/` 目录构建二进制，并记下临时目录路径；在其他终端将第一终端打印的路径重新设为 `DUBI_DEMO`，例如 `export DUBI_DEMO=/tmp/dubi-demo.实际后缀`：
