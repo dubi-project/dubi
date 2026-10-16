@@ -25,7 +25,7 @@ func (s *geoStageSender) PutRecord(_ context.Context, node rootstate.Node, d rec
 	}
 	id, _ := d.ID()
 	return raftrpc.HoldingObservation{RaftID: node.RaftID, NodeID: node.NodeID, RootConfirmedIndex: 7,
-		Holding: records.Holding{RecordID: id, Descriptor: d, StoreID: fmt.Sprintf("store-%d", node.RaftID), VolumeID: fmt.Sprintf("volume-%d", node.RaftID)}}, nil
+		Holding: records.Holding{RecordID: id, Descriptor: d, StoreID: fmt.Sprintf("store_%032x", node.RaftID), VolumeID: fmt.Sprintf("volume_%032x", node.RaftID)}}, nil
 }
 
 func geoStagePlan(t *testing.T) (placement.GeoPlan, router.Target, records.Descriptor) {

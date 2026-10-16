@@ -3,6 +3,7 @@ package recordwrite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
@@ -150,6 +151,46 @@ func TestGeoMetadataMirrorsFollowCoveredRegionMajority(t *testing.T) {
 	results, err := ReplicateGeoMetadata(context.Background(), &geoMirrorTransport{}, plan, mirrors)
 	if err != nil || len(results) != 2 {
 		t.Fatalf("covered Region mirror delivery = %+v, err=%v", results, err)
+	}
+}
+
+func TestGeoReceiptMatchesCurrentRegionGeneration(t *testing.T) {
+	plan, target, descriptor := geoStagePlan(t)
+	staged, err := StageGeo(context.Background(), plan, 1, "node_00000000000000000000000000000001", &testStore{}, &geoStageSender{}, descriptor, []byte("body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range staged.Evidence {
+		for j := range staged.Evidence[i].Holdings {
+			staged.Evidence[i].Holdings[j].StoreID = fmt.Sprintf("store_%032x", staged.Evidence[i].Holdings[j].RaftID)
+		}
+	}
+	recordID, err := descriptor.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication := placement.PublicationCut{RecordID: recordID, RequestID: "geo-reconfirm-publish", Index: 17,
+		CommandHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		RangeID:     target.RangeID, RangeEpoch: target.Epoch, RoutingKey: target.RoutingKey}
+	coverage, err := plan.AssessPublication(publication, staged.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := GeoConfirmationClaim(target, descriptor.Key, coverage, staged.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := capstate.RecordReference{Version: 2, Descriptor: descriptor, OwnerGroupID: target.OwnerGroupID,
+		RangeID: target.RangeID, RangeEpoch: target.Epoch, RoutingKey: target.RoutingKey,
+		RequestID: publication.RequestID, CommandHash: publication.CommandHash, Index: publication.Index}
+	receipt := capstate.GeoCoverageRecord{Version: 1, Claim: claim, ReferenceCommandHash: publication.CommandHash,
+		RequestID: "geo-reconfirm-receipt", Index: 18}
+	if !GeoReceiptMatchesPlan(receipt, ref, target, plan) {
+		t.Fatal("current Geo receipt was rejected")
+	}
+	fresh, _, _ := geoStagePlanWithSizes(t, 2, 3)
+	if GeoReceiptMatchesPlan(receipt, ref, target, fresh) {
+		t.Fatal("Geo receipt survived a changed Region generation/cohort")
 	}
 }
 

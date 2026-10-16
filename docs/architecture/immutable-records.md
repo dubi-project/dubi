@@ -119,6 +119,8 @@ Result 在任何事务 Pack 写入前检查完整编码不超过 64 MiB，包含
 
 跨 Region Repair 任务现在保存当前引用切点到本地账本；后台重试会重新读取 Range/Region GeoPlan，逐节点观察真实持有，执行目标 Node 自主拉取，再用完整 `GeoPlan.Assess` 复验区域多数后才删除任务。任务账本不保存 Volume、地址或副本数，也不能替代 `GeoReady` 元数据确认。
 
+Geo worker 还会扫描已有引用的 GeoCoverage 账目：如果 Region generation、Group epoch 或 fence 已变化，就把该引用重新加入本地账本，先按当前固定 GeoPlan 补齐物理观察，再重新发送覆盖 Region 的 metadata mirror，并以同一不可变引用原子写入新的 Owner GeoConfirmation。证明仍不是租约，不改变 Region 分母；跨 Region 日志追赶、来源 Region 丢失后的完整重平衡和长期持久游标仍未完成。
+
 ## 验证与后续接线
 
 进程内修复器对未完成的分页扫描以有界短间隔续页，扫完后恢复低频巡检；一次只处理一个小页，仍按 Group 轮转，不额外要求运维配置。最近发现的 Group 欠账保留在本机诊断状态中：一页无错不清除前页欠账，只有完整新一轮无欠账才解除。`dubi status` 通过只接受本机 Node 证书的内部诊断 RPC 读取此观察，最多显示 64 项并给出总数；进程重启后会重新扫描。它不是持久覆盖账目，空列表不代表扫描完成或全群物理多数已就绪。

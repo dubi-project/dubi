@@ -31,6 +31,10 @@ type geoMetadataRepair struct {
 	store   *recordwrite.GeoMetadataRetryStore
 	records *recordrepair.GeoRecordRepairStore
 	report  func(error)
+	// geoCursors bound discovery work to one reference page per Group and
+	// round. They are only an optimization; a restart or failed page restarts
+	// that Group's scan from the beginning.
+	geoCursors map[string][]byte
 }
 
 func (worker *geoMetadataRepair) run(ctx context.Context) {
@@ -67,7 +71,11 @@ func (worker *geoMetadataRepair) stepRecords(ctx context.Context) (recordrepair.
 	if _, err := worker.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return recordrepair.GeoRecordRepairReport{}, err
 	}
-	return recordrepair.RetryPendingGeoRecords(ctx, worker.records,
+	stale, err := worker.discoverStaleGeoRecords(ctx)
+	if err != nil {
+		return recordrepair.GeoRecordRepairReport{}, err
+	}
+	report, retryErr := recordrepair.RetryPendingGeoRecords(ctx, worker.records,
 		func(resolveCtx context.Context, ref capstate.RecordReference) (placement.GeoPlan, string, error) {
 			_, plan, err := placement.ReadRangeGeoPlan(resolveCtx, worker.runtime.Host, worker.runtime.Root,
 				ref.RangeID, rootstate.MaxRegionCohortNodes, rootstate.MaxRegionCohortNodes)
@@ -107,6 +115,115 @@ func (worker *geoMetadataRepair) stepRecords(ctx context.Context) (recordrepair.
 		func(observeCtx context.Context, node rootstate.Node, descriptor records.Descriptor) (raftrpc.HoldingObservation, error) {
 			return worker.client.ObserveRecordHolding(observeCtx, node.RaftID, descriptor)
 		}, worker.client)
+	if retryErr != nil {
+		return report, retryErr
+	}
+	if err := worker.reconfirmStaleGeoRecords(ctx, stale); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// discoverStaleGeoRecords turns a current, but generation-bound, GeoCoverage
+// mismatch into the same durable record-repair ledger used for missing bytes.
+// The discovery walk is bounded per page and never infers placement from
+// online Nodes.
+func (worker *geoMetadataRepair) discoverStaleGeoRecords(ctx context.Context) ([]capstate.RecordReference, error) {
+	if worker == nil || worker.runtime == nil || worker.records == nil {
+		return nil, nil
+	}
+	descriptors, err := worker.runtime.Root.Groups()
+	if err != nil {
+		return nil, err
+	}
+	var stale []capstate.RecordReference
+	if worker.geoCursors == nil {
+		worker.geoCursors = make(map[string][]byte)
+	}
+	active := make(map[string]bool, len(descriptors))
+	for _, descriptor := range descriptors {
+		active[descriptor.GroupID] = true
+		owner, found := worker.runtime.Capabilities.Resolve(descriptor.GroupID)
+		if !found || owner == nil {
+			continue
+		}
+		cursor := worker.geoCursors[descriptor.GroupID]
+		page, pageErr := owner.WalkCurrentReferencesPage(ctx, worker.runtime.Host, cursor, liveRepairPageLimit,
+			func(ref capstate.RecordReference) error {
+				_, plan, planErr := placement.ReadRangeGeoPlan(ctx, worker.runtime.Host, worker.runtime.Root,
+					ref.RangeID, rootstate.MaxRegionCohortNodes, rootstate.MaxRegionCohortNodes)
+				if planErr != nil || len(plan.Regions()) < 2 {
+					return nil
+				}
+				target := router.Target{Keyspace: ref.Descriptor.Keyspace, RangeID: ref.RangeID,
+					OwnerGroupID: ref.OwnerGroupID, Epoch: ref.RangeEpoch, RoutingKey: ref.RoutingKey}
+				var receipt capstate.GeoCoverageRecord
+				var hasReceipt bool
+				if _, readErr := owner.ReadRouted(ctx, worker.runtime.Host, target, func(view capstate.ReadView) error {
+					var err error
+					receipt, hasReceipt, err = view.GeoCoverage(ref.Descriptor.Key)
+					return err
+				}); readErr != nil {
+					return readErr
+				}
+				if !hasReceipt || recordwrite.GeoReceiptMatchesPlan(receipt, ref, target, plan) {
+					return nil
+				}
+				if saveErr := worker.records.Save(ref); saveErr != nil {
+					return saveErr
+				}
+				stale = append(stale, ref)
+				return nil
+			})
+		if pageErr != nil {
+			delete(worker.geoCursors, descriptor.GroupID)
+			return stale, pageErr
+		}
+		if page.Done {
+			delete(worker.geoCursors, descriptor.GroupID)
+		} else if len(page.Cursor) == 0 || bytes.Equal(page.Cursor, cursor) {
+			delete(worker.geoCursors, descriptor.GroupID)
+			return stale, fmt.Errorf("Group %s Geo discovery cursor did not advance", descriptor.GroupID)
+		} else {
+			worker.geoCursors[descriptor.GroupID] = page.Cursor
+		}
+	}
+	for groupID := range worker.geoCursors {
+		if !active[groupID] {
+			delete(worker.geoCursors, groupID)
+		}
+	}
+	return stale, nil
+}
+
+func (worker *geoMetadataRepair) reconfirmStaleGeoRecords(ctx context.Context, refs []capstate.RecordReference) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	for _, ref := range refs {
+		owner, found := worker.runtime.Capabilities.Resolve(ref.OwnerGroupID)
+		if !found || owner == nil {
+			continue
+		}
+		writer := recordwrite.Writer{Barrier: worker.runtime.Host, Root: worker.runtime.Root, Owner: owner,
+			LocalID: worker.runtime.Identity.RaftID, LocalNodeID: worker.runtime.Identity.NodeID,
+			Store: worker.runtime.Records, Sender: worker.client, Observer: worker.client,
+			Submit: func(call context.Context, groupID string, command []byte) error {
+				if err := call.Err(); err != nil {
+					return err
+				}
+				return worker.runtime.Host.Submit(groupID, command)
+			}, MirrorGeo: worker.client, MirrorRetry: worker.store}
+		confirmed, err := writer.EnsureCurrentGeoConfirmation(ctx, ref,
+			rootstate.MaxRegionCohortNodes, rootstate.MaxRegionCohortNodes)
+		if err != nil || !confirmed {
+			continue
+		}
+		if err := worker.records.Delete(ref); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (worker *geoMetadataRepair) step(ctx context.Context) (recordwrite.GeoMirrorRetryReport, error) {
