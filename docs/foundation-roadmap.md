@@ -27,7 +27,7 @@
 
 阶段 3 补充：已新增 `recordrepair.RepairSelectedTargets`，可执行 `GeoPlan` 已选的跨 Region 目标，并返回新的物理持有观察；它不会修改 Region 分母或发布 `GeoReady`，必须由上层重新收集完整区域证据后复验。跨 Region Repair 现在有本地持久任务账本，节点重启后按当前 Range/Region 计划重新观察、修复并在完整 Geo 多数复验成功后删除任务。
 
-| 3 | 多 Region 数据多数 | 稳定 Active Region 集合推导 `GeoReady`；至少三本地节点采用本地多数前台确认、后台跨区补齐，不足三节点必须同步得到多数 Region。故障不能缩小分母。 | 进行中：小 Region 写入已由 `capabilitydata.Service` 自动选择 `WriteGeoFromRange`，跨所有计划 Region 完成物理多数、引用发布、GeoCoverage 持久确认和 Geo metadata mirror；成功响应为 `geo_ready`，跨节点 capability RPC 会传递区域门槛。读取在本地门禁失败时会复核当前 GeoCoverage、重新观察各 Region 并从已验证 Node 补取字节，避免小 Region 写入后无法读取。三节点 Region 仍保持本地多数快速路径；跨区故障联测、日志追赶和来源 Region 丢失后的重平衡仍待完成。 |
+| 3 | 多 Region 数据多数 | 稳定 Active Region 集合推导 `GeoReady`；至少三本地节点采用本地多数前台确认、后台跨区补齐，不足三节点必须同步得到多数 Region。故障不能缩小分母。 | 进行中：小 Region 自动形成数据 Group，写入由 `capabilitydata.Service` 自动选择 `WriteGeoFromRange`，先在 Owner Region 保留物理记录，再取得固定计划的 Region 严格多数并发布对应 Geo metadata mirror；成功响应为 `geo_ready`，跨节点 capability RPC 会传递区域门槛。非必要离线 Region 留作后续修复，不会缩小分母；读取在本地门禁失败时会复核当前 GeoCoverage、重新观察各 Region 并从已验证 Node 补取字节，避免小 Region 写入后无法读取。三节点 Region 仍保持本地多数快速路径；跨区日志追赶、来源 Region 丢失后的重平衡和完整故障联测仍待完成。 |
 | 4 | Volume 与 Pack 生命周期 | 加卷后参与放置，限速均衡；卷 Drain/安全移除可续跑；引用与快照保护下的 Pack Compaction/GC 不误删活数据。 | 已完成底座闭环：Volume 有持久 `BeginDrain → RemoveDrained` 边界；Drain 停止新 Pack 写入但保留读取；健康源卷由持久游标驱动迁移，目标写入/读回校验后才替换索引，重启自动续跑；迁移后 catalog 先持久更新再回收死 Pack，混合存活 Pack 可通过 `dubi volume compact --rewrite` 显式重写。迁移/压缩受节点维护预算和单并发门禁限制。跨节点长期容量均衡与完整生产验收仍未完成。 |
 | 5 | 底座级恢复 | 所有持久资源登记与一致性 Checkpoint；Node Snapshot 以新身份替换丢失节点；Cluster Backup/Restore 在独立目标封存、校验并从空集群恢复。底座不解析能力载荷。 | 未完成：Raft 快照已具备，不是 Node Snapshot 或 Cluster Backup。 |
 | 6 | Tenant 与模块接入边界 | 应用凭据限定 Tenant；两个不同测试 Capability 在同一 Group/Pack 运行且互不越权。通用入口不把 Node 证书当租户身份，不要求模块模拟 File。 | 进行中：内部 Keyspace/Mux 隔离及[高熵 Token 的 Root 哈希登记、撤销、快照恢复和 Tenant 验证](architecture/tenant-entry.md)已实现；Node 管理命令可创建/撤销 Token。独立可选 HTTPS listener 的 `GET /v1/me` 已验证无 Node 证书的 Token 认证、撤销和内部 RPC 隔离。受约束模块数据 API、审计/限流未实现；当前 `record` 仍是 Node 认证的开发入口。 |
@@ -37,7 +37,7 @@
 
 阶段 2 的身份隔离切片已落地：Root 只允许对已登记且没有 Root、Group 当前或待执行责任的 Node 持久 `FenceNode`；节点发现、Root join 与新 Group 成员发布拒绝其原身份，Root 快照校验 Fence。**在役失盘节点不能靠健康超时自动移除**，避免绕过原数据多数。Group 层已支持显式维护移除且保留当前 voter 严格多数；后续要补跨 Root/多 Group 的管理员入口、最终 Fence 编排、新节点普通加入后的自动 Repair 和最终物理复验，不建立替换任务。enrollment authority 已有 Root 持久 authority epoch/member 记录、稳定 Root 多数调度、wrapping public key 获取和密封 envelope 自动传输；真实三节点 bootstrap 移除后新节点加入闭环已通过，后续纳入更广泛的故障门禁。详见[节点故障、手动移除与自动再平衡](architecture/node-replacement.md)与[集群级 enrollment authority](architecture/enrollment-authority.md)。
 
-小 Region 的结构与运行时边界：Root cohort、Region fence、Geo placement、物理 staging 与 Geo 回执校验已允许 1/2 节点，`PlanLocal` 与 `LocalConfirmation` 仍拒绝小 Region 本地前台确认。自动形成数据 Group 暂保持至少三节点；现有多数与手动移除检查不放宽，也不建立节点替换流程。整区域明确移除后由底层自动隔离旧代际并允许同名 Region 的新节点重新形成集合，用户不执行额外重建命令。
+小 Region 的结构与运行时边界：Root cohort、Region fence、Geo placement、物理 staging 与 Geo 回执校验已允许 1/2 节点，`PlanLocal` 与 `LocalConfirmation` 仍拒绝小 Region 本地前台确认。自动形成数据 Group 也允许小区域；现有多数与手动移除检查不放宽，也不建立节点替换流程。整区域明确移除后由底层自动隔离旧代际并允许同名 Region 的新节点重新形成集合，用户不执行额外重建命令。
 
 增长协调器现已把旧封口观察从“全员在线”改为固定旧集合的严格多数：每份必须有指定节点自己的 Root/Owner 读屏障、同一旧 fence 与同一已应用 seal；不可达或滞后的观察不计数，少于多数不授权成员任务。新候选发布仍要求完整新集合可观察，并重新扫描权威封口引用清单，逐条检查固定新集合的真实 Pack 持有是否达到严格多数；失败不发布 Root 新代际。维护移除后的恢复增长沿用相同封口和候选门禁，旧 Fence 只作为恢复来源，不能恢复业务写入；仍需真实独立进程联测验证完整 Pack 再平衡和跨 Region 修复。
 

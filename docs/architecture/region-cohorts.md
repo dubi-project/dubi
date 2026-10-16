@@ -10,9 +10,9 @@ Region cohort 是一个 Region 在某一代际的数据参与 Node 集合。它�
 
 Root 投票角色、区域 Group 的投票角色、数据参与集合分别记录。集合包括区域 Group 的 voter 和 learner，不以 voter 数替代数据多数的分母。内部单条集合记录最多 4096 个 Node，是有界处理限制，不是运维参数，也不是已经验证的集群规模。
 
-一个或两个节点的区域不能靠本记录启用本地确认：Placement 可以描述小区域，但当前自动建组仍等待至少三个不同 Node；小区域的前台确认仍必须等待跨 Region 门槛，只有至少三个不同 Node 的稳定集合才允许本地 `LocalReady`。不能从“未记录 cohort”推导免于确认。
+一个或两个节点的区域不能靠本记录启用本地确认：Placement 和自动建组都支持小区域，但小区域的前台确认仍必须等待跨 Region 门槛，只有至少三个不同 Node 的稳定集合才允许本地 `LocalReady`。不能从“未记录 cohort”推导免于确认。
 
-跨 Region 物理覆盖现在有一个能力中立的规划和写入原语：Root 在同一 applied cut 返回明确选定的已确认 Region cohort 及其注册 Node，`placement.PlanGeo` 固定 Region、Group、generation、epoch 和 fence。`StageGeo` 对每个 Region 逐节点写入并要求本地严格多数，任何 Region 不足都失败，不缩小分母；`AssessPublication` 还把覆盖绑定到单一 RecordID、引用 RequestID/Index/Hash、Range epoch 和路由键，引用替换或代际变化时不能复用旧观察。Owner Group 现在可持久保存 `GeoCoverageRecord`，`CheckCommittedGeo` 会在使用前重新核验新鲜计划、全部区域证据和 Owner 当前引用；快照会校验引用回链，引用替换/删除会原子清除旧账目。`Writer.WriteGeo` 是显式 opt-in 的同步跨区写入路径，不改变默认本地多数优先行为，并要求元数据镜像传输器在全部 Region 保存引用切点后才进入 coverage 确认。该账目只证明同一不可变 RecordID 的物理持有观察，不能直接发布 `GeoReady`，因为权威引用/日志切点的跨区可恢复性和小区域同步写入协议仍需后续接通。
+跨 Region 物理覆盖现在有一个能力中立的规划和写入原语：Root 在同一 applied cut 返回明确选定的已确认 Region cohort 及其注册 Node，`placement.PlanGeo` 固定 Region、Group、generation、epoch 和 fence。`StageGeo` 先在本地 Region 写入严格多数，再在固定计划中取得足够的 Region 严格多数；离线的非必要 Region 不会缩小分母，而是留下后续修复账。`AssessPublication` 还把覆盖绑定到单一 RecordID、引用 RequestID/Index/Hash、Range epoch 和路由键，引用替换或代际变化时不能复用旧观察。Owner Group 现在可持久保存 `GeoCoverageRecord`，`CheckCommittedGeo` 会在使用前重新核验新鲜计划、已覆盖区域证据和 Owner 当前引用；快照会校验引用回链，引用替换/删除会原子清除旧账目。`Writer.WriteGeo` 是显式 opt-in 的同步跨区写入路径，不改变默认本地多数优先行为，并要求元数据镜像传输器在已覆盖 Region 保存引用切点后才进入 coverage 确认。该账目只证明同一不可变 RecordID 的物理持有观察，不能直接发布 `GeoReady`，因为权威引用/日志切点的跨区可恢复性仍需后续接通。
 
 Geo 元数据镜像现在支持节点本地的持久 retry ledger 和有界 worker round：临时无法联系任何目标 voter 时，确定性的 mirror 请求会保留在有界账目中；某一目标 Region 成功应用后才删除对应项，目标状态机的持久拒绝不会盲目切换节点重试。每轮重试必须由调用方用当前 Root 计划解析 Region generation/epoch/fence；旧计划无法解析时欠账保留，不会被丢弃。托管 Server 已接入该账目的周期 worker；它只处理当前 Root placement 能重新匹配的任务。该账目本身不改变 Region 多数、不发布 GeoReady；源 Region 丢失后的重建流程仍需接入。
 
@@ -30,15 +30,15 @@ Geo 元数据镜像现在支持节点本地的持久 retry ledger 和有界 work
 
 ## 自动初始建组
 
-正式托管 `server` / `join` 的每个节点都有串行后台任务，不新增配置或操作步骤。Root leader 在读屏障后读取当前 ConfState 与 Node 的原子视图；joint 期间不规划。一个 Region 至少有三个当前 Root 成员时，自动登记确定性内部 GroupID，并保存首次完整参与集合；不把仅有历史登记的节点加入，也不按健康缩小集合。
+正式托管 `server` / `join` 的每个节点都有串行后台任务，不新增配置或操作步骤。Root leader 在读屏障后读取当前 ConfState 与 Node 的原子视图；joint 期间不规划。一个 Region 只要有当前 Root 成员，便自动登记确定性内部 GroupID，并保存首次完整参与集合；不把仅有历史登记的节点加入，也不按健康缩小集合。
 
-Root 只有在第一代、Group epoch=1、尚未发布成员且没有成员变更任务时才生成 `formation` 权限。它不是调用方可传入的开关；已有 Group 的普通 cohort 不获得此权限。首次发布必须与原计划完全相同、全部为 voter，且节点仍是当前 Root 成员。在首次发布前不能创建另一个成员任务。之后的扩展、角色调整仍需正常成员协议，不能改写原始 bootstrap 集合。
+Root 只有在第一代、Group epoch=1、尚未发布成员且没有成员变更任务时才生成 `formation` 权限。它不是调用方可传入的开关；已有 Group 的普通 cohort 不获得此权限。首次发布必须与原计划完全相同、全部为 voter，且节点仍是当前 Root 成员；单节点/双节点 Region 也走同一流程。在首次发布前不能创建另一个成员任务。之后的扩展、角色调整仍需正常成员协议，不能改写原始 bootstrap 集合。
 
 各节点在 Root 读屏障后独立恢复自己的计划，即使不是 Root leader。仅原集合内、区域与本地身份匹配的节点使用该集合初始化；跨区域节点不创建此 Group。持久 Group/日志登记及 formation 栅栏防止丢失历史后重新 bootstrap。普通 `PrepareJoining` 只能按 Root 中明确包含本节点的待办成员任务打开 learner，不能抢先占用初始 Group。
 
 每轮最多检查一个待发布 Group，轮转游标仅用于公平调度，丢失它不丢失建组权限。原始参与者必须逐一通过真实 ReadIndex 和稳定 ConfState 检查；本机走 Host，远端走认证 RPC。全部原始 voter 和有效 leader 匹配才发布 epoch=2 路由；失联保留 pending，其他区域可继续。单次检查窗口与后台轮次有内部超时，关闭时取消并等待退出后才释放 Store。
 
-上述只是初始建组；后续新节点经独立的增长交接自动扩入已存在 cohort，不能修改原 bootstrap 集合。一个或两个节点的区域尚不形成本地区域 Group。路由发布本身不确认 cohort，随后必须完成下述全员协议；建组/增长均不承诺每笔业务数据的多数持有或故障修复。所有节点启动仍需可用 Root 多数，区域 Group 有多数不代表整套服务无 Root 也能冷启动。
+上述只是初始建组；后续新节点经独立的增长交接自动扩入已存在 cohort，不能修改原 bootstrap 集合。一个或两个节点的区域同样形成自己的区域 Group，但不能因此获得本地 `LocalReady`。路由发布本身不确认 cohort，随后必须完成下述全员协议；建组/增长均不承诺每笔业务数据的多数持有或故障修复。所有节点启动仍需可用 Root 多数，区域 Group 有多数不代表整套服务无 Root 也能冷启动。
 
 ## 自动初始集合确认
 
@@ -63,7 +63,7 @@ Root 只有在第一代、Group epoch=1、尚未发布成员且没有成员变�
 
 测试覆盖计划/确认分离、CAS、不可变历史、重复和迟到请求、跨区/未知节点拒绝、Group 任务与 epoch 竞态、learner 计入数据集合、少于三个 voter 拒绝、条目边界、真实单 voter Root Raft 重启、Sync 不确定结果的两种持久结局，以及两种快照的正常恢复和关联损坏拒绝。
 
-自动建组还覆盖 follower 恢复、不确认 Root 时不规划、一个区域失联不阻塞另一地区、实际成员不符拒绝发布、注册未接纳节点拒绝、成员任务互斥、formation 权限的两种快照恢复和仅保存计划时的本地冷重启。确认专项覆盖提案失响应、无易失进度接管、全员精确记录、成员 ABA、错误切点、观察期间退出/变更任务/epoch 变化，以及最后提交时 joint 导致持久拒绝后的成功重试。真实 CLI/TCP/mTLS 的单区域三节点、三区各一节点、3×3 九节点测试不再手工提交 fence，验证正式后台自动确认、单节点失效后的区域 quorum、全群冷启动及相同历史 fence 保留。关闭回归分别验证建组与确认任务退出前保留 Host/Store。
+自动建组还覆盖 follower 恢复、不确认 Root 时不规划、一个区域失联不阻塞另一地区、实际成员不符拒绝发布、注册未接纳节点拒绝、成员任务互斥、formation 权限的两种快照恢复和仅保存计划时的本地冷重启；单节点 Region 也必须经过同一全员观察和 fence 确认。确认专项覆盖提案失响应、无易失进度接管、全员精确记录、成员 ABA、错误切点、观察期间退出/变更任务/epoch 变化，以及最后提交时 joint 导致持久拒绝后的成功重试。真实 CLI/TCP/mTLS 的单区域三节点、三区各一节点、3×3 九节点测试不再手工提交 fence，验证正式后台自动确认、单节点失效后的区域 quorum、全群冷启动及相同历史 fence 保留。关闭回归分别验证建组与确认任务退出前保留 Host/Store。
 
 真实三节点测试曾捕获协调器使用远端客户端检查本机、导致成员已形成但无法发布路由的问题；现已显式区分本地/远端路径，并在单元测试中禁止 RPC self-target。失败日志保留，不能以增加超时掩盖接线错误。
 

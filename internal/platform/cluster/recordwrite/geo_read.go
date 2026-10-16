@@ -16,9 +16,10 @@ import (
 )
 
 // ReadGeo serves a publication whose durable Owner receipt proves physical
-// coverage in a majority of Regions. It re-observes every Region at a fresh
-// Root cut before returning bytes; the persisted claim is a hint, never a
-// lease that survives a topology or publication change.
+// coverage in a majority of Regions. It re-observes enough of the fixed plan
+// to reach that same majority at a fresh Root cut; an unavailable non-required
+// Region remains repair debt. The persisted claim is a hint, never a lease
+// that survives a topology or publication change.
 func (r Reader) ReadGeo(ctx context.Context, target router.Target, key []byte, maxRegions, maxNodes int) (LocalRead, error) {
 	if ctx == nil || r.Barrier == nil || r.Root == nil || r.Owner == nil || r.Store == nil ||
 		r.Observer == nil || r.Fetcher == nil || r.LocalID == 0 || r.LocalNodeID == "" ||
@@ -120,9 +121,31 @@ func (r Reader) observeGeo(ctx context.Context, plan placement.GeoPlan, descript
 	var evidence []placement.RegionHoldings
 	var allNodes []rootstate.Node
 	localFound := false
-	for _, region := range plan.Regions() {
+	regions := plan.Regions()
+	for _, region := range regions {
 		nodes := region.Nodes()
 		allNodes = append(allNodes, nodes...)
+		for _, node := range nodes {
+			if node.RaftID != r.LocalID {
+				continue
+			}
+			if node.NodeID != r.LocalNodeID {
+				return nil, nil, errors.New("local Node identity differs from geo Region plan")
+			}
+			if localFound {
+				return nil, nil, errors.New("local Node appears in multiple geo Regions")
+			}
+			localFound = true
+		}
+	}
+	if !localFound {
+		return nil, nil, errors.New("local Node is not in geo Region plan")
+	}
+	for _, region := range regions {
+		if len(evidence) >= plan.RequiredRegions() {
+			break
+		}
+		nodes := region.Nodes()
 		var holdings []placement.Holding
 		for _, node := range nodes {
 			if err := ctx.Err(); err != nil {
@@ -130,10 +153,6 @@ func (r Reader) observeGeo(ctx context.Context, plan placement.GeoPlan, descript
 			}
 			var holding placement.Holding
 			if node.RaftID == r.LocalID {
-				if node.NodeID != r.LocalNodeID {
-					return nil, nil, errors.New("local Node identity differs from geo Region plan")
-				}
-				localFound = true
 				verified, verifyErr := r.Store.Verify(ctx, descriptor)
 				if verifyErr != nil {
 					continue
@@ -161,7 +180,7 @@ func (r Reader) observeGeo(ctx context.Context, plan placement.GeoPlan, descript
 		}
 		count, countErr := region.Count(recordID, holdings)
 		if countErr != nil || count < region.Required {
-			return nil, nil, errors.Join(countErr, fmt.Errorf("Region %s lacks a fresh physical majority", region.RegionID))
+			continue
 		}
 		ids := make([]uint64, len(nodes))
 		for i, node := range nodes {
@@ -170,8 +189,9 @@ func (r Reader) observeGeo(ctx context.Context, plan placement.GeoPlan, descript
 		evidence = append(evidence, placement.RegionHoldings{RegionID: region.RegionID, Generation: region.Generation,
 			GroupEpoch: region.GroupEpoch, FenceIndex: region.FenceIndex, Nodes: ids, Holdings: holdings})
 	}
-	if !localFound {
-		return nil, nil, errors.New("local Node is not in geo Region plan")
+	coverage, err := plan.Assess(recordID, evidence)
+	if err != nil || !coverage.HasMajority() {
+		return nil, nil, errors.Join(err, errors.New("geo Region majority could not be freshly verified"))
 	}
 	slices.SortFunc(evidence, func(a, b placement.RegionHoldings) int {
 		if a.RegionID < b.RegionID {

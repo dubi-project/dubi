@@ -270,7 +270,7 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Capabi
 
 // geoPlan returns a plan only when the confirmed local Region is too small to
 // make a standalone local-majority promise. The plan is obtained at a Root
-// read cut; the Writer rechecks it while staging every Region.
+// read cut; the Writer rechecks it while staging the fixed Region majority.
 func (service *Service) geoPlan(ctx context.Context, target router.Target) (*placement.GeoPlan, error) {
 	progress, ready, err := service.runtime.Root.RegionProgress(target.OwnerGroupID)
 	if err != nil {

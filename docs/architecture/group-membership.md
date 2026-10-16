@@ -15,7 +15,7 @@ Root 读屏障后，服务端在同一 Root 状态锁内验证：
 - 被调用节点属于已发布成员或该任务的目标集合，避免新 leader 尚未发布时无法继续。
 - Add 目标在期望集合，Promote 目标期望为 voter；两者还必须是当前 Root 成员。Remove 目标来自原已发布集合且不在期望集合，允许清理已经退出 Root 的旧数据参与者。
 
-随后，Raft Group 在与提案相同的临界区里核对成员位置和完整 ConfState。`MembershipCut.Index` 是最近一次持久应用 ConfChange 的位置，不是整个状态机的 applied index：普通数据写入不会让它过期，但移除再加入、即使名单恢复原样，也会让旧位置永久失效。仍保留原有 leader、joint、磁盘准入、learner 活跃/追平和不能移除本地 leader/最后 voter 的限制。
+随后，Raft Group 在与提案相同的临界区里核对成员位置和完整 ConfState。`MembershipCut.Index` 是最近一次持久应用 ConfChange 的位置，不是整个状态机的 applied index：普通数据写入不会让它过期，但移除再加入、即使名单恢复原样，也会让旧位置永久失效。仍保留原有 leader、joint、磁盘准入、learner 活跃/追平和不能由底层 Raft 直接移除本地 leader/最后 voter 的限制；显式 `node remove` 对确认的单节点 Region 会先由 Root 退休该 Region Group，再完成身份移除和 Fence。
 
 这两层不是跨 Group 原子事务，也不是全局吊销栅栏。Root 检查有时间点边界；Group CAS 防止观察后已发生的成员变化以及 ABA。业务数据授权、维护/撤销的全局序列化仍须独立协议，不能仅凭该检查宣称所有并发管理操作可线性化。
 

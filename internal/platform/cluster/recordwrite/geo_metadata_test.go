@@ -6,8 +6,13 @@ import (
 	"testing"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/capstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
+	"github.com/dubi-project/dubi/internal/platform/router"
+	"github.com/dubi-project/dubi/internal/platform/storage/records"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type geoMirrorTransport struct {
@@ -25,6 +30,40 @@ func (t *geoMirrorTransport) MirrorGeo(_ context.Context, node uint64, _ string,
 		return capstate.Result{}, err
 	}
 	return capstate.Result{RequestID: command.RequestID, Index: node, Applied: true}, nil
+}
+
+func geoThreeRegionPlan(t *testing.T) (placement.GeoPlan, router.Target, records.Descriptor) {
+	t.Helper()
+	regions := []struct {
+		region string
+		group  string
+		node   rootstate.Node
+	}{
+		{region: "west", group: "region-west", node: rootstate.Node{RaftID: 1, NodeID: "node_00000000000000000000000000000001", RegionID: "west", Address: "w1:7443"}},
+		{region: "east", group: "region-east", node: rootstate.Node{RaftID: 2, NodeID: "node_00000000000000000000000000000002", RegionID: "east", Address: "e1:7443"}},
+		{region: "north", group: "region-north", node: rootstate.Node{RaftID: 3, NodeID: "node_00000000000000000000000000000003", RegionID: "north", Address: "n1:7443"}},
+	}
+	view := rootstate.RegionPlacementView{AppliedIndex: 7}
+	for _, item := range regions {
+		current := rootstate.RegionCohort{RegionID: item.region, GroupID: item.group, Generation: 1, Nodes: []uint64{item.node.RaftID},
+			State: rootstate.RegionCohortConfirmed, PlannedIndex: 1, ConfirmedIndex: 5,
+			GroupEpoch: 2, GroupFenceRequestID: "fence-1", GroupFenceIndex: 4}
+		view.Regions = append(view.Regions, rootstate.RegionPlacement{Progress: rootstate.RegionProgress{AppliedIndex: 7,
+			Eligible: true, Head: rootstate.RegionCohortHead{RegionID: item.region, CurrentGeneration: 1}, Current: current,
+			Group: rootstate.Group{GroupID: item.group, Epoch: 2,
+				Members: []rootstate.GroupMember{{RaftID: item.node.RaftID, Role: rootstate.GroupMemberVoter}}}}, Nodes: []rootstate.Node{item.node}})
+	}
+	plan, err := placement.PlanGeo(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant-a", CapabilityID: "record", DatasetID: "items"},
+		RangeID: "range-a", OwnerGroupID: "region-west", Epoch: 3, RoutingKey: []byte("key")}
+	descriptor, err := records.Describe(target.Keyspace, "origin-group", []byte("key"), []byte("body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan, target, descriptor
 }
 
 func TestReplicateGeoMetadataRetriesAnotherVoter(t *testing.T) {
@@ -80,6 +119,35 @@ func TestReplicateGeoMetadataIdentifiesRetryableRegionDebt(t *testing.T) {
 	var debt *GeoMetadataReplicationError
 	if !errors.As(err, &debt) || !debt.Retryable || debt.RegionID == "" || debt.Mirror.RegionID != debt.RegionID {
 		t.Fatal("retryable Region debt was not identified", err)
+	}
+}
+
+func TestGeoMetadataMirrorsFollowCoveredRegionMajority(t *testing.T) {
+	plan, target, descriptor := geoThreeRegionPlan(t)
+	staged, err := StageGeo(context.Background(), plan, 1, "node_00000000000000000000000000000001", &testStore{},
+		&geoStageSender{fail: map[uint64]error{2: status.Error(codes.Unavailable, "east offline")}}, descriptor, []byte("body"))
+	if err != nil || len(staged.Evidence) != 2 {
+		t.Fatalf("partial geo staging = %+v, err=%v", staged, err)
+	}
+	recordID, err := descriptor.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication := placement.PublicationCut{RecordID: recordID, RequestID: "publish-covered", Index: 13,
+		CommandHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		RangeID:     target.RangeID, RangeEpoch: target.Epoch, RoutingKey: target.RoutingKey}
+	mirrors, err := GeoMetadataMirrors(target, descriptor, publication, plan, staged.Evidence)
+	if err != nil || len(mirrors) != 2 {
+		t.Fatalf("covered Region mirrors = %+v, err=%v", mirrors, err)
+	}
+	for _, mirror := range mirrors {
+		if mirror.RegionID == "east" {
+			t.Fatal("offline Region received a synchronous metadata mirror")
+		}
+	}
+	results, err := ReplicateGeoMetadata(context.Background(), &geoMirrorTransport{}, plan, mirrors)
+	if err != nil || len(results) != 2 {
+		t.Fatalf("covered Region mirror delivery = %+v, err=%v", results, err)
 	}
 }
 

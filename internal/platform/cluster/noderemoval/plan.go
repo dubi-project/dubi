@@ -20,11 +20,10 @@ var (
 	ErrNodeNotRegistered        = errors.New("Node is not registered")
 	ErrRemovalHasPendingWork    = errors.New("Node has pending membership or join work")
 	ErrRemovalWouldLoseMajority = errors.New("Node removal would lose the current voter majority")
-	// ErrRegionGroupNeedsRebuild is returned before any mutation when the
-	// target is the last voter. Ordinary Raft membership cannot remove the last
-	// voter; a future Region Group rebuild must first preserve/recover its data
-	// and install a new initial voter set.
-	ErrRegionGroupNeedsRebuild = errors.New("Region Group requires explicit rebuild before removing its last voter")
+	// ErrRegionGroupNeedsRebuild is retained for non-Region Groups whose last
+	// voter would otherwise be removed. A confirmed Region Group is retired
+	// automatically as part of the explicit operator request instead.
+	ErrRegionGroupNeedsRebuild = errors.New("non-Region Group cannot remove its last voter")
 )
 
 // GroupPlan is one ordinary member-maintenance plan. The plans are
@@ -32,6 +31,11 @@ var (
 type GroupPlan struct {
 	GroupID string
 	Plan    rootstate.GroupChangePlan
+	// Retire is set only for a confirmed Region Group whose sole voter is
+	// being explicitly removed. Retirement clears the old Region's current
+	// responsibility so the normal Root removal/Fence path can continue; a
+	// future same-name Region forms through ordinary Node join.
+	Retire bool
 }
 
 // Plan is a read-only Root cut for one manual Node removal request. It does
@@ -66,10 +70,10 @@ func Build(root *rootstate.State, raftID uint64) (Plan, error) {
 	if err := CheckRootRemoval(view.Membership, raftID); err != nil {
 		return Plan{}, err
 	}
-	return buildPlan(view)
+	return buildPlan(root, view)
 }
 
-func buildPlan(view rootstate.NodeRemovalView) (Plan, error) {
+func buildPlan(root *rootstate.State, view rootstate.NodeRemovalView) (Plan, error) {
 	node, responsibilities, groups := view.Node, view.Responsibilities, view.Groups
 	plans := make([]GroupPlan, 0, len(responsibilities.CurrentGroups))
 	wanted := make(map[string]bool, len(responsibilities.CurrentGroups))
@@ -110,6 +114,12 @@ func buildPlan(view rootstate.NodeRemovalView) (Plan, error) {
 		}
 		if desiredVoters < voters/2+1 {
 			if voters == 1 && desiredVoters == 0 {
+				if _, regional, regionErr := root.RegionProgress(group.GroupID); regionErr != nil {
+					return Plan{}, regionErr
+				} else if regional {
+					plans = append(plans, GroupPlan{GroupID: group.GroupID, Retire: true})
+					continue
+				}
 				return Plan{}, fmt.Errorf("Group %q: %w", group.GroupID, ErrRegionGroupNeedsRebuild)
 			}
 			return Plan{}, fmt.Errorf("Group %q: %w", group.GroupID, ErrRemovalWouldLoseMajority)

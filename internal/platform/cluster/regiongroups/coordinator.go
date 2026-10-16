@@ -100,13 +100,6 @@ func (c *Coordinator) plan(ctx context.Context) error {
 		if len(nodes) == 0 {
 			continue
 		}
-		// Initial formation still waits for a complete three-Node cohort. The
-		// placement layer can represent smaller Regions, but opening a one-Node
-		// data Group would make manual removal impossible until the future
-		// empty-Group/new-Node reconstruction protocol is implemented.
-		if len(nodes) < 3 {
-			continue
-		}
 		slices.Sort(nodes)
 		head, found, err := c.root.RegionCohortHead(region)
 		if err != nil {
@@ -154,7 +147,7 @@ func (c *Coordinator) plan(ctx context.Context) error {
 						fresh = append(fresh, nodeID)
 					}
 				}
-				if len(fresh) < 3 {
+				if len(fresh) == 0 {
 					continue
 				}
 				if err := c.submit(ctx, rootstate.Command{Type: rootstate.PlanRegionGroupRebuild, GroupRebuild: &rootstate.RegionGroupRebuild{

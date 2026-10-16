@@ -57,6 +57,12 @@ func (c *Coordinator) Reconcile(ctx context.Context, raftID uint64) (Plan, error
 		return Plan{}, err
 	}
 	for _, group := range plan.Groups {
+		if group.Retire {
+			if err := c.executor.RetireRegionGroup(ctx, group.GroupID); err != nil {
+				return plan, err
+			}
+			continue
+		}
 		if err := c.executor.CheckGroup(ctx, group.GroupID); err != nil {
 			if !groupUnavailable(err) {
 				return plan, err

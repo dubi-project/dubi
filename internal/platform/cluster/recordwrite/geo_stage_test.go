@@ -3,6 +3,7 @@ package recordwrite
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -101,7 +102,7 @@ func TestStageGeoSmallRegionsKeepExactLocalThreshold(t *testing.T) {
 	}
 }
 
-func TestStageGeoRequiresEveryRegionMajority(t *testing.T) {
+func TestStageGeoReachesRegionMajority(t *testing.T) {
 	plan, _, descriptor := geoStagePlan(t)
 	staged, err := StageGeo(context.Background(), plan, 1, "node_00000000000000000000000000000001", &testStore{}, &geoStageSender{}, descriptor, []byte("body"))
 	if err != nil || len(staged.Evidence) != 2 || staged.RecordID == "" {
@@ -110,6 +111,48 @@ func TestStageGeoRequiresEveryRegionMajority(t *testing.T) {
 	coverage, err := plan.Assess(staged.RecordID, staged.Evidence)
 	if err != nil || !coverage.HasMajority() || len(coverage.CoveredRegions) != 2 {
 		t.Fatal(coverage, err)
+	}
+}
+
+func TestStageGeoUsesFixedRegionMajorityWhenOneRegionIsOffline(t *testing.T) {
+	regions := []struct {
+		name string
+		node rootstate.Node
+	}{
+		{name: "west", node: rootstate.Node{RaftID: 1, NodeID: "node_00000000000000000000000000000001", RegionID: "west", Address: "w1:7443"}},
+		{name: "east", node: rootstate.Node{RaftID: 2, NodeID: "node_00000000000000000000000000000002", RegionID: "east", Address: "e1:7443"}},
+		{name: "north", node: rootstate.Node{RaftID: 3, NodeID: "node_00000000000000000000000000000003", RegionID: "north", Address: "n1:7443"}},
+	}
+	progress := func(region, group string, node rootstate.Node) rootstate.RegionPlacement {
+		current := rootstate.RegionCohort{RegionID: region, GroupID: group, Generation: 1, Nodes: []uint64{node.RaftID},
+			State: rootstate.RegionCohortConfirmed, PlannedIndex: 1, ConfirmedIndex: 5,
+			GroupEpoch: 2, GroupFenceRequestID: "fence-1", GroupFenceIndex: 4}
+		return rootstate.RegionPlacement{Progress: rootstate.RegionProgress{AppliedIndex: 7,
+			Eligible: true, Head: rootstate.RegionCohortHead{RegionID: region, CurrentGeneration: 1},
+			Current: current, Group: rootstate.Group{GroupID: group, Epoch: 2,
+				Members: []rootstate.GroupMember{{RaftID: node.RaftID, Role: rootstate.GroupMemberVoter}}}}, Nodes: []rootstate.Node{node}}
+	}
+	view := rootstate.RegionPlacementView{AppliedIndex: 7}
+	for _, region := range regions {
+		view.Regions = append(view.Regions, progress(region.name, "region-"+region.name, region.node))
+	}
+	plan, err := placement.PlanGeo(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, descriptor := geoStagePlanWithSizes(t, 1, 1)
+	// East is unavailable, but West + North are the fixed two-Region majority.
+	sender := &geoStageSender{fail: map[uint64]error{2: status.Error(codes.Unavailable, "offline")}}
+	staged, err := StageGeo(context.Background(), plan, 1, regions[0].node.NodeID, &testStore{}, sender, descriptor, []byte("body"))
+	if err != nil || len(staged.Evidence) != 2 {
+		t.Fatalf("geo majority staging = %+v, %v", staged, err)
+	}
+	coverage, err := plan.Assess(staged.RecordID, staged.Evidence)
+	if err != nil || !coverage.HasMajority() || len(coverage.CoveredRegions) != 2 {
+		t.Fatalf("geo majority coverage = %+v, %v", coverage, err)
+	}
+	if !slices.Equal(coverage.CoveredRegions, []string{"north", "west"}) {
+		t.Fatalf("unexpected covered Regions = %v", coverage.CoveredRegions)
 	}
 }
 

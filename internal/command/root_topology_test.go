@@ -172,12 +172,6 @@ func TestManagedRootTopologyAutomaticQuorumFailoverAndColdRestart(t *testing.T) 
 						if err != nil {
 							return false
 						}
-						if len(participants) < 3 {
-							if found || runtime.Host.HasGroup(id) {
-								t.Fatal("small Region formed local Group", region)
-							}
-							continue
-						}
 						if !found || group.Epoch != 2 || len(group.Members) != len(participants) {
 							return false
 						}

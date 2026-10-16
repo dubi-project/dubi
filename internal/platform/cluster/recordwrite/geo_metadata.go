@@ -76,8 +76,9 @@ func (e *GeoMetadataReplicationError) Unwrap() error {
 
 // GeoMetadataMirrors builds one destination-Region metadata checkpoint per
 // verified Region. The caller/coordinator must submit each mirror to that
-// Region Group and wait for its durable Result before treating the coverage as
-// recoverable GeoReady metadata.
+// Region Group and wait for its durable Result before treating the covered
+// Region set as recoverable GeoReady metadata. Regions absent from evidence
+// remain repair debt and are intentionally not required for the majority.
 func GeoMetadataMirrors(target router.Target, descriptor records.Descriptor,
 	publication placement.PublicationCut, plan placement.GeoPlan, evidence []placement.RegionHoldings) ([]routedstate.GeoMetadataMirror, error) {
 	if target.Validate() != nil || descriptor.Validate() != nil || target.Keyspace != descriptor.Keyspace ||
@@ -92,9 +93,16 @@ func GeoMetadataMirrors(target router.Target, descriptor records.Descriptor,
 	if err != nil || !coverage.HasMajority() {
 		return nil, errors.New("geo metadata mirrors require verified Region majority")
 	}
+	covered := make(map[string]bool, len(coverage.CoveredRegions))
+	for _, regionID := range coverage.CoveredRegions {
+		covered[regionID] = true
+	}
 	regions := plan.Regions()
-	mirrors := make([]routedstate.GeoMetadataMirror, 0, len(regions))
+	mirrors := make([]routedstate.GeoMetadataMirror, 0, len(covered))
 	for _, region := range regions {
+		if !covered[region.RegionID] {
+			continue
+		}
 		mirrors = append(mirrors, routedstate.GeoMetadataMirror{Target: target, Key: slices.Clone(descriptor.Key),
 			DestinationGroupID: region.GroupID, RegionID: region.RegionID, Generation: region.Generation,
 			GroupEpoch: region.GroupEpoch, FenceIndex: region.FenceIndex, RecordID: recordID,
@@ -111,9 +119,11 @@ type GeoMetadataMirrorTransport interface {
 	MirrorGeo(context.Context, uint64, string, []byte) (capstate.Result, error)
 }
 
-// ReplicateGeoMetadata submits every Region mirror to any current voter in its
-// destination Group. A failed node is skipped; a durable rejection is returned
-// immediately because retrying another voter cannot change the local fence.
+// ReplicateGeoMetadata submits each supplied covered-Region mirror to any
+// current voter in its destination Group. A failed node is skipped; a durable
+// rejection is returned immediately because retrying another voter cannot
+// change the local fence. The supplied list may be a strict Region-majority
+// subset of the full plan; omitted Regions remain repair debt.
 // The request ID is deterministic per mirror, making retries safe after a lost
 // response and avoiding a second metadata record.
 func ReplicateGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransport,
@@ -123,25 +133,27 @@ func ReplicateGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransp
 		return nil, errors.New("Geo metadata replication requires a transport and mirrors")
 	}
 	regions := plan.Regions()
-	if len(regions) != len(mirrors) {
-		return nil, errors.New("Geo metadata mirrors do not match the placement plan")
+	known := make(map[string]placement.LocalPlan, len(regions))
+	for _, region := range regions {
+		known[region.RegionID] = region
 	}
 	byRegion := make(map[string]routedstate.GeoMetadataMirror, len(mirrors))
 	for _, mirror := range mirrors {
 		if _, exists := byRegion[mirror.RegionID]; exists {
 			return nil, errors.New("Geo metadata mirrors repeat a Region")
 		}
+		region, found := known[mirror.RegionID]
+		if !found || !mirrorMatchesRegion(mirror, region) {
+			return nil, fmt.Errorf("Geo metadata mirror %q differs from placement plan", mirror.RegionID)
+		}
 		byRegion[mirror.RegionID] = mirror
 	}
 	results := make([]capstate.Result, 0, len(mirrors))
 	for _, region := range regions {
 		mirror, found := byRegion[region.RegionID]
-		if !found || !mirrorMatchesRegion(mirror, region) {
-			return nil, fmt.Errorf("Geo metadata mirror %q differs from placement plan", mirror.RegionID)
+		if !found {
+			continue
 		}
-	}
-	for _, region := range regions {
-		mirror := byRegion[region.RegionID]
 		applied, err := RetryGeoMetadata(ctx, transport, region, mirror)
 		if err != nil {
 			return nil, err

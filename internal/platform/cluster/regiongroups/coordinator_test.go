@@ -237,3 +237,27 @@ func TestRegionalFormationRejectsMismatchedRealMembership(t *testing.T) {
 		}
 	}
 }
+
+func TestRegionalFormationPlansSingleNodeRegion(t *testing.T) {
+	c, h, _, _ := fixture(t)
+	apply(t, h.root, rootstate.Command{Type: rootstate.RegisterNode,
+		Node: &rootstate.Node{NodeID: "node_00000000000000000000000000000008", RaftID: 8, RegionID: "north", Address: "127.0.0.1:10008"}})
+	if err := h.root.ApplyMembership(h.root.AppliedIndex()+1, &raftpb.ConfState{
+		Voters: []uint64{1, 4}, Learners: []uint64{2, 3, 5, 6, 8},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for n := 0; n < 5; n++ {
+		if err := c.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cohort, found, err := h.root.GroupInitialCohort(GroupID("north"))
+	if err != nil || !found || !cohort.Formation || !slices.Equal(cohort.Nodes, []uint64{8}) {
+		t.Fatalf("single-Node Region cohort = %+v, found=%v, err=%v", cohort, found, err)
+	}
+	group, found, err := h.root.Group(GroupID("north"))
+	if err != nil || !found || group.Epoch != 2 || len(group.Members) != 1 || group.Members[0].RaftID != 8 {
+		t.Fatalf("single-Node Region Group = %+v, found=%v, err=%v", group, found, err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/dubi-project/dubi/internal/platform/cluster/regiongroups"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"go.etcd.io/raft/v3/raftpb"
 )
@@ -46,12 +47,32 @@ func TestBuildRejectsPendingWorkAndMajorityLoss(t *testing.T) {
 }
 
 func TestBuildRequiresExplicitRebuildForLastRegionVoter(t *testing.T) {
-	root := openFixtureWithRoot(t, []uint64{1}, []uint64{1, 2})
+	root := openFixtureWithRoot(t, []uint64{1}, []uint64{1, 2, 3})
 	if err := root.ApplyMembership(root.AppliedIndex()+1, &raftpb.ConfState{Voters: []uint64{2, 3}, Learners: []uint64{1}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Build(root, 1); !errors.Is(err, ErrRegionGroupNeedsRebuild) {
 		t.Fatalf("last voter removal did not fail with rebuild guidance: %v", err)
+	}
+}
+
+func TestBuildRetiresConfirmedSingleNodeRegion(t *testing.T) {
+	root := openFixtureWithRoot(t, []uint64{2}, []uint64{1, 2, 3})
+	groupID := regiongroups.GroupID("west")
+	apply(t, root, rootstate.Command{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateCapability}})
+	apply(t, root, rootstate.Command{Type: rootstate.PlanRegionCohort, RegionPlan: &rootstate.RegionCohortPlan{
+		RegionID: "west", GroupID: groupID, Nodes: []uint64{1},
+	}})
+	apply(t, root, rootstate.Command{Type: rootstate.PublishGroupMembers, Membership: &rootstate.GroupMembership{
+		GroupID: groupID, ExpectedEpoch: 1, Members: []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}},
+	}})
+	apply(t, root, rootstate.Command{Type: rootstate.ConfirmRegionCohort, RegionConfirmation: &rootstate.RegionCohortConfirmation{
+		RegionID: "west", Generation: 1, GroupID: groupID, GroupEpoch: 2,
+		GroupFenceRequestID: "fence-single-node", GroupFenceIndex: 4,
+	}})
+	plan, err := Build(root, 1)
+	if err != nil || len(plan.Groups) != 1 || !plan.Groups[0].Retire || plan.Groups[0].GroupID != groupID {
+		t.Fatalf("single-node Region removal plan = %+v, err=%v", plan, err)
 	}
 }
 

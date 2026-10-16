@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/dubi-project/dubi/internal/platform/cluster/regiongroups"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"go.etcd.io/raft/v3/raftpb"
 )
@@ -42,7 +43,16 @@ func (f *fakeExecutor) ReconcileGroup(_ context.Context, changeID string) error 
 		GroupCompletion: &rootstate.GroupChangeCompletion{ChangeID: changeID, GroupID: change.GroupID}})
 }
 
-func (f *fakeExecutor) RetireRegionGroup(context.Context, string) error { return nil }
+func (f *fakeExecutor) RetireRegionGroup(_ context.Context, groupID string) error {
+	progress, found, err := f.root.RegionProgress(groupID)
+	if err != nil || !found {
+		return fmt.Errorf("load Region progress: %v", err)
+	}
+	return applyCommand(f.root, rootstate.Command{RequestID: "test-retire-" + groupID, Type: rootstate.RetireRegionGroup,
+		GroupRetirement: &rootstate.RegionGroupRetirement{GroupID: groupID, RegionID: progress.Current.RegionID,
+			Generation: progress.Current.Generation, GroupEpoch: progress.Current.GroupEpoch,
+			FenceIndex: progress.Current.GroupFenceIndex, Nodes: append([]uint64(nil), progress.Current.Nodes...)}})
+}
 
 func (f *fakeExecutor) RemoveRootMember(_ context.Context, raftID uint64) error {
 	f.removedRoot++
@@ -90,6 +100,44 @@ func TestCoordinatorResumesFromPersistedGroupPlan(t *testing.T) {
 	}
 	if fence, found, err := root.NodeFence(3); err != nil || !found || fence.NodeID != "node_00000000000000000000000000000003" {
 		t.Fatal("old identity was not fenced", fence, found, err)
+	}
+}
+
+func TestCoordinatorRetiresSingleNodeRegionBeforeRootRemoval(t *testing.T) {
+	root := openFixtureWithRoot(t, []uint64{2}, []uint64{1, 2, 3})
+	groupID := regiongroups.GroupID("west")
+	if err := applyCommand(root, rootstate.Command{RequestID: "region-register", Type: rootstate.RegisterGroup,
+		Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateCapability}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyCommand(root, rootstate.Command{RequestID: "region-plan", Type: rootstate.PlanRegionCohort,
+		RegionPlan: &rootstate.RegionCohortPlan{RegionID: "west", GroupID: groupID, Nodes: []uint64{1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyCommand(root, rootstate.Command{RequestID: "region-members", Type: rootstate.PublishGroupMembers,
+		Membership: &rootstate.GroupMembership{GroupID: groupID, ExpectedEpoch: 1,
+			Members: []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyCommand(root, rootstate.Command{RequestID: "region-confirm", Type: rootstate.ConfirmRegionCohort,
+		RegionConfirmation: &rootstate.RegionCohortConfirmation{RegionID: "west", Generation: 1, GroupID: groupID,
+			GroupEpoch: 2, GroupFenceRequestID: "fence-single-node", GroupFenceIndex: 4}}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeExecutor{root: root}
+	coordinator, err := NewCoordinator(root, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := coordinator.Reconcile(context.Background(), 1)
+	if err != nil || len(plan.Groups) != 0 || plan.RootMember || !plan.AlreadyFenced {
+		t.Fatalf("single-node Region removal result = %+v, err=%v", plan, err)
+	}
+	if retired, found, err := root.RegionGroupRetirement(groupID); err != nil || !found || retired.GroupID != groupID {
+		t.Fatalf("Region retirement = %+v, found=%v, err=%v", retired, found, err)
+	}
+	if _, member, err := root.RootMember(1); err != nil || member {
+		t.Fatalf("Root member remained after single-node removal: member=%v err=%v", member, err)
 	}
 }
 
