@@ -10,6 +10,8 @@ Byfile 提供经验证的底座代码与实现经验；DUBI 不依赖 Byfile 的
 
 当前第一阶段的可运行闭环是：无手工 ID/YAML 初始化和加入、三节点形成 Root 与区域数据 Group、创建 Range、跨节点读写、少一节点后继续读写、原 Store 重启恢复，以及第四节点自动加入并完成区域交接。区域扩容已接入新增节点的封口引用补齐；测试专用处理器已验证三条非空清单引用（物理字节分散在三个旧节点，含空载荷）补齐到第四节点，并在其重启后保留。具体命令见 [本地运行三节点](docs/operations/local-cluster.md)。
 
+磁盘压力的开发验证使用隔离稀疏盘，不填满宿主机；见 [磁盘压力保护](docs/operations/disk-pressure.md) 和 `scripts/disk_pressure_lab.sh`。
+
 底座实现的逐项来源与验证见 [`docs/architecture/adoption.md`](docs/architecture/adoption.md)。
 
 首次使用运行 `dubi init`，随后 `dubi server`；同一账号下直接运行 `dubi status`、`dubi doctor`、`dubi volume list`，不必反复传 Store 或服务地址。`init` 在 `~/.dubi/current.json` 记住当前 Store；服务 Ready 后记住实际监听地址。初始 Store 默认 `/var/lib/dubi`，也可在首次 `init` 时用 `--store` 指定；无需 YAML、节点 ID、Raft ID、成员列表或证书名称。多节点同机演示才需要显式选择 Node。
