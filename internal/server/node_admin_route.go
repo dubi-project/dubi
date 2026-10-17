@@ -64,7 +64,7 @@ func (route *nodeAdminRoute) removeByName(ctx context.Context, name string) (boo
 	// may have come from another member), so fall back to trying the name at
 	// each Root candidate. The candidate loop then reaches the member whose
 	// applied Root state contains the label and whose Root group is leader.
-	if _, err := route.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := route.runtime.ReadRootIndex(ctx); err != nil {
 		return true, 0, err
 	}
 	node, found, err := route.runtime.Root.NodeByName(name)

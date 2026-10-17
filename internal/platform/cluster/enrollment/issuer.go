@@ -44,6 +44,7 @@ type Issuer struct {
 	mu         sync.RWMutex
 	clusterID  string
 	authorizer Authorizer
+	readRoot   func(context.Context) (uint64, error)
 }
 
 func New(host Host, root *rootstate.State, signer *nodepki.Signer, clusterID string,
@@ -59,6 +60,22 @@ func (issuer *Issuer) SetSigner(signer *nodepki.Signer) {
 	issuer.mu.Lock()
 	issuer.signer = signer
 	issuer.mu.Unlock()
+}
+
+func (issuer *Issuer) SetRootReadIndex(read func(context.Context) (uint64, error)) {
+	issuer.mu.Lock()
+	issuer.readRoot = read
+	issuer.mu.Unlock()
+}
+
+func (issuer *Issuer) readRootIndex(ctx context.Context) (uint64, error) {
+	issuer.mu.RLock()
+	read := issuer.readRoot
+	issuer.mu.RUnlock()
+	if read != nil {
+		return read(ctx)
+	}
+	return issuer.host.ReadIndex(ctx, raft.RootGroupID)
 }
 
 // Issue authorizes the request, durably registers the Node in Root, confirms
@@ -82,7 +99,7 @@ func (issuer *Issuer) Issue(ctx context.Context, request identityenrollment.Requ
 	if err := issuer.authorizer.Authorize(ctx, request, proof); err != nil {
 		return identityenrollment.Bundle{}, fmt.Errorf("authorize Node enrollment: %w", err)
 	}
-	if _, err := issuer.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := issuer.readRootIndex(ctx); err != nil {
 		return identityenrollment.Bundle{}, fmt.Errorf("confirm Root before Node enrollment: %w", err)
 	}
 	descriptor := *command.Node
@@ -106,7 +123,7 @@ func (issuer *Issuer) Issue(ctx context.Context, request identityenrollment.Requ
 		if err := issuer.host.Submit(raft.RootGroupID, encodedCommand); err != nil {
 			return identityenrollment.Bundle{}, fmt.Errorf("submit Root Node registration: %w", err)
 		}
-		if _, err := issuer.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		if _, err := issuer.readRootIndex(ctx); err != nil {
 			return identityenrollment.Bundle{}, fmt.Errorf("confirm Root Node registration: %w", err)
 		}
 	}

@@ -291,7 +291,7 @@ func (s *dataService) ClusterRepairStatus(ctx context.Context, request *datawire
 	if err != nil || caller.ClusterID != s.runtime.Identity.ClusterID || caller.RaftID != request.GetFromRaftId() {
 		return nil, status.Error(codes.PermissionDenied, "cluster repair status caller identity mismatch")
 	}
-	if _, err := s.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := s.runtime.ReadRootIndex(ctx); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "confirm Root membership: %v", err)
 	}
 	member, found, err := s.runtime.Root.RootMember(caller.RaftID)
@@ -427,7 +427,7 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 			release()
 			return nil, nil, status.Error(codes.PermissionDenied, "matching Node certificate required")
 		}
-		if _, err := s.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		if _, err := s.runtime.ReadRootIndex(ctx); err != nil {
 			release()
 			return nil, nil, status.Errorf(codes.Unavailable, "confirm Root membership: %v", err)
 		}
@@ -571,7 +571,7 @@ func (s *dataService) rootCommand(ctx context.Context, command rootstate.Command
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if _, err := s.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		if _, err := s.runtime.ReadRootIndex(ctx); err != nil {
 			return err
 		}
 		result, found, err := s.runtime.Root.ResultForCommand(encoded)

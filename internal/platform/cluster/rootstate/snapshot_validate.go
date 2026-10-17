@@ -127,6 +127,13 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 			streamJSON(view, nodeKey(fence.RaftID), &node) != nil || node.NodeID != fence.NodeID || node.RaftID != fence.RaftID {
 			return bad()
 		}
+	case strings.HasPrefix(name, "data/node-ready/"):
+		var ready NodeReadyRecord
+		var node Node
+		if decodeStreamJSON(value, &ready) != nil || ready.RaftID == 0 || !nodeIdentity.MatchString(ready.NodeID) || ready.ActivatedIndex == 0 || ready.ActivatedIndex > index ||
+			!bytes.Equal(key, nodeReadyKey(ready.RaftID)) || streamJSON(view, nodeKey(ready.RaftID), &node) != nil || node.NodeID != ready.NodeID || node.RaftID != ready.RaftID {
+			return bad()
+		}
 	case strings.HasPrefix(name, "data/join-grant/"):
 		var grant JoinGrant
 		if decodeStreamJSON(value, &grant) != nil || grant.Validate() != nil || !bytes.Equal(key, joinGrantKey(grant.GrantID)) {

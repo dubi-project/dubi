@@ -53,15 +53,62 @@ type Runtime struct {
 	Records         *records.Store
 	Snapshots       *snapshot.Store
 	RootJoin        *rootjoin.LocalStore
+	// rootReadIndex optionally confirms a Root barrier through a remote voter.
+	// Learners cannot always complete a local ReadIndex before promotion, so
+	// production startup supplies this through the authenticated GroupClient.
+	rootReadIndex func(context.Context) (uint64, error)
 
-	mu              sync.Mutex
-	recoverMu       sync.Mutex
-	closed          bool
-	rpcRegistered   bool
-	recoveryContext context.Context
-	cancelRecovery  context.CancelFunc
-	closeDone       chan struct{}
-	closeErr        error
+	mu                   sync.Mutex
+	recoverMu            sync.Mutex
+	closed               bool
+	rpcRegistered        bool
+	recoveryContext      context.Context
+	cancelRecovery       context.CancelFunc
+	closeDone            chan struct{}
+	closeErr             error
+	joinRecoveryDeferred bool
+}
+
+// SetRootReadIndex supplies the authenticated remote Root barrier used while
+// an enrolled learner is recovering. It must be set before Run begins.
+func (runtime *Runtime) SetRootReadIndex(read func(context.Context) (uint64, error)) {
+	if runtime != nil {
+		runtime.rootReadIndex = read
+	}
+}
+
+// ReadRootIndex confirms a linearizable Root barrier through the configured
+// remote voter path when local ReadIndex is unavailable. A joined Node can be
+// a healthy Root voter while its local leader hint is still catching up, so
+// callers must not equate a local ReadIndex timeout with cluster unreachability.
+func (runtime *Runtime) ReadRootIndex(ctx context.Context) (uint64, error) {
+	if runtime == nil || runtime.Host == nil || runtime.Root == nil {
+		return 0, errors.New("Node runtime is incomplete")
+	}
+	if runtime.rootReadIndex == nil {
+		return runtime.Host.ReadIndex(ctx, raft.RootGroupID)
+	}
+	index, err := runtime.rootReadIndex(ctx)
+	if err != nil {
+		return 0, err
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for runtime.Root.AppliedIndex() < index {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return index, nil
+}
+
+func (runtime *Runtime) confirmRoot(ctx context.Context) error {
+	return confirmStartupRoot(ctx, func(attempt context.Context) error {
+		_, err := runtime.ReadRootIndex(attempt)
+		return err
+	}, time.Second)
 }
 
 // RecoverLocalGroups reopens Groups whose published membership contains this
@@ -90,14 +137,26 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 	if err := runtime.waitForRootJoinPosition(ctx); err != nil {
 		return err
 	}
-	if err := confirmStartupRoot(ctx, func(attempt context.Context) error {
-		_, err := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
-		return err
-	}, time.Second); err != nil {
+	if err := runtime.confirmRoot(ctx); err != nil {
 		return err
 	}
 	if err := runtime.activateRootJoin(); err != nil {
 		return err
+	}
+	if runtime.RootJoin != nil {
+		runtime.mu.Lock()
+		deferRecovery := !runtime.joinRecoveryDeferred
+		if deferRecovery {
+			// The first post-enrollment recovery only establishes Root readiness.
+			// Regional Groups may be part of the placement cut that promotes this
+			// Node; defer opening them to the scheduler after startup so a slow or
+			// transitional Group cannot block the Node's ready hand-off.
+			runtime.joinRecoveryDeferred = true
+		}
+		runtime.mu.Unlock()
+		if deferRecovery {
+			return nil
+		}
 	}
 	descriptors, err := runtime.Root.Groups()
 	if err != nil {

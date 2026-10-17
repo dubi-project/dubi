@@ -9,7 +9,6 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/groupmembership"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regiongroups"
 	"github.com/dubi-project/dubi/internal/platform/node"
-	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 )
 
@@ -70,7 +69,7 @@ func (p regionalParticipants) Observe(ctx context.Context, target uint64, group 
 		o, err := p.client.ObserveRegionFence(ctx, target, group)
 		return regiongroups.Observation{RootConfirmedIndex: o.RootConfirmedIndex, GroupConfirmedIndex: o.GroupConfirmedIndex, View: o.View}, err
 	}
-	if _, err := p.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := p.runtime.ReadRootIndex(ctx); err != nil {
 		return regiongroups.Observation{}, err
 	}
 	state, found := p.runtime.Engines.Resolve(group)
@@ -85,7 +84,7 @@ func (p regionalParticipants) Observe(ctx context.Context, target uint64, group 
 	if err != nil {
 		return regiongroups.Observation{}, err
 	}
-	rootIndex, err := p.runtime.Host.ReadIndex(ctx, raft.RootGroupID)
+	rootIndex, err := p.runtime.ReadRootIndex(ctx)
 	if err != nil {
 		return regiongroups.Observation{}, err
 	}

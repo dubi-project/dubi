@@ -20,15 +20,15 @@ type rootControlTasks struct {
 
 func (tasks rootControlTasks) Reconcile(ctx context.Context) error {
 	joinErr := tasks.join.Reconcile(ctx)
-	if tasks.topology == nil {
-		if tasks.authority == nil {
-			return joinErr
-		}
-		return errors.Join(joinErr, tasks.authority.Reconcile(ctx))
-	}
-	result := errors.Join(joinErr, tasks.topology.Reconcile(ctx))
+	// Rotate the enrollment signer before changing Root voters.  Topology may
+	// add a voter in a staging cut, allowing this pass to prepare its signer;
+	// a later pass can then safely remove the old authority member.
+	result := joinErr
 	if tasks.authority != nil {
 		result = errors.Join(result, tasks.authority.Reconcile(ctx))
+	}
+	if tasks.topology != nil {
+		result = errors.Join(result, tasks.topology.Reconcile(ctx))
 	}
 	return result
 }

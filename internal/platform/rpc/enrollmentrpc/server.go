@@ -41,6 +41,7 @@ type Server struct {
 	issuer    *enrollment.Issuer
 	grants    *enrollment.GrantManager
 	slots     chan struct{}
+	readRoot  func(context.Context) (uint64, error)
 }
 
 func NewServer(host enrollment.Host, root *rootstate.State, signer *nodepki.Signer, local identity.Identity) (*Server, error) {
@@ -64,6 +65,23 @@ func (s *Server) SetSigner(signer *nodepki.Signer) {
 	s.signer = signer
 	s.issuer.SetSigner(signer)
 	s.grants.SetSigner(signer)
+}
+
+// SetRootReadIndex lets the owning Node route Root authorization barriers
+// through an authenticated remote voter while local Raft is catching up.
+func (s *Server) SetRootReadIndex(read func(context.Context) (uint64, error)) {
+	if s != nil {
+		s.readRoot = read
+		s.issuer.SetRootReadIndex(read)
+		s.grants.SetRootReadIndex(read)
+	}
+}
+
+func (s *Server) readRootIndex(ctx context.Context) (uint64, error) {
+	if s.readRoot != nil {
+		return s.readRoot(ctx)
+	}
+	return s.host.ReadIndex(ctx, raft.RootGroupID)
 }
 
 // acquire bounds work after protobuf decoding. The listener's MaxRecvMsgSize
@@ -104,7 +122,7 @@ func (s *Server) authorizeNode(ctx context.Context, clusterID string, raftID uin
 	if _, err := identity.VerifiedPeerCertificate(ctx, time.Now()); err != nil {
 		return status.Error(codes.PermissionDenied, "Node certificate chain is not currently valid")
 	}
-	if _, err := s.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := s.readRootIndex(ctx); err != nil {
 		return rpcError(err)
 	}
 	if _, err := identity.VerifiedPeerCertificate(ctx, time.Now()); err != nil {
@@ -210,7 +228,7 @@ func (s *Server) authorizeSigner(ctx context.Context) error {
 	if s.signer == nil {
 		return status.Error(codes.PermissionDenied, "local Node has no enrollment authority")
 	}
-	if _, err := s.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := s.readRootIndex(ctx); err != nil {
 		return rpcError(err)
 	}
 	local, found, err := s.root.Node(s.local.RaftID)

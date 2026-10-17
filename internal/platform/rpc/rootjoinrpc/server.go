@@ -44,6 +44,7 @@ type Server struct {
 	coordinator *rootjoin.Coordinator
 	clusterID   string
 	slots       chan struct{}
+	readRoot    func(context.Context) (uint64, error)
 }
 
 func NewServer(host rootjoin.Host, root *rootstate.State, clusterID string) (*Server, error) {
@@ -55,6 +56,21 @@ func NewServer(host rootjoin.Host, root *rootstate.State, clusterID string) (*Se
 		return nil, err
 	}
 	return &Server{host: host, root: root, coordinator: coordinator, clusterID: clusterID, slots: make(chan struct{}, maxConcurrentRequests)}, nil
+}
+
+// SetRootReadIndex lets the owning Node route a Root barrier through an
+// authenticated remote voter while this local process is catching up.
+func (s *Server) SetRootReadIndex(read func(context.Context) (uint64, error)) {
+	if s != nil {
+		s.readRoot = read
+	}
+}
+
+func (s *Server) readRootIndex(ctx context.Context) (uint64, error) {
+	if s.readRoot != nil {
+		return s.readRoot(ctx)
+	}
+	return s.host.ReadIndex(ctx, raft.RootGroupID)
 }
 
 // Like enrollment RPC, slots bound post-decode work. The listener's receive
@@ -75,7 +91,7 @@ func (s *Server) acquire(ctx context.Context, size int) (context.Context, func()
 	}
 }
 
-func (s *Server) authorize(ctx context.Context, clusterID string, raftID uint64) (*x509.Certificate, error) {
+func (s *Server) authorize(ctx context.Context, clusterID string, raftID uint64, linearizable bool) (*x509.Certificate, error) {
 	if clusterID != s.clusterID || raftID == 0 {
 		return nil, status.Error(codes.PermissionDenied, "Node identity does not match Cluster")
 	}
@@ -95,8 +111,10 @@ func (s *Server) authorize(ctx context.Context, clusterID string, raftID uint64)
 	if _, err := identity.VerifiedPeerCertificate(ctx, time.Now()); err != nil {
 		return nil, status.Error(codes.PermissionDenied, "Node certificate chain is not currently valid")
 	}
-	if _, err := s.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
-		return nil, rpcError(err)
+	if linearizable {
+		if _, err := s.readRootIndex(ctx); err != nil {
+			return nil, rpcError(err)
+		}
 	}
 	// Refresh time after waiting for quorum, including on an existing TLS session.
 	if _, err := identity.VerifiedPeerCertificate(ctx, time.Now()); err != nil {
@@ -137,7 +155,7 @@ func (s *Server) JoinRoot(ctx context.Context, request *rootjoinwire.JoinRootReq
 	if err != nil || !bytes.Equal(canonical, request.RequestDocument) {
 		return nil, status.Error(codes.InvalidArgument, "Root join request is not canonical")
 	}
-	leaf, err := s.authorize(ctx, request.ClusterId, candidate.RaftID)
+	leaf, err := s.authorize(ctx, request.ClusterId, candidate.RaftID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +180,7 @@ func (s *Server) JoinRoot(ctx context.Context, request *rootjoinwire.JoinRootReq
 	}
 	// Reconfirm quorum after admission; a view from a stale leader is not a
 	// license to initialize a joining runtime or shrink an existing quorum.
-	if _, err := s.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := s.readRootIndex(ctx); err != nil {
 		return nil, rpcError(err)
 	}
 	view, err := s.view()
@@ -184,7 +202,7 @@ func (s *Server) DiscoverRoot(ctx context.Context, request *rootjoinwire.Discove
 		return nil, err
 	}
 	defer release()
-	if _, err := s.authorize(ctx, request.ClusterId, request.FromRaftId); err != nil {
+	if _, err := s.authorize(ctx, request.ClusterId, request.FromRaftId, false); err != nil {
 		return nil, err
 	}
 	view, err := s.view()
@@ -203,11 +221,16 @@ func (s *Server) view() (*rootjoinwire.RootView, error) {
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.host.Status(raft.RootGroupID)
-	if err != nil {
-		return nil, err
+	// The applied Root cut remains useful for discovery and status even when
+	// this Node has temporarily lost its local leader hint (for example while
+	// a voter is being promoted or a peer reconnects).  LeaderID is only a
+	// routing hint; never make an identity-bound membership view unavailable
+	// merely because the local Raft status is transiently unknown.
+	var leader uint64
+	if state, statusErr := s.host.Status(raft.RootGroupID); statusErr == nil {
+		leader = state.LeaderID
 	}
-	view, err := rootjoin.FromRootCut(s.clusterID, cut, state.LeaderID)
+	view, err := rootjoin.FromRootCut(s.clusterID, cut, leader)
 	if err != nil {
 		return nil, err
 	}

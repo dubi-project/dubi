@@ -31,6 +31,7 @@ const (
 	SetRangePlacement          = "set_range_placement"
 	RetireRegionGroup          = "retire_region_group"
 	PlanRegionGroupRebuild     = "plan_region_group_rebuild"
+	MarkNodeReady              = "mark_node_ready"
 )
 
 const (
@@ -59,6 +60,16 @@ type NodeRename struct {
 	NodeID string `json:"node_id"`
 	RaftID uint64 `json:"raft_id"`
 	Name   string `json:"name,omitempty"`
+}
+
+// NodeReadyRecord is the durable hand-off from local Node recovery to Root
+// topology. Admission only proves that a Node is a Root learner; this record
+// proves that the Node has replayed its local Root state and completed the
+// identity-bound activation fence before it can be promoted to a voter.
+type NodeReadyRecord struct {
+	NodeID         string `json:"node_id"`
+	RaftID         uint64 `json:"raft_id"`
+	ActivatedIndex uint64 `json:"activated_index"`
 }
 
 type Group struct {
@@ -332,6 +343,7 @@ type Command struct {
 	RangePlacement      *RangePlacement             `json:"range_placement,omitempty"`
 	GroupRetirement     *RegionGroupRetirement      `json:"group_retirement,omitempty"`
 	GroupRebuild        *RegionGroupRebuild         `json:"group_rebuild,omitempty"`
+	NodeReady           *NodeReadyRecord            `json:"node_ready,omitempty"`
 }
 
 type Result struct {
@@ -359,7 +371,7 @@ func (command Command) validate() error {
 		command.TenantCredential != nil, command.TenantRevocation != nil, command.Dataset != nil,
 		command.Activation != nil, command.Membership != nil, command.GroupPlan != nil, command.GroupCompletion != nil,
 		command.JoinGrant != nil, command.JoinConsumption != nil, command.JoinRevocation != nil,
-		command.RootJoinStart != nil, command.RootJoinFinish != nil, command.RegionPlan != nil, command.RegionConfirmation != nil, command.RegionGrowth != nil, command.EnrollmentAuthority != nil, command.RangePlacement != nil, command.GroupRetirement != nil, command.GroupRebuild != nil} {
+		command.RootJoinStart != nil, command.RootJoinFinish != nil, command.RegionPlan != nil, command.RegionConfirmation != nil, command.RegionGrowth != nil, command.EnrollmentAuthority != nil, command.RangePlacement != nil, command.GroupRetirement != nil, command.GroupRebuild != nil, command.NodeReady != nil} {
 		if present {
 			payloads++
 		}
@@ -525,6 +537,11 @@ func (command Command) validate() error {
 			return errors.New("plan_region_group_rebuild requires rebuild payload")
 		}
 		return command.GroupRebuild.validateInput()
+	case MarkNodeReady:
+		value := command.NodeReady
+		if value == nil || !nodeIdentity.MatchString(value.NodeID) || value.RaftID == 0 || value.ActivatedIndex == 0 {
+			return errors.New("invalid Node readiness record")
+		}
 	default:
 		return fmt.Errorf("unsupported Root command %q", command.Type)
 	}

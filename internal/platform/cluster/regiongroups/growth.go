@@ -57,6 +57,13 @@ func (g *Grower) Reconcile(ctx context.Context) error {
 	if _, err := g.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return err
 	}
+	pending, err := g.root.PendingRootJoins()
+	if err != nil {
+		return err
+	}
+	if len(pending) != 0 {
+		return nil
+	}
 	routing, err := g.root.RootRoutingView(rootstate.MaxRegionCohortNodes)
 	if err != nil {
 		return err

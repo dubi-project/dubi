@@ -25,12 +25,13 @@ var ErrGrantRejected = errors.New("Join Grant operation rejected")
 // caller MUST authorize a registered Node/operator before calling Create or
 // Revoke. Enrollment-role clients may only call Issuer.Issue, never these.
 type GrantManager struct {
-	host   Host
-	root   *rootstate.State
-	signer *nodepki.Signer
-	local  identity.Identity
-	now    func() time.Time
-	mu     sync.RWMutex
+	host     Host
+	root     *rootstate.State
+	signer   *nodepki.Signer
+	local    identity.Identity
+	now      func() time.Time
+	readRoot func(context.Context) (uint64, error)
+	mu       sync.RWMutex
 }
 
 func NewGrantManager(host Host, root *rootstate.State, signer *nodepki.Signer, local identity.Identity) (*GrantManager, error) {
@@ -52,6 +53,22 @@ func (m *GrantManager) SetSigner(signer *nodepki.Signer) {
 	m.mu.Lock()
 	m.signer = signer
 	m.mu.Unlock()
+}
+
+func (m *GrantManager) SetRootReadIndex(read func(context.Context) (uint64, error)) {
+	m.mu.Lock()
+	m.readRoot = read
+	m.mu.Unlock()
+}
+
+func (m *GrantManager) readRootIndex(ctx context.Context) (uint64, error) {
+	m.mu.RLock()
+	read := m.readRoot
+	m.mu.RUnlock()
+	if read != nil {
+		return read(ctx)
+	}
+	return m.host.ReadIndex(ctx, raft.RootGroupID)
 }
 
 func (m *GrantManager) clock() time.Time {
@@ -78,7 +95,7 @@ func (m *GrantManager) Create(ctx context.Context, request identityenrollment.Gr
 	if err := request.Validate(m.clock()); err != nil {
 		return identityenrollment.GrantBundle{}, errors.Join(ErrGrantRejected, err)
 	}
-	if _, err := m.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := m.readRootIndex(ctx); err != nil {
 		return identityenrollment.GrantBundle{}, err
 	}
 	now := m.clock()
@@ -143,7 +160,7 @@ func (m *GrantManager) Create(ctx context.Context, request identityenrollment.Gr
 			return identityenrollment.GrantBundle{}, err
 		}
 		submitErr := m.host.Submit(raft.RootGroupID, command)
-		if _, err := m.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		if _, err := m.readRootIndex(ctx); err != nil {
 			return identityenrollment.GrantBundle{}, errors.Join(submitErr, err)
 		}
 		current, found, err = m.root.JoinGrant(grant.GrantID)
@@ -172,7 +189,7 @@ func (m *GrantManager) Revoke(ctx context.Context, grantID string) error {
 	if err := identity.ValidateJoinGrantID(grantID); err != nil {
 		return err
 	}
-	if _, err := m.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := m.readRootIndex(ctx); err != nil {
 		return err
 	}
 	grant, found, err := m.root.JoinGrant(grantID)
@@ -197,7 +214,7 @@ func (m *GrantManager) Revoke(ctx context.Context, grantID string) error {
 		return err
 	}
 	submitErr := m.host.Submit(raft.RootGroupID, command)
-	if _, err := m.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := m.readRootIndex(ctx); err != nil {
 		return errors.Join(submitErr, err)
 	}
 	grant, found, err = m.root.JoinGrant(grantID)

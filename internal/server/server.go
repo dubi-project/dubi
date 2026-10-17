@@ -219,6 +219,31 @@ func Open(options Options) (*Server, error) {
 	if err != nil {
 		return fail(err, transport, nil)
 	}
+	runtime.SetRootReadIndex(func(ctx context.Context) (uint64, error) {
+		status, _ := runtime.Host.Status(raft.RootGroupID)
+		cut, err := runtime.Root.RootRoutingView(rootjoin.MaxViewPeers)
+		if err != nil {
+			return 0, err
+		}
+		targets := make([]uint64, 0, len(cut.Membership.GetVoters())+1)
+		seen := make(map[uint64]bool)
+		add := func(id uint64) {
+			if id != 0 && id != runtime.Identity.RaftID && !seen[id] {
+				seen[id] = true
+				targets = append(targets, id)
+			}
+		}
+		add(status.LeaderID)
+		for _, id := range cut.Membership.GetVoters() {
+			add(id)
+		}
+		for _, target := range targets {
+			if index, err := client.ReadIndex(ctx, target, raft.RootGroupID); err == nil {
+				return index, nil
+			}
+		}
+		return runtime.Host.ReadIndex(ctx, raft.RootGroupID)
+	})
 	localData, err := enginedata.New(runtime, client)
 	if err != nil {
 		return fail(err, transport, client)
@@ -333,6 +358,7 @@ func Open(options Options) (*Server, error) {
 		grpcServer.Stop()
 		return fail(err, transport, client)
 	}
+	rootJoinServer.SetRootReadIndex(runtime.ReadRootIndex)
 	rootjoinwire.RegisterRootJoinServiceServer(grpcServer, rootJoinServer)
 	dataServer := newDataService(runtime, client, rootDirectory)
 	datawire.RegisterDataServiceServer(grpcServer, dataServer)
@@ -349,12 +375,14 @@ func Open(options Options) (*Server, error) {
 		grpcServer.Stop()
 		return fail(err, transport, client)
 	}
+	enrollmentServer.SetRootReadIndex(runtime.ReadRootIndex)
 	enrollmentwire.RegisterEnrollmentServiceServer(grpcServer, enrollmentServer)
 	certificateServer, err = nodecertrpc.NewServer(runtime.Host, runtime.Root, options.EnrollmentSigner, runtime.Identity)
 	if err != nil {
 		grpcServer.Stop()
 		return fail(err, transport, client)
 	}
+	certificateServer.SetRootReadIndex(runtime.ReadRootIndex)
 	nodecertwire.RegisterNodeCertificateServiceServer(grpcServer, certificateServer)
 	var certificates *certificateRenewal
 	var regional *regionalFormation
@@ -464,7 +492,7 @@ func (server *Server) RemoveNodeByName(ctx context.Context, name string) (nodere
 	if err := rootstate.ValidateNodeName(name); err != nil || name == "" {
 		return noderemoval.Plan{}, errors.New("invalid Node name")
 	}
-	if _, err := server.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := server.Runtime.ReadRootIndex(ctx); err != nil {
 		return noderemoval.Plan{}, err
 	}
 	node, found, err := server.Runtime.Root.NodeByName(name)
@@ -512,7 +540,7 @@ func (server *Server) RenameNode(ctx context.Context, name string) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if _, err := server.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		if _, err := server.Runtime.ReadRootIndex(ctx); err != nil {
 			return err
 		}
 		result, found, err := server.Runtime.Root.ResultForCommand(encoded)
@@ -650,6 +678,9 @@ func (server *Server) run(runCtx context.Context, cancel context.CancelCauseFunc
 			}
 		}
 	}
+	if err := server.publishLocalRootReady(runCtx); err != nil {
+		return fmt.Errorf("publish local Root readiness: %w", err)
+	}
 	server.mu.Lock()
 	if server.closed || runCtx.Err() != nil {
 		server.mu.Unlock()
@@ -696,6 +727,115 @@ func (server *Server) run(runCtx context.Context, cancel context.CancelCauseFunc
 		}
 	}
 	return result
+}
+
+// publishLocalRootReady is the final join hand-off. A local activation fence
+// is not useful to the cluster until it is committed through Root, so Root
+// topology can safely wait before promoting this learner or demoting a voter.
+func (server *Server) publishLocalRootReady(ctx context.Context) error {
+	if server.Runtime == nil || server.Runtime.RootJoin == nil {
+		return nil
+	}
+	local, err := server.Runtime.RootJoin.Load()
+	if err != nil {
+		return err
+	}
+	if local.Phase != rootjoin.LocalActive || local.ActivatedIndex == 0 {
+		return errors.New("local Root join is not active")
+	}
+	ready, found, err := server.Runtime.Root.NodeReady(server.Runtime.Identity.RaftID)
+	if err != nil {
+		return err
+	}
+	if found && ready.NodeID == server.Runtime.Identity.NodeID && ready.ActivatedIndex >= local.ActivatedIndex {
+		return nil
+	}
+	command, err := rootstate.EncodeCommand(rootstate.Command{
+		Version:   rootstate.FormatVersion,
+		RequestID: fmt.Sprintf("node-ready-%d-%d", server.Runtime.Identity.RaftID, local.ActivatedIndex),
+		Type:      rootstate.MarkNodeReady,
+		NodeReady: &rootstate.NodeReadyRecord{NodeID: server.Runtime.Identity.NodeID, RaftID: server.Runtime.Identity.RaftID, ActivatedIndex: local.ActivatedIndex},
+	})
+	if err != nil {
+		return err
+	}
+	status, err := server.Runtime.Host.Status(raft.RootGroupID)
+	if err != nil {
+		return err
+	}
+	cut, err := server.Runtime.Root.RootRoutingView(rootjoin.MaxViewPeers)
+	if err != nil {
+		return err
+	}
+	targets := make([]uint64, 0, len(cut.Membership.GetVoters())+1)
+	seen := make(map[uint64]bool)
+	add := func(id uint64) {
+		if id != 0 && id != server.Runtime.Identity.RaftID && !seen[id] {
+			seen[id] = true
+			targets = append(targets, id)
+		}
+	}
+	add(status.LeaderID)
+	for _, id := range cut.Membership.GetVoters() {
+		add(id)
+	}
+	for _, id := range cut.Membership.GetVotersOutgoing() {
+		add(id)
+	}
+	if len(targets) == 0 {
+		return errors.New("Root readiness has no remote voter target")
+	}
+	var failures []error
+	for _, target := range targets {
+		attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
+		submitDone := make(chan error, 1)
+		go func() {
+			_, submitErr := server.GroupClient.Submit(attempt, target, raft.RootGroupID, command)
+			submitDone <- submitErr
+		}()
+		var submitErr error
+		for {
+			result, found, resultErr := server.Runtime.Root.ResultForCommand(command)
+			if resultErr != nil {
+				submitErr = resultErr
+				break
+			}
+			if found {
+				if result.Error != "" {
+					submitErr = errors.New(result.Error)
+				} else {
+					cancel()
+					return nil
+				}
+				break
+			}
+			select {
+			case err := <-submitDone:
+				if err != nil {
+					submitErr = err
+				}
+			case <-attempt.Done():
+				submitErr = attempt.Err()
+			default:
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			if attempt.Err() == nil {
+				// The proposal RPC may have lost its reply after committing. Keep
+				// polling the local Root result until the bounded attempt expires.
+				continue
+			}
+			break
+		}
+		err := submitErr
+		cancel()
+		if err == nil {
+			return nil
+		} else {
+			failures = append(failures, fmt.Errorf("target %d: %w", target, err))
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func (server *Server) waitForRootLeader(ctx context.Context) error {

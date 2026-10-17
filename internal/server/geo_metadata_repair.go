@@ -14,7 +14,6 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/placement"
-	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
@@ -68,7 +67,7 @@ func (worker *geoMetadataRepair) stepRecords(ctx context.Context) (recordrepair.
 	if worker == nil || worker.records == nil {
 		return recordrepair.GeoRecordRepairReport{}, nil
 	}
-	if _, err := worker.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := worker.runtime.ReadRootIndex(ctx); err != nil {
 		return recordrepair.GeoRecordRepairReport{}, err
 	}
 	stale, err := worker.discoverStaleGeoRecords(ctx)
@@ -230,7 +229,7 @@ func (worker *geoMetadataRepair) step(ctx context.Context) (recordwrite.GeoMirro
 	if ctx == nil || worker == nil || worker.runtime == nil || worker.client == nil || worker.store == nil {
 		return recordwrite.GeoMirrorRetryReport{}, fmt.Errorf("Geo metadata retry worker is not configured")
 	}
-	if _, err := worker.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := worker.runtime.ReadRootIndex(ctx); err != nil {
 		return recordwrite.GeoMirrorRetryReport{}, err
 	}
 	return recordwrite.RetryPendingGeoMetadata(ctx, worker.client, worker.store,

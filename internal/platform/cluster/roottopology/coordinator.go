@@ -51,9 +51,35 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 	if _, err := c.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return err
 	}
+	// A newly enrolled Node is first a Root learner.  Do not derive the
+	// durable voter plan from that transitional membership until the joining
+	// process has completed its Root admission and can serve authenticated
+	// traffic.  Otherwise a cross-Region join can demote an existing voter
+	// while the new Node is still starting, leaving the control plane with a
+	// membership cut that no participant can confirm.
+	pending, err := c.root.PendingRootJoins()
+	if err != nil {
+		return err
+	}
+	if len(pending) != 0 {
+		return nil
+	}
 	cut, err := c.root.RootRoutingView(rootjoin.MaxViewPeers)
 	if err != nil {
 		return err
+	}
+	// An admitted join is still only a Root learner until its own process has
+	// replayed the local Root state and published the activation fence. Waiting
+	// here prevents a cross-Region plan from demoting an existing voter while
+	// the new process is still starting.
+	for _, learner := range append(slices.Clone(cut.Membership.GetLearners()), cut.Membership.GetLearnersNext()...) {
+		ready, err := c.root.RootMemberReady(learner)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return nil
+		}
 	}
 	view, err := rootjoin.FromRootCut(c.clusterID, cut, 0)
 	if err != nil {
@@ -70,6 +96,34 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 	slices.Sort(current)
 	if slices.Equal(current, desired) {
 		return nil
+	}
+	// Do not remove the current enrollment-authority members in the same
+	// membership cut that introduces a new voter.  The authority coordinator
+	// must first install the next signer epoch on that voter while the old
+	// authority majority is still present.  Stage the change as a temporary
+	// expansion; the next reconciliation round will publish the exact desired
+	// voter set after the new authority cut is durable.
+	authority, found, err := c.root.EnrollmentAuthority()
+	if err != nil {
+		return err
+	}
+	if found {
+		staged := slices.Clone(desired)
+		removedAuthority := false
+		for _, member := range authority.Members {
+			if slices.Contains(current, member) && !slices.Contains(desired, member) {
+				removedAuthority = true
+				if !slices.Contains(staged, member) {
+					staged = append(staged, member)
+				}
+			}
+		}
+		if removedAuthority {
+			slices.Sort(staged)
+			if len(staged) <= MaxRootVoters && !slices.Equal(staged, current) {
+				desired = staged
+			}
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err

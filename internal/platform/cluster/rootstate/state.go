@@ -264,6 +264,8 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		return s.applyRegionGroupRetirement(batch, *command.GroupRetirement)
 	case PlanRegionGroupRebuild:
 		return s.applyRegionGroupRebuild(batch, *command.GroupRebuild)
+	case MarkNodeReady:
+		return s.applyNodeReady(batch, *command.NodeReady)
 	case BeginRootJoin, CompleteRootJoin:
 		return s.applyRootJoin(batch, command)
 	case CreateJoinGrant, ConsumeJoinGrant, RevokeJoinGrant:

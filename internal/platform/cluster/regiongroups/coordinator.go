@@ -77,6 +77,17 @@ func (c *Coordinator) plan(ctx context.Context) error {
 	if _, err := c.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return err
 	}
+	// Root learners are not yet ready to host a regional Group.  Wait for the
+	// join workflow to publish durable admission before capturing a cohort;
+	// otherwise formation can race the learner's startup and publish a plan
+	// containing a Node that cannot observe or confirm it.
+	pending, err := c.root.PendingRootJoins()
+	if err != nil {
+		return err
+	}
+	if len(pending) != 0 {
+		return nil
+	}
 	cut, err := c.root.RootRoutingView(rootstate.MaxRegionCohortNodes)
 	if err != nil {
 		return err

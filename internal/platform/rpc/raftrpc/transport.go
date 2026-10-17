@@ -345,6 +345,21 @@ func (t *Transport) deliver(peer *peerSender, request outbound) error {
 	_, err := client.Step(ctx, &raftwire.StepRequest{ClusterId: t.options.ClusterID,
 		GroupId: request.groupID, FromRaftId: t.options.RaftID, ToRaftId: request.to,
 		Message: request.data})
+	if err != nil {
+		// grpc.ClientConn normally reconnects lazily, but a long-lived peer
+		// connection can remain stuck after the remote Node is restarted or
+		// its listener is replaced during enrollment. Drop the cached
+		// connection on delivery failure so the next Raft retry gets a fresh
+		// authenticated transport instead of repeatedly writing to a stale
+		// stream. A concurrent directory change must not close its replacement.
+		peer.mu.Lock()
+		if peer.address == address && peer.conn != nil {
+			_ = peer.conn.Close()
+			peer.conn = nil
+			peer.client = nil
+		}
+		peer.mu.Unlock()
+	}
 	return err
 }
 

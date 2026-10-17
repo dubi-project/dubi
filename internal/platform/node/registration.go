@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
+	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	identityenrollment "github.com/dubi-project/dubi/internal/platform/identity/enrollment"
@@ -58,12 +58,35 @@ func (runtime *Runtime) EnsureLocalNodeWithName(ctx context.Context, region, add
 		stop := context.AfterFunc(runtime.recoveryContext, cancel)
 		defer stop()
 	}
-	barrier := func() error {
-		return confirmStartupRoot(ctx, func(attempt context.Context) error {
-			_, err := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
+	// An enrolled Node has already completed the local activation fence before
+	// this registration confirmation runs. Its Root descriptor is therefore
+	// locally authenticated and does not need another learner-local ReadIndex
+	// (which may be unavailable until promotion). Bootstrap still takes the
+	// normal linearizable barrier below.
+	if runtime.RootJoin != nil {
+		local, err := runtime.RootJoin.Load()
+		if err != nil {
 			return err
-		}, time.Second)
+		}
+		if local.Phase == rootjoin.LocalActive {
+			current, found, err := runtime.Root.Node(runtime.Identity.RaftID)
+			if err != nil {
+				return err
+			}
+			if _, fenced, err := runtime.Root.NodeFence(runtime.Identity.RaftID); err != nil {
+				return err
+			} else if fenced {
+				return errors.New("local Node identity is fenced")
+			}
+			if !found || current.NodeID != descriptor.NodeID || current.RegionID != descriptor.RegionID || current.Address != descriptor.Address {
+				return errors.New("local network metadata differs from registered Node; controlled address/Region change required")
+			}
+			if name == "" || current.Name == name {
+				return nil
+			}
+		}
 	}
+	barrier := func() error { return runtime.confirmRoot(ctx) }
 	if err := barrier(); err != nil {
 		return err
 	}

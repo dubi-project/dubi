@@ -31,12 +31,13 @@ type RootReader interface {
 
 type Server struct {
 	nodecertwire.UnimplementedNodeCertificateServiceServer
-	host   RootReader
-	root   *rootstate.State
-	signer *nodepki.Signer
-	local  identity.Identity
-	slots  chan struct{}
-	now    func() time.Time
+	host     RootReader
+	root     *rootstate.State
+	signer   *nodepki.Signer
+	local    identity.Identity
+	slots    chan struct{}
+	now      func() time.Time
+	readRoot func(context.Context) (uint64, error)
 }
 
 func NewServer(host RootReader, root *rootstate.State, signer *nodepki.Signer, local identity.Identity) (*Server, error) {
@@ -55,6 +56,21 @@ func NewServer(host RootReader, root *rootstate.State, signer *nodepki.Signer, l
 }
 
 func (s *Server) SetSigner(signer *nodepki.Signer) { s.signer = signer }
+
+// SetRootReadIndex lets the owning Node route Root authorization barriers
+// through an authenticated remote voter while local Raft is catching up.
+func (s *Server) SetRootReadIndex(read func(context.Context) (uint64, error)) {
+	if s != nil {
+		s.readRoot = read
+	}
+}
+
+func (s *Server) readRootIndex(ctx context.Context) (uint64, error) {
+	if s.readRoot != nil {
+		return s.readRoot(ctx)
+	}
+	return s.host.ReadIndex(ctx, raft.RootGroupID)
+}
 
 func (s *Server) RenewNode(ctx context.Context, request *nodecertwire.RenewNodeRequest) (*nodecertwire.RenewNodeResponse, error) {
 	if s.signer == nil {
@@ -149,7 +165,7 @@ func (s *Server) peer(ctx context.Context, request *nodecertwire.RenewNodeReques
 }
 
 func (s *Server) confirmMembership(ctx context.Context, id identity.Identity) error {
-	if _, err := s.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := s.readRootIndex(ctx); err != nil {
 		if ctx.Err() != nil {
 			return status.FromContextError(ctx.Err()).Err()
 		}

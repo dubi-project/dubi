@@ -50,7 +50,7 @@ func (s *recordRepairService) authorizeMember(ctx context.Context, caller uint64
 	if err != nil || peerID.ClusterID != s.runtime.Identity.ClusterID || peerID.RaftID != caller {
 		return zero, 0, status.Error(codes.PermissionDenied, "record repair caller certificate mismatch")
 	}
-	index, err := s.runtime.Host.ReadIndex(ctx, raft.RootGroupID)
+	index, err := s.runtime.ReadRootIndex(ctx)
 	if err != nil {
 		return zero, 0, status.Error(codes.Unavailable, "Root read barrier unavailable")
 	}
@@ -206,7 +206,7 @@ type regionalRepairer struct {
 }
 
 func (r regionalRepairer) FillPending(ctx context.Context, target uint64, seal regionfence.Handoff) error {
-	if _, err := r.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := r.runtime.ReadRootIndex(ctx); err != nil {
 		return err
 	}
 	node, member, err := r.runtime.Root.RootMember(target)
@@ -221,7 +221,7 @@ func (r regionalRepairer) FillPending(ctx context.Context, target uint64, seal r
 }
 
 func (r regionalRepairer) VerifyPending(ctx context.Context, target uint64, seal regionfence.Handoff) error {
-	if _, err := r.runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+	if _, err := r.runtime.ReadRootIndex(ctx); err != nil {
 		return err
 	}
 	node, member, err := r.runtime.Root.RootMember(target)

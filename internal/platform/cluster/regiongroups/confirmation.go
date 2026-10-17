@@ -63,6 +63,13 @@ func (c *Confirmer) Reconcile(ctx context.Context) error {
 	if _, err := c.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return err
 	}
+	pending, err := c.root.PendingRootJoins()
+	if err != nil {
+		return err
+	}
+	if len(pending) != 0 {
+		return nil
+	}
 	groups, err := c.root.Groups()
 	if err != nil {
 		return err
