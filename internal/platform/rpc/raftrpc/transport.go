@@ -56,14 +56,19 @@ type outbound struct {
 	reference *snapshot.Reference
 }
 
+type peerLane struct {
+	address string
+	conn    *grpc.ClientConn
+	client  raftwire.RaftServiceClient
+}
+
 type peerSender struct {
-	mu        sync.Mutex // Shared connection, used concurrently by control/data lanes.
-	control   chan outbound
-	queue     chan outbound
-	snapshots chan outbound
-	address   string
-	conn      *grpc.ClientConn
-	client    raftwire.RaftServiceClient
+	mu          sync.Mutex
+	control     chan outbound
+	queue       chan outbound
+	snapshots   chan outbound
+	controlLane peerLane
+	dataLane    peerLane
 }
 
 // Transport separates consensus control, log data and snapshot workers per
@@ -119,8 +124,15 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 	if err := raft.ValidateGroupID(groupID); err != nil {
 		return err
 	}
-	if message == nil || message.GetFrom() != t.options.RaftID || message.GetTo() == 0 || message.GetTo() == t.options.RaftID {
-		return errors.New("Raft message has an invalid sender or target")
+	if message == nil || message.GetTo() == 0 || message.GetTo() == t.options.RaftID {
+		return errors.New("Raft message has an invalid target")
+	}
+	// etcd/raft deliberately preserves the original sender when a follower
+	// forwards a proposal or a read-index request to the leader. The transport
+	// envelope still authenticates this Node as the wire sender, so only those
+	// two forwarded message kinds may differ from the local Raft ID.
+	if message.GetFrom() != t.options.RaftID && message.GetType() != raftpb.MessageType_MsgProp && message.GetType() != raftpb.MessageType_MsgReadIndex {
+		return errors.New("Raft message has an invalid sender")
 	}
 	// Size and reserve before allocating another serialized copy. The caller
 	// owns message and must not mutate it concurrently with Send.
@@ -185,7 +197,7 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 		}
 	}()
 	data, err := proto.Marshal(message)
-	if err != nil {
+	if err != nil && t.ctx.Err() == nil {
 		return fmt.Errorf("encode Raft message: %w", err)
 	}
 	if len(data) != size {
@@ -201,8 +213,8 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 		peer = &peerSender{control: make(chan outbound, controlQueueSize), queue: make(chan outbound, t.options.QueueSize), snapshots: make(chan outbound, 1)}
 		t.peers[message.GetTo()] = peer
 		t.workers.Add(3)
-		go t.runPeer(message.GetTo(), peer, peer.control)
-		go t.runPeer(message.GetTo(), peer, peer.queue)
+		go t.runPeer(message.GetTo(), peer, peer.control, true)
+		go t.runPeer(message.GetTo(), peer, peer.queue, false)
 		go t.runSnapshots(message.GetTo(), peer)
 	}
 	request := outbound{groupID: groupID, to: message.GetTo(), data: data, release: release, reference: reference}
@@ -250,7 +262,7 @@ func (t *Transport) deliverSnapshot(request outbound) (returnErr error) {
 		return fmt.Errorf("Raft peer %d has no address", request.to)
 	}
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(t.options.Credentials),
-		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(DefaultSnapshotFrame+1024)))
+		grpc.WithDisableRetry(), grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(DefaultSnapshotFrame+1024)))
 	if err != nil {
 		return err
 	}
@@ -302,14 +314,14 @@ func (t *Transport) deliverSnapshot(request outbound) (returnErr error) {
 	return nil
 }
 
-func (t *Transport) runPeer(raftID uint64, peer *peerSender, queue <-chan outbound) {
+func (t *Transport) runPeer(raftID uint64, peer *peerSender, queue <-chan outbound, control bool) {
 	defer t.workers.Done()
 	for {
 		select {
 		case <-t.ctx.Done():
 			return
 		case request := <-queue:
-			err := t.deliver(peer, request)
+			err := t.deliver(peer, request, control)
 			request.data = nil
 			request.release()
 			if err != nil && t.options.OnFailure != nil {
@@ -319,44 +331,62 @@ func (t *Transport) runPeer(raftID uint64, peer *peerSender, queue <-chan outbou
 	}
 }
 
-func (t *Transport) deliver(peer *peerSender, request outbound) error {
+func (t *Transport) deliver(peer *peerSender, request outbound, control bool) error {
 	address, ok := t.options.Directory.Resolve(request.to)
 	if !ok {
 		return fmt.Errorf("Raft peer %d has no address", request.to)
 	}
 	peer.mu.Lock()
-	if peer.conn == nil || peer.address != address {
-		if peer.conn != nil {
-			_ = peer.conn.Close()
+	lane := &peer.dataLane
+	if control {
+		lane = &peer.controlLane
+	}
+	if lane.conn == nil || lane.address != address {
+		if lane.conn != nil {
+			_ = lane.conn.Close()
 		}
 		conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(t.options.Credentials),
-			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(t.options.MaxSize+1024)))
+			grpc.WithDisableRetry(), grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(t.options.MaxSize+1024)))
 		if err != nil {
-			peer.conn = nil
+			lane.conn = nil
 			peer.mu.Unlock()
 			return err
 		}
-		peer.address, peer.conn, peer.client = address, conn, raftwire.NewRaftServiceClient(conn)
+		lane.address, lane.conn, lane.client = address, conn, raftwire.NewRaftServiceClient(conn)
 	}
-	client := peer.client
+	conn := lane.conn
+	client := lane.client
 	peer.mu.Unlock()
 	ctx, cancel := context.WithTimeout(t.ctx, t.options.RPCTimeout)
 	defer cancel()
+	// A context deadline should cancel the unary call on its own. Keep an
+	// explicit connection watchdog as a last-resort escape hatch for a
+	// transport that is stuck before response headers arrive. Close only the
+	// exact lane connection used by this call; a newer replacement must remain
+	// untouched.
+	watchdog := time.AfterFunc(t.options.RPCTimeout, func() {
+		peer.mu.Lock()
+		current := lane.conn == conn
+		peer.mu.Unlock()
+		if current {
+			_ = conn.Close()
+		}
+	})
+	defer watchdog.Stop()
 	_, err := client.Step(ctx, &raftwire.StepRequest{ClusterId: t.options.ClusterID,
 		GroupId: request.groupID, FromRaftId: t.options.RaftID, ToRaftId: request.to,
 		Message: request.data})
-	if err != nil {
-		// grpc.ClientConn normally reconnects lazily, but a long-lived peer
-		// connection can remain stuck after the remote Node is restarted or
-		// its listener is replaced during enrollment. Drop the cached
-		// connection on delivery failure so the next Raft retry gets a fresh
-		// authenticated transport instead of repeatedly writing to a stale
-		// stream. A concurrent directory change must not close its replacement.
+	// Drop a failed connection so a peer restart or a dead TCP stream is
+	// repaired promptly. Compare the exact connection pointer: another lane may
+	// already have installed a fresh connection while this RPC was in flight;
+	// an older failure must never close that replacement and start a reconnect
+	// storm.
+	if err != nil && t.ctx.Err() == nil {
 		peer.mu.Lock()
-		if peer.address == address && peer.conn != nil {
-			_ = peer.conn.Close()
-			peer.conn = nil
-			peer.client = nil
+		if lane.conn == conn {
+			_ = conn.Close()
+			lane.conn = nil
+			lane.client = nil
 		}
 		peer.mu.Unlock()
 	}
@@ -382,8 +412,11 @@ func (t *Transport) Close() error {
 				request.release()
 			}
 		}
-		if peer.conn != nil {
-			failures = append(failures, peer.conn.Close())
+		if peer.controlLane.conn != nil {
+			failures = append(failures, peer.controlLane.conn.Close())
+		}
+		if peer.dataLane.conn != nil && peer.dataLane.conn != peer.controlLane.conn {
+			failures = append(failures, peer.dataLane.conn.Close())
 		}
 	}
 	return errors.Join(failures...)

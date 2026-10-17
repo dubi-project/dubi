@@ -76,6 +76,15 @@ func TestTransportReadIndexUsesReservedControlLane(t *testing.T) {
 	}
 }
 
+func TestTransportAllowsForwardedReadIndexFromAnotherRaftMember(t *testing.T) {
+	transport := budgetTransport(t)
+	message := &raftpb.Message{Type: raftpb.MessageType_MsgReadIndex.Enum(), From: proto.Uint64(3), To: proto.Uint64(2),
+		Entries: []*raftpb.Entry{{Data: []byte("forwarded")}}}
+	if err := transport.Send("data", message); err != nil {
+		t.Fatalf("forwarded ReadIndex rejected: %v", err)
+	}
+}
+
 func TestTransportBudgetsAreGlobalAndReleasedOnEveryExit(t *testing.T) {
 	transport := budgetTransport(t)
 	message := logMessage(2)
@@ -171,10 +180,11 @@ func TestTransportControlLaneBypassesBlockedLogAndActiveBytesStayReserved(t *tes
 		t.Fatal(err)
 	}
 	sender := transport.peers[2]
-	sender.conn, sender.address, sender.client = conn, "127.0.0.1:1", client
+	sender.controlLane.conn, sender.controlLane.address, sender.controlLane.client = conn, "127.0.0.1:1", client
+	sender.dataLane.conn, sender.dataLane.address, sender.dataLane.client = conn, "127.0.0.1:1", client
 	transport.workers.Add(2)
-	go transport.runPeer(2, sender, sender.control)
-	go transport.runPeer(2, sender, sender.queue)
+	go transport.runPeer(2, sender, sender.control, true)
+	go transport.runPeer(2, sender, sender.queue, false)
 	message := logMessage(2)
 	transport.messageBudget = resource.NewByteBudget(uint64(proto.Size(message)))
 	if err := transport.Send("data", message); err != nil {

@@ -918,7 +918,19 @@ func (g *Group) applyConfChange(index uint64, change raftpb.ConfChangeI) error {
 
 func (g *Group) dispatch(messages []*raftpb.Message) {
 	for _, message := range messages {
-		if g.transport == nil || g.transport.Send(g.groupID, message) != nil {
+		if g.transport == nil {
+			g.mu.Lock()
+			if !g.closed && g.fatal == nil {
+				if message.GetType() == raftpb.MessageType_MsgSnap {
+					g.raw.ReportSnapshot(message.GetTo(), etcdraft.SnapshotFailure)
+				} else {
+					g.raw.ReportUnreachable(message.GetTo())
+				}
+			}
+			g.mu.Unlock()
+			continue
+		}
+		if err := g.transport.Send(g.groupID, message); err != nil {
 			g.mu.Lock()
 			if !g.closed && g.fatal == nil {
 				if message.GetType() == raftpb.MessageType_MsgSnap {

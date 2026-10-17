@@ -98,7 +98,8 @@ func (s *Server) Step(ctx context.Context, request *raftwire.StepRequest) (*raft
 	if err := proto.Unmarshal(request.GetMessage(), &message); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "decode Raft message: %v", err)
 	}
-	if message.GetFrom() != request.GetFromRaftId() || message.GetTo() != request.GetToRaftId() {
+	if message.GetTo() != request.GetToRaftId() ||
+		(message.GetFrom() != request.GetFromRaftId() && message.GetType() != raftpb.MessageType_MsgProp && message.GetType() != raftpb.MessageType_MsgReadIndex) {
 		return nil, status.Error(codes.InvalidArgument, "Raft envelope IDs do not match message")
 	}
 	if message.GetType() == raftpb.MessageType_MsgSnap {
