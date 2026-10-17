@@ -42,6 +42,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/tlscredentials"
+	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 )
@@ -237,8 +238,24 @@ func Open(options Options) (*Server, error) {
 		for _, id := range cut.Membership.GetVoters() {
 			add(id)
 		}
+		// A local Root leader must try its own barrier first. The old order
+		// always skipped the local leader and tried voters in membership order;
+		// that made a healthy cross-region leader wait on an unreachable voter
+		// before it could confirm its own quorum. Each remote attempt is bounded
+		// so one stale address cannot consume the caller's whole deadline.
+		if status.Role == etcdraft.StateLeader && status.LeaderID == runtime.Identity.RaftID {
+			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+			index, localErr := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
+			cancel()
+			if localErr == nil {
+				return index, nil
+			}
+		}
 		for _, target := range targets {
-			if index, err := client.ReadIndex(ctx, target, raft.RootGroupID); err == nil {
+			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+			index, remoteErr := client.ReadIndex(attempt, target, raft.RootGroupID)
+			cancel()
+			if remoteErr == nil {
 				return index, nil
 			}
 		}

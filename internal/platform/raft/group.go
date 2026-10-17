@@ -192,8 +192,18 @@ func openGroup(options GroupOptions, hook func(string) error) (*Group, error) {
 	if err != nil {
 		return closeOnError(err)
 	}
+	// Root is the only global Raft Group. Its messages may cross regions with
+	// 150--300ms RTT, so a local 100ms heartbeat and one-second election lease
+	// causes healthy voters to repeatedly challenge one another. Keep data
+	// Groups responsive locally, but give Root a 500ms heartbeat and a 5s
+	// election window. This is still fast enough for control-plane work while
+	// leaving room for normal inter-region jitter and a quorum round trip.
+	heartbeatTick, electionTick := 1, 10
+	if options.GroupID == RootGroupID {
+		heartbeatTick, electionTick = 5, 50
+	}
 	raw, err := etcdraft.NewRawNode(&etcdraft.Config{
-		ID: options.RaftID, ElectionTick: 10, HeartbeatTick: 1,
+		ID: options.RaftID, ElectionTick: electionTick, HeartbeatTick: heartbeatTick,
 		Storage: storage, Applied: options.State.AppliedIndex(),
 		MaxSizePerMsg: 1 << 20, MaxCommittedSizePerReady: 4 << 20,
 		MaxUncommittedEntriesSize: 16 << 20, MaxInflightMsgs: 256,
