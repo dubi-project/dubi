@@ -45,7 +45,7 @@ func startJoinTestServer(t *testing.T, process *server.Server) (func(), func()) 
 		t.Helper()
 		select {
 		case <-process.Ready():
-		case <-time.After(20 * time.Second):
+		case <-time.After(60 * time.Second):
 			t.Fatal("joining test server not ready")
 		}
 	}

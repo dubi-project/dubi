@@ -197,6 +197,28 @@ func TestVolumeCLIOnlineAddPinsLocalNode(t *testing.T) {
 	}
 }
 
+func TestVolumeCLICompactionUsesRunningNodeWhenStoreIsOwned(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store := t.TempDir()
+	volumeCommand(t, "init", "--store", store)
+	process, err := openServer([]string{"--store", store, "--listen", "127.0.0.1:0"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ready := startJoinTestServer(t, process)
+	ready()
+	defer process.Close()
+
+	var response map[string]any
+	encoded := volumeCommand(t, "volume", "compact", "--store", store, "--server", process.LocalAddress())
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		t.Fatal("invalid compaction response:", err)
+	}
+	if response == nil {
+		t.Fatal("empty compaction response")
+	}
+}
+
 func TestJoinPrepareRegistersExplicitVolumes(t *testing.T) {
 	store := t.TempDir()
 	t.Setenv("DUBI_STORE", store)

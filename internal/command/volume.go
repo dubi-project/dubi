@@ -90,24 +90,24 @@ func compactVolume(ctx context.Context, store, endpoint string, rewrite bool, en
 	lock, err := storelock.Acquire(store)
 	if err != nil {
 		if !errors.Is(err, storelock.ErrAlreadyOpen) {
-			return err
+			return fmt.Errorf("acquire Store lock for compaction: %w", err)
 		}
 		if endpoint == "" {
 			endpoint, err = resolveServer(&flag.FlagSet{}, "", store)
-		}
-		if err != nil {
-			return err
+			if err != nil {
+				return fmt.Errorf("resolve local Node server for compaction: %w", err)
+			}
 		}
 		id, conn, err := openVolumeAdminClient(store, endpoint)
 		if err != nil {
-			return err
+			return fmt.Errorf("connect to running Node for compaction: %w", err)
 		}
 		defer conn.Close()
 		call, cancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer cancel()
 		response, err := datawire.NewDataServiceClient(conn).CompactStore(call, &datawire.CompactStoreRequest{ClusterId: id.ClusterID, FromRaftId: id.RaftID, Rewrite: rewrite})
 		if err != nil {
-			return err
+			return fmt.Errorf("compact Store through running Node: %w", err)
 		}
 		return encoder.Encode(response)
 	}
@@ -143,13 +143,13 @@ func mutateVolume(ctx context.Context, store, endpoint, value, action string, en
 	lock, err := storelock.Acquire(store)
 	if err != nil {
 		if !errors.Is(err, storelock.ErrAlreadyOpen) {
-			return err
+			return fmt.Errorf("acquire Store lock for Volume mutation: %w", err)
 		}
 		if endpoint == "" {
 			endpoint, err = resolveServer(&flag.FlagSet{}, "", store)
-		}
-		if err != nil {
-			return err
+			if err != nil {
+				return fmt.Errorf("resolve local Node server for Volume mutation: %w", err)
+			}
 		}
 		if identityenrollment.ValidateNodeAddress(endpoint) != nil {
 			return errors.New("local Node address is invalid")
@@ -335,19 +335,19 @@ func removeRunningVolume(ctx context.Context, store, endpoint, volumeID string) 
 func openVolumeAdminClient(store, endpoint string) (identity.Identity, *grpc.ClientConn, error) {
 	id, err := identity.Load(store)
 	if err != nil {
-		return identity.Identity{}, nil, err
+		return identity.Identity{}, nil, fmt.Errorf("load Node identity: %w", err)
 	}
 	_, clientTLS, err := config.LoadTLS(store, id)
 	if err != nil {
-		return identity.Identity{}, nil, err
+		return identity.Identity{}, nil, fmt.Errorf("load Node TLS: %w", err)
 	}
 	bound, err := tlscredentials.ForNode(credentials.NewTLS(clientTLS), identity.CertificateIdentity{ClusterID: id.ClusterID, NodeID: id.NodeID, RaftID: id.RaftID})
 	if err != nil {
-		return identity.Identity{}, nil, err
+		return identity.Identity{}, nil, fmt.Errorf("bind Node TLS identity: %w", err)
 	}
 	conn, err := grpc.NewClient("passthrough:///"+endpoint, grpc.WithTransportCredentials(bound))
 	if err != nil {
-		return identity.Identity{}, nil, err
+		return identity.Identity{}, nil, fmt.Errorf("create Node RPC client: %w", err)
 	}
 	return id, conn, nil
 }
