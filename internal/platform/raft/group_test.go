@@ -427,6 +427,31 @@ func TestGroupReadIndexRequiresQuorumAndAppliedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport.deliver(t)
+	// An idle Group has no committed entry in the freshly elected term. The
+	// first ReadIndex must establish that barrier itself instead of waiting for
+	// an unrelated client proposal.
+	freshCtx, freshCancel := context.WithTimeout(context.Background(), time.Second)
+	freshDone := make(chan error, 1)
+	go func() {
+		_, err := leader.ReadIndex(freshCtx)
+		freshDone <- err
+	}()
+	for {
+		transport.deliver(t)
+		select {
+		case err := <-freshDone:
+			freshCancel()
+			if err != nil {
+				t.Fatalf("fresh-term ReadIndex = %v", err)
+			}
+			goto freshReadComplete
+		case <-freshCtx.Done():
+			t.Fatalf("fresh-term ReadIndex did not establish a barrier: %v", freshCtx.Err())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+freshReadComplete:
 	if err := leader.Submit([]byte("read-visible")); err != nil {
 		t.Fatal(err)
 	}

@@ -81,22 +81,27 @@ type GroupOptions struct {
 }
 
 type Group struct {
-	mu             sync.Mutex
-	id             uint64
-	groupID        string
-	storage        *logstore.Storage
-	state          StateMachine
-	transport      Transport
-	raw            *etcdraft.RawNode
-	closed         bool
-	fatal          error
-	pendingReads   map[string]*pendingRead
-	proposalGuard  func() error
-	snapshotting   bool
-	snapshotCancel context.CancelFunc
-	snapshotWG     sync.WaitGroup
-	closeDone      chan struct{}
-	closeErr       error
+	mu           sync.Mutex
+	id           uint64
+	groupID      string
+	storage      *logstore.Storage
+	state        StateMachine
+	transport    Transport
+	raw          *etcdraft.RawNode
+	closed       bool
+	fatal        error
+	pendingReads map[string]*pendingRead
+	// readBarrierProposalTerm records the leader term for which a Raft
+	// no-op has already been proposed when ReadIndex needed to establish a
+	// current-term commit. It prevents concurrent readers from appending an
+	// unbounded stream of identical barrier entries.
+	readBarrierProposalTerm uint64
+	proposalGuard           func() error
+	snapshotting            bool
+	snapshotCancel          context.CancelFunc
+	snapshotWG              sync.WaitGroup
+	closeDone               chan struct{}
+	closeErr                error
 }
 
 type pendingRead struct {
@@ -365,6 +370,36 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 	if g.raw.BasicStatus().SoftState.Lead == 0 {
 		g.mu.Unlock()
 		return 0, ErrNoLeader
+	}
+	status := g.raw.Status()
+	// etcd/raft intentionally holds ReadIndex requests until the leader has
+	// committed an entry in its current term. Regional Groups can be idle for
+	// long periods, so a freshly elected leader otherwise makes every read
+	// (including repair/status observations) wait until its context expires.
+	// Commit one empty normal entry once per term to establish that barrier.
+	if !(len(status.Config.Voters[0]) == 1 && len(status.Config.Voters[1]) == 0) {
+		committedInTerm := false
+		if commit := status.GetCommit(); commit != 0 {
+			term, termErr := g.storage.Term(commit)
+			if termErr != nil {
+				g.mu.Unlock()
+				return 0, fmt.Errorf("read current-term barrier: %w", termErr)
+			}
+			committedInTerm = term == status.GetTerm()
+		}
+		if committedInTerm {
+			g.readBarrierProposalTerm = status.GetTerm()
+		} else if g.readBarrierProposalTerm != status.GetTerm() {
+			if err := g.admitProposal(); err != nil {
+				g.mu.Unlock()
+				return 0, err
+			}
+			if err := g.raw.Propose(nil); err != nil {
+				g.mu.Unlock()
+				return 0, fmt.Errorf("propose current-term read barrier: %w", err)
+			}
+			g.readBarrierProposalTerm = status.GetTerm()
+		}
 	}
 	g.pendingReads[key] = request
 	g.raw.ReadIndex(token[:])
