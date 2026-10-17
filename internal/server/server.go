@@ -222,6 +222,18 @@ func Open(options Options) (*Server, error) {
 	}
 	runtime.SetRootReadIndex(func(ctx context.Context) (uint64, error) {
 		status, _ := runtime.Host.Status(raft.RootGroupID)
+		// A fresh bootstrap Root has a voter before its Node descriptor is
+		// registered. The local leader can still prove its own single-node
+		// barrier, so do not build a routing view (which requires descriptors)
+		// until the local path has had a chance to succeed.
+		if status.Role == etcdraft.StateLeader && status.LeaderID == runtime.Identity.RaftID {
+			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+			index, localErr := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
+			cancel()
+			if localErr == nil {
+				return index, nil
+			}
+		}
 		cut, err := runtime.Root.RootRoutingView(rootjoin.MaxViewPeers)
 		if err != nil {
 			return 0, err
@@ -243,14 +255,6 @@ func Open(options Options) (*Server, error) {
 		// that made a healthy cross-region leader wait on an unreachable voter
 		// before it could confirm its own quorum. Each remote attempt is bounded
 		// so one stale address cannot consume the caller's whole deadline.
-		if status.Role == etcdraft.StateLeader && status.LeaderID == runtime.Identity.RaftID {
-			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
-			index, localErr := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
-			cancel()
-			if localErr == nil {
-				return index, nil
-			}
-		}
 		for _, target := range targets {
 			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
 			index, remoteErr := client.ReadIndex(attempt, target, raft.RootGroupID)
@@ -678,13 +682,18 @@ func (server *Server) run(runCtx context.Context, cancel context.CancelCauseFunc
 	if err := server.waitForRootLeader(runCtx); err != nil {
 		return fmt.Errorf("wait for Root leader: %w", err)
 	}
-	if err := server.Runtime.RecoverLocalGroups(runCtx); err != nil {
-		return fmt.Errorf("recover local Groups: %w", err)
-	}
 	if server.localNode != nil {
 		if err := server.Runtime.EnsureLocalNodeWithName(runCtx, server.localNode.RegionID, server.localNode.Address, server.localNode.Name); err != nil {
 			return fmt.Errorf("confirm local Node registration: %w", err)
 		}
+	}
+	// Bootstrap registration must precede local Group recovery. A fresh
+	// single-node Root has membership but no Node descriptor yet; recovering a
+	// regional Group first would reject that valid startup with "Root member has
+	// no registered address". Joined Nodes already have the descriptor, so the
+	// same ordering also keeps their recovery path deterministic.
+	if err := server.Runtime.RecoverLocalGroups(runCtx); err != nil {
+		return fmt.Errorf("recover local Groups: %w", err)
 	}
 	if server.desiredName != "" {
 		if current, found, err := server.Runtime.Root.Node(server.Runtime.Identity.RaftID); err != nil {
