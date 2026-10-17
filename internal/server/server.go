@@ -410,7 +410,12 @@ func Open(options Options) (*Server, error) {
 	}
 	raftwire.RegisterEngineDataServiceServer(grpcServer, routedData)
 	raftwire.RegisterRecordRepairServiceServer(grpcServer, newRecordRepairService(runtime, client, options.AuthorizePeer))
-	enrollmentServer, err = enrollmentrpc.NewServer(runtime.Host, runtime.Root, options.EnrollmentSigner, runtime.Identity)
+	rootControlHost, err := newRootControlHost(runtime.Host, client, runtime.Identity.RaftID)
+	if err != nil {
+		grpcServer.Stop()
+		return fail(err, transport, client)
+	}
+	enrollmentServer, err = enrollmentrpc.NewServer(rootControlHost, runtime.Root, options.EnrollmentSigner, runtime.Identity)
 	if err != nil {
 		grpcServer.Stop()
 		return fail(err, transport, client)
