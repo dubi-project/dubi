@@ -59,6 +59,12 @@ type PreparedSnapshot struct {
 var ErrSnapshotBusy = errors.New("Raft Group already has a snapshot build in progress")
 
 var ErrNoLeader = errors.New("Raft Group has no known leader for ReadIndex")
+var ErrReadIndexBusy = errors.New("Raft Group has too many pending ReadIndex requests")
+
+const (
+	defaultReadIndexTimeout = 10 * time.Second
+	maxPendingReadIndexes   = 1024
+)
 
 // Transport enqueues a durable Raft message for another Node. Send must not
 // synchronously call back into this Group; Group emits messages after unlocking.
@@ -200,12 +206,14 @@ func openGroup(options GroupOptions, hook func(string) error) (*Group, error) {
 	// Root is the only global Raft Group. Its messages may cross regions with
 	// 150--300ms RTT, so a local 100ms heartbeat and one-second election lease
 	// causes healthy voters to repeatedly challenge one another. Keep data
-	// Groups responsive locally, but give Root a 500ms heartbeat and a 5s
-	// election window. This is still fast enough for control-plane work while
-	// leaving room for normal inter-region jitter and a quorum round trip.
+	// Groups responsive locally, but give Root a 500ms heartbeat and a 15s
+	// election window. The wider lease prevents a busy cross-region control
+	// stream or a short VPS scheduling pause from needlessly changing the Root
+	// leader; management availability is more important than a few seconds of
+	// failover latency.
 	heartbeatTick, electionTick := 1, 10
 	if options.GroupID == RootGroupID {
-		heartbeatTick, electionTick = 5, 50
+		heartbeatTick, electionTick = 5, 150
 	}
 	raw, err := etcdraft.NewRawNode(&etcdraft.Config{
 		ID: options.RaftID, ElectionTick: electionTick, HeartbeatTick: heartbeatTick,
@@ -353,8 +361,16 @@ func (g *Group) Submit(command []byte) error {
 // ReadIndex returns only after a quorum-confirmed read barrier is applied by
 // this local StateMachine. The caller can then read its local durable view.
 func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
+	if ctx == nil {
+		return 0, errors.New("Raft ReadIndex requires context")
+	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultReadIndexTimeout)
+		defer cancel()
 	}
 	var token [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
@@ -371,7 +387,36 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 		g.mu.Unlock()
 		return 0, ErrNoLeader
 	}
+	if len(g.pendingReads) >= maxPendingReadIndexes {
+		g.mu.Unlock()
+		return 0, ErrReadIndexBusy
+	}
 	status := g.raw.Status()
+	if status.SoftState.RaftState == etcdraft.StateLeader {
+		// A leader proves each read with a fresh empty entry. Waiting for that
+		// entry to become applied is equivalent to a quorum ReadIndex barrier,
+		// while avoiding a second asynchronous read-response path on WAN links.
+		if err := g.admitProposal(); err != nil {
+			g.mu.Unlock()
+			return 0, err
+		}
+		if err := g.raw.Propose(nil); err != nil {
+			g.mu.Unlock()
+			return 0, fmt.Errorf("propose read barrier: %w", err)
+		}
+		messages, processErr := g.processLocked()
+		if processErr != nil {
+			g.mu.Unlock()
+			return 0, processErr
+		}
+		barrierIndex, indexErr := g.storage.LastIndex()
+		g.mu.Unlock()
+		if indexErr != nil {
+			return 0, indexErr
+		}
+		g.dispatch(messages)
+		return g.waitApplied(ctx, barrierIndex)
+	}
 	// etcd/raft intentionally holds ReadIndex requests until the leader has
 	// committed an entry in its current term. Regional Groups can be idle for
 	// long periods, so a freshly elected leader otherwise makes every read
@@ -414,9 +459,40 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 		return result.index, result.err
 	case <-ctx.Done():
 		g.mu.Lock()
+		status := g.raw.BasicStatus()
+		pending := len(g.pendingReads)
+		applied := g.state.AppliedIndex()
 		delete(g.pendingReads, key)
 		g.mu.Unlock()
-		return 0, ctx.Err()
+		return 0, fmt.Errorf("%w (leader=%d term=%d commit=%d applied=%d pending_reads=%d)",
+			ctx.Err(), status.SoftState.Lead, status.HardState.GetTerm(), status.HardState.GetCommit(), applied, pending)
+	}
+}
+
+func (g *Group) waitApplied(ctx context.Context, index uint64) (uint64, error) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		g.mu.Lock()
+		if err := g.checkLocked(); err != nil {
+			g.mu.Unlock()
+			return 0, err
+		}
+		applied := g.state.AppliedIndex()
+		g.mu.Unlock()
+		if applied >= index {
+			return index, nil
+		}
+		select {
+		case <-ctx.Done():
+			g.mu.Lock()
+			status := g.raw.BasicStatus()
+			applied = g.state.AppliedIndex()
+			g.mu.Unlock()
+			return 0, fmt.Errorf("%w (barrier_index=%d leader=%d term=%d commit=%d applied=%d)",
+				ctx.Err(), index, status.SoftState.Lead, status.HardState.GetTerm(), status.HardState.GetCommit(), applied)
+		case <-ticker.C:
+		}
 	}
 }
 

@@ -23,12 +23,13 @@ import (
 )
 
 const (
-	DefaultRPCTimeout    = 2 * time.Second
-	DefaultPeerQueueSize = 256
-	controlQueueSize     = 64
-	controlBudgetBytes   = 8 << 20
-	messageBudgetBytes   = 64 << 20
-	snapshotBudgetBytes  = 128 << 20
+	DefaultRPCTimeout     = 2 * time.Second
+	DefaultRootRPCTimeout = 10 * time.Second
+	DefaultPeerQueueSize  = 256
+	controlQueueSize      = 64
+	controlBudgetBytes    = 8 << 20
+	messageBudgetBytes    = 64 << 20
+	snapshotBudgetBytes   = 128 << 20
 )
 
 type TransportOptions struct {
@@ -66,12 +67,14 @@ type peerLane struct {
 }
 
 type peerSender struct {
-	mu          sync.Mutex
-	control     chan outbound
-	queue       chan outbound
-	snapshots   chan outbound
-	controlLane peerLane
-	dataLane    peerLane
+	mu              sync.Mutex
+	rootControl     chan outbound
+	control         chan outbound
+	queue           chan outbound
+	snapshots       chan outbound
+	rootControlLane peerLane
+	controlLane     peerLane
+	dataLane        peerLane
 }
 
 // Transport separates consensus control, log data and snapshot workers per
@@ -213,9 +216,10 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 	}
 	peer := t.peers[message.GetTo()]
 	if peer == nil {
-		peer = &peerSender{control: make(chan outbound, controlQueueSize), queue: make(chan outbound, t.options.QueueSize), snapshots: make(chan outbound, 1)}
+		peer = &peerSender{rootControl: make(chan outbound, controlQueueSize), control: make(chan outbound, controlQueueSize), queue: make(chan outbound, t.options.QueueSize), snapshots: make(chan outbound, 1)}
 		t.peers[message.GetTo()] = peer
-		t.workers.Add(3)
+		t.workers.Add(4)
+		go t.runPeerMode(message.GetTo(), peer, peer.rootControl, true, true)
 		go t.runPeer(message.GetTo(), peer, peer.control, true)
 		go t.runPeer(message.GetTo(), peer, peer.queue, false)
 		go t.runSnapshots(message.GetTo(), peer)
@@ -233,7 +237,13 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 	}
 	queue := peer.queue
 	if control {
+		// Root is the cluster-wide control plane. Keep its heartbeats,
+		// elections and read barriers independent from regional Group control
+		// traffic so a busy data cohort cannot make Root appear unavailable.
 		queue = peer.control
+		if groupID == raft.RootGroupID && peer.rootControl != nil {
+			queue = peer.rootControl
+		}
 	}
 	select {
 	case queue <- request:
@@ -318,13 +328,17 @@ func (t *Transport) deliverSnapshot(request outbound) (returnErr error) {
 }
 
 func (t *Transport) runPeer(raftID uint64, peer *peerSender, queue <-chan outbound, control bool) {
+	t.runPeerMode(raftID, peer, queue, control, false)
+}
+
+func (t *Transport) runPeerMode(raftID uint64, peer *peerSender, queue <-chan outbound, control, root bool) {
 	defer t.workers.Done()
 	for {
 		select {
 		case <-t.ctx.Done():
 			return
 		case request := <-queue:
-			err := t.deliver(peer, request, control)
+			err := t.deliverMode(peer, request, control, root)
 			request.data = nil
 			request.release()
 			if err != nil && t.options.OnFailure != nil {
@@ -335,13 +349,19 @@ func (t *Transport) runPeer(raftID uint64, peer *peerSender, queue <-chan outbou
 }
 
 func (t *Transport) deliver(peer *peerSender, request outbound, control bool) error {
+	return t.deliverMode(peer, request, control, false)
+}
+
+func (t *Transport) deliverMode(peer *peerSender, request outbound, control, root bool) error {
 	address, ok := t.options.Directory.Resolve(request.to)
 	if !ok {
 		return fmt.Errorf("Raft peer %d has no address", request.to)
 	}
 	peer.mu.Lock()
 	lane := &peer.dataLane
-	if control {
+	if root {
+		lane = &peer.rootControlLane
+	} else if control {
 		lane = &peer.controlLane
 	}
 	if lane.conn == nil || lane.address != address {
@@ -358,96 +378,29 @@ func (t *Transport) deliver(peer *peerSender, request outbound, control bool) er
 		lane.address, lane.conn, lane.client = address, conn, raftwire.NewRaftServiceClient(conn)
 	}
 	peer.mu.Unlock()
-	ctx, cancel := context.WithTimeout(t.ctx, t.options.RPCTimeout)
+	rpcTimeout := t.options.RPCTimeout
+	if root && rpcTimeout < DefaultRootRPCTimeout {
+		rpcTimeout = DefaultRootRPCTimeout
+	}
+	ctx, cancel := context.WithTimeout(t.ctx, rpcTimeout)
 	defer cancel()
-	// A gRPC unary call can remain in waitOnHeader after its context expires
-	// when the underlying HTTP/2 stream is wedged. Never let that call pin the
-	// per-peer worker: invoke it in a bounded goroutine and return on the
-	// transport deadline. Clone the wire bytes because the queue owner releases
-	// request.data as soon as deliver returns.
+	// Keep the unary call in the bounded per-peer worker. A detached goroutine
+	// here would let a wedged HTTP/2 stream accumulate one goroutine per Raft
+	// message forever; under a WAN outage that can exhaust a small Node before
+	// the Raft failure detector has a chance to converge. gRPC observes the
+	// context while the worker remains bounded.
 	message := append([]byte(nil), request.data...)
-	var err error
-	var conn *grpc.ClientConn
-	for {
-		peer.mu.Lock()
-		if lane.conn == nil || lane.address != address {
-			if lane.conn != nil {
-				_ = lane.conn.Close()
-			}
-			fresh, dialErr := grpc.NewClient(address, grpc.WithTransportCredentials(t.options.Credentials),
-				grpc.WithDisableRetry(), grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(t.options.MaxSize+1024)))
-			if dialErr != nil {
-				peer.mu.Unlock()
-				return dialErr
-			}
-			lane.address, lane.conn, lane.client = address, fresh, raftwire.NewRaftServiceClient(fresh)
-		}
-		conn = lane.conn
-		client := lane.client
-		peer.mu.Unlock()
-		// Keep the full per-message deadline for the wire call. A short fixed
-		// sub-deadline can cancel TLS/HTTP2 establishment on a WAN before the
-		// peer has a chance to receive the message, causing an endless reconnect
-		// loop. The outer context still bounds the async call and the worker.
-		attemptCtx, attemptCancel := context.WithCancel(ctx)
-		callDone := make(chan error, 1)
-		go func() {
-			_, callErr := client.Step(attemptCtx, &raftwire.StepRequest{ClusterId: t.options.ClusterID,
-				GroupId: request.groupID, FromRaftId: t.options.RaftID, ToRaftId: request.to,
-				Message: message})
-			callDone <- callErr
-		}()
-		select {
-		case err = <-callDone:
-			attemptCancel()
-			if err == nil {
-				break
-			}
-			if ctx.Err() == nil && (groupOpeningError(err) || status.Code(err) == codes.DeadlineExceeded || status.Code(err) == codes.Unavailable) {
-				peer.mu.Lock()
-				if lane.conn == conn {
-					_ = conn.Close()
-					lane.conn, lane.client = nil, nil
-				}
-				peer.mu.Unlock()
-				timer := time.NewTimer(25 * time.Millisecond)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					err = ctx.Err()
-				case <-timer.C:
-					continue
-				}
-			}
-		case <-ctx.Done():
-			attemptCancel()
-			// Close only the exact lane connection used by this call; a newer
-			// replacement must remain untouched. The abandoned call owns its
-			// cloned request and can finish independently after the worker exits.
-			peer.mu.Lock()
-			current := lane.conn == conn
-			peer.mu.Unlock()
-			if current {
-				_ = conn.Close()
-			}
-			err = ctx.Err()
-		}
-		break
-	}
-	// Drop a failed connection so a peer restart or a dead TCP stream is
-	// repaired promptly. Compare the exact connection pointer: another lane may
-	// already have installed a fresh connection while this RPC was in flight;
-	// an older failure must never close that replacement and start a reconnect
-	// storm.
-	if err != nil && t.ctx.Err() == nil {
-		peer.mu.Lock()
-		if lane.conn == conn {
-			_ = conn.Close()
-			lane.conn = nil
-			lane.client = nil
-		}
-		peer.mu.Unlock()
-	}
+	peer.mu.Lock()
+	client := lane.client
+	peer.mu.Unlock()
+	// Keep the lane connection alive across a timed-out message. grpc.ClientConn
+	// owns reconnect/backoff and can recover a dead TCP stream; tearing it down
+	// for every deadline creates a new HTTP/2 transport per Raft message and can
+	// exhaust a small Node during a WAN outage. Raft will retransmit the failed
+	// message after OnFailure reports this bounded attempt.
+	_, err := client.Step(ctx, &raftwire.StepRequest{ClusterId: t.options.ClusterID,
+		GroupId: request.groupID, FromRaftId: t.options.RaftID, ToRaftId: request.to,
+		Message: message})
 	return err
 }
 
@@ -468,18 +421,23 @@ func (t *Transport) Close() error {
 	var failures []error
 	for _, peer := range t.peers {
 		// No worker or Send can own queued requests after the barrier above.
-		for _, queue := range []chan outbound{peer.control, peer.queue, peer.snapshots} {
+		for _, queue := range []chan outbound{peer.rootControl, peer.control, peer.queue, peer.snapshots} {
 			for len(queue) > 0 {
 				request := <-queue
 				request.release()
 			}
 		}
-		if peer.controlLane.conn != nil {
+		if peer.rootControlLane.conn != nil {
+			if err := peer.rootControlLane.conn.Close(); err != nil && status.Code(err) != codes.Canceled {
+				failures = append(failures, err)
+			}
+		}
+		if peer.controlLane.conn != nil && peer.controlLane.conn != peer.rootControlLane.conn {
 			if err := peer.controlLane.conn.Close(); err != nil && status.Code(err) != codes.Canceled {
 				failures = append(failures, err)
 			}
 		}
-		if peer.dataLane.conn != nil && peer.dataLane.conn != peer.controlLane.conn {
+		if peer.dataLane.conn != nil && peer.dataLane.conn != peer.controlLane.conn && peer.dataLane.conn != peer.rootControlLane.conn {
 			if err := peer.dataLane.conn.Close(); err != nil && status.Code(err) != codes.Canceled {
 				failures = append(failures, err)
 			}

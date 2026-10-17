@@ -17,6 +17,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// A management request may need authenticated authorization, a forwarded
+// Root proposal, and a post-submit WAN barrier. Keep enough time for those
+// sequential control-plane rounds while retaining same-draft retries for a
+// lost reply.
+const (
+	managementRequestTimeout = 70 * time.Second
+	managementAttemptTimeout = 28 * time.Second
+)
+
 // CreateTicket sends only the draft's public request over managed Node mTLS.
 // Keep the same draft to retry a lost reply; neither private key nor secret is
 // sent to the issuer. A returned CA must equal the caller's existing trust root.
@@ -36,7 +45,7 @@ func CreateTicket(ctx context.Context, store, address string, draft *identityenr
 		return identityenrollment.Ticket{}, err
 	}
 	defer conn.Close()
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, managementRequestTimeout)
 	defer cancel()
 	client := enrollmentwire.NewEnrollmentServiceClient(conn)
 	var last error
@@ -44,7 +53,7 @@ func CreateTicket(ctx context.Context, store, address string, draft *identityenr
 		if err := ctx.Err(); err != nil {
 			return identityenrollment.Ticket{}, err
 		}
-		callCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+		callCtx, stop := context.WithTimeout(ctx, managementAttemptTimeout)
 		response, err := client.CreateGrant(callCtx, &enrollmentwire.CreateGrantRequest{ClusterId: id.ClusterID, FromRaftId: id.RaftID,
 			GrantId: request.GrantID, SecretSha256: request.SecretSHA256, PublicKeyDer: request.PublicKeyDER, ExpiresUnix: request.ExpiresUnix})
 		stop()

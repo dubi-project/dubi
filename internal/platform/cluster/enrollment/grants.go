@@ -95,9 +95,10 @@ func (m *GrantManager) Create(ctx context.Context, request identityenrollment.Gr
 	if err := request.Validate(m.clock()); err != nil {
 		return identityenrollment.GrantBundle{}, errors.Join(ErrGrantRejected, err)
 	}
-	if _, err := m.readRootIndex(ctx); err != nil {
-		return identityenrollment.GrantBundle{}, err
-	}
+	// The RPC management server has already performed an authenticated Root
+	// barrier in authorizeNode. Avoid paying for the same WAN round twice
+	// before the proposal; the post-submit barrier below is the authoritative
+	// confirmation for this operation.
 	now := m.clock()
 	if err := request.Validate(now); err != nil {
 		return identityenrollment.GrantBundle{}, errors.Join(ErrGrantRejected, err)
@@ -189,9 +190,8 @@ func (m *GrantManager) Revoke(ctx context.Context, grantID string) error {
 	if err := identity.ValidateJoinGrantID(grantID); err != nil {
 		return err
 	}
-	if _, err := m.readRootIndex(ctx); err != nil {
-		return err
-	}
+	// Revoke is called only after the RPC layer's authenticated Root barrier;
+	// confirm again after the mutation instead of spending a duplicate pre-read.
 	grant, found, err := m.root.JoinGrant(grantID)
 	if err != nil {
 		return err

@@ -42,7 +42,6 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/tlscredentials"
-	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 )
@@ -221,68 +220,78 @@ func Open(options Options) (*Server, error) {
 		return fail(err, transport, nil)
 	}
 	runtime.SetRootReadIndex(func(ctx context.Context) (uint64, error) {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		// Root barriers are control-plane operations and may cross regions. Run
+		// the local path and every currently known voter concurrently: a stale
+		// local leader hint or one slow WAN stream must not consume the whole
+		// operation deadline before a healthy voter can prove the same quorum.
+		type target struct {
+			id    uint64
+			local bool
+		}
+		targets := make([]target, 0, 4)
+		seen := make(map[uint64]bool)
+		add := func(id uint64, local bool) {
+			if id == 0 || seen[id] {
+				return
+			}
+			seen[id] = true
+			targets = append(targets, target{id: id, local: local})
+		}
 		status, _ := runtime.Host.Status(raft.RootGroupID)
-		// A Root voter can always ask its local Raft Group to forward a
-		// ReadIndex to the current leader. Prefer that path before dialing a
-		// peer: startup recovery must not depend on a stale cross-node HTTP/2
-		// stream merely because the local voter has not learned the leader hint
-		// yet. Joined learners still use the remote fallback below until Root
-		// promotes them.
 		if membership, membershipErr := runtime.Host.Membership(raft.RootGroupID); membershipErr == nil {
 			for _, voter := range membership.GetVoters() {
-				if voter == runtime.Identity.RaftID {
-					attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
-					index, localErr := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
-					cancel()
-					if localErr == nil {
-						return index, nil
-					}
-					break
+				add(voter, voter == runtime.Identity.RaftID)
+			}
+		}
+		add(status.LeaderID, status.LeaderID == runtime.Identity.RaftID)
+		if cut, viewErr := runtime.Root.RootRoutingView(rootjoin.MaxViewPeers); viewErr == nil {
+			for _, voter := range cut.Membership.GetVoters() {
+				add(voter, voter == runtime.Identity.RaftID)
+			}
+		}
+		if len(targets) == 0 {
+			add(runtime.Identity.RaftID, true)
+		}
+		probeCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		results := make(chan struct {
+			index uint64
+			err   error
+		}, len(targets))
+		for _, item := range targets {
+			go func(item target) {
+				var index uint64
+				var err error
+				if item.local {
+					index, err = runtime.Host.ReadIndex(probeCtx, raft.RootGroupID)
+				} else {
+					index, err = client.ReadIndex(probeCtx, item.id, raft.RootGroupID)
 				}
+				results <- struct {
+					index uint64
+					err   error
+				}{index: index, err: err}
+			}(item)
+		}
+		var lastErr error
+		for range targets {
+			select {
+			case result := <-results:
+				if result.err == nil {
+					return result.index, nil
+				}
+				lastErr = result.err
+			case <-ctx.Done():
+				return 0, ctx.Err()
 			}
 		}
-		// A fresh bootstrap Root has a voter before its Node descriptor is
-		// registered. The local leader can still prove its own single-node
-		// barrier, so do not build a routing view (which requires descriptors)
-		// until the local path has had a chance to succeed.
-		if status.Role == etcdraft.StateLeader && status.LeaderID == runtime.Identity.RaftID {
-			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
-			index, localErr := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
-			cancel()
-			if localErr == nil {
-				return index, nil
-			}
+		if lastErr == nil {
+			lastErr = raft.ErrNoLeader
 		}
-		cut, err := runtime.Root.RootRoutingView(rootjoin.MaxViewPeers)
-		if err != nil {
-			return 0, err
-		}
-		targets := make([]uint64, 0, len(cut.Membership.GetVoters())+1)
-		seen := make(map[uint64]bool)
-		add := func(id uint64) {
-			if id != 0 && id != runtime.Identity.RaftID && !seen[id] {
-				seen[id] = true
-				targets = append(targets, id)
-			}
-		}
-		add(status.LeaderID)
-		for _, id := range cut.Membership.GetVoters() {
-			add(id)
-		}
-		// A local Root leader must try its own barrier first. The old order
-		// always skipped the local leader and tried voters in membership order;
-		// that made a healthy cross-region leader wait on an unreachable voter
-		// before it could confirm its own quorum. Each remote attempt is bounded
-		// so one stale address cannot consume the caller's whole deadline.
-		for _, target := range targets {
-			attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
-			index, remoteErr := client.ReadIndex(attempt, target, raft.RootGroupID)
-			cancel()
-			if remoteErr == nil {
-				return index, nil
-			}
-		}
-		return runtime.Host.ReadIndex(ctx, raft.RootGroupID)
+		return 0, lastErr
 	})
 	localData, err := enginedata.New(runtime, client)
 	if err != nil {

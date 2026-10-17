@@ -19,7 +19,10 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	identityenrollment "github.com/dubi-project/dubi/internal/platform/identity/enrollment"
 	"github.com/dubi-project/dubi/internal/platform/protocol"
+	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/rpc/datawire"
+	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
+	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/tlscredentials"
@@ -36,6 +39,8 @@ const (
 	// observations while the Node was otherwise healthy.
 	peerRepairProbeWindow  = 8 * time.Second
 	peerRepairProbeTimeout = 5 * time.Second
+	rootQuorumProbeWindow  = 30 * time.Second
+	rootQuorumProbeTimeout = 25 * time.Second
 )
 
 // status is an operator view of one quorum-confirmed Root cut. It uses the
@@ -331,6 +336,98 @@ func deriveLocalHealth(storage *volume.Report, storageErr string, repair *localR
 	return health
 }
 
+// confirmRootQuorum performs a real authenticated Root read barrier. A Root
+// discovery response is only a membership snapshot; it can be served by a
+// follower while the quorum is unavailable. Status must not call that
+// snapshot a confirmed majority.
+func confirmRootQuorum(ctx context.Context, id identity.Identity, clientTLS *tls.Config, view rootjoin.View) (bool, error) {
+	if ctx == nil || clientTLS == nil || len(view.Voters) < 1 {
+		return false, errors.New("Root quorum has no usable voters")
+	}
+	directory := raftrpc.NewStaticDirectory()
+	for _, peerNode := range view.Peers {
+		if err := directory.Update(peerNode.RaftID, peerNode.Address); err != nil {
+			return false, err
+		}
+	}
+	client, err := raftrpc.NewGroupClient(raftrpc.GroupClientOptions{
+		ClusterID: id.ClusterID, RaftID: id.RaftID, Directory: directory,
+		Credentials: tlscredentials.NewTLS(clientTLS), MaxSize: rootjoinrpc.MaxRequestSize,
+	})
+	if err != nil {
+		return false, err
+	}
+	defer client.Close()
+	targets := make([]uint64, 0, len(view.Voters))
+	add := func(target uint64) {
+		if target == 0 {
+			return
+		}
+		for _, existing := range targets {
+			if existing == target {
+				return
+			}
+		}
+		targets = append(targets, target)
+	}
+	add(view.LeaderID)
+	for _, voter := range view.Voters {
+		add(voter)
+	}
+	if len(targets) == 0 {
+		return false, errors.New("Root quorum has no remote voter to probe")
+	}
+	probeCtx, probeCancel := context.WithCancel(ctx)
+	defer probeCancel()
+	type result struct {
+		target uint64
+		err    error
+	}
+	results := make(chan result, len(targets))
+	var wg sync.WaitGroup
+	for _, target := range targets {
+		wg.Add(1)
+		go func(target uint64) {
+			defer wg.Done()
+			attempt, cancel := context.WithTimeout(probeCtx, rootQuorumProbeTimeout)
+			defer cancel()
+			var probeErr error
+			if target == id.RaftID {
+				address, found := directory.Resolve(target)
+				if !found {
+					probeErr = errors.New("local Root voter has no address")
+				} else {
+					conn, dialErr := grpc.NewClient(address, grpc.WithTransportCredentials(tlscredentials.NewTLS(clientTLS)))
+					if dialErr != nil {
+						probeErr = dialErr
+					} else {
+						_, probeErr = raftwire.NewGroupServiceClient(conn).ReadIndex(attempt,
+							&raftwire.GroupReadIndexRequest{ClusterId: id.ClusterID, GroupId: raft.RootGroupID,
+								FromRaftId: id.RaftID, ToRaftId: id.RaftID})
+						_ = conn.Close()
+					}
+				}
+			} else {
+				_, probeErr = client.ReadIndex(attempt, target, raft.RootGroupID)
+			}
+			results <- result{target: target, err: probeErr}
+		}(target)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	var failures []error
+	for item := range results {
+		if item.err == nil {
+			probeCancel()
+			return true, nil
+		}
+		failures = append(failures, fmt.Errorf("voter %d: %w", item.target, item.err))
+	}
+	return false, errors.Join(failures...)
+}
+
 func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -355,6 +452,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	requestCtx := ctx
 	id, err := identity.Load(*store)
 	if err != nil {
 		return fmt.Errorf("load existing Node identity: %w", err)
@@ -468,10 +566,20 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			}
 		}
 	}
+	// Local repair inspection is deliberately bounded, but it must not consume
+	// the only deadline available to the Root majority probe. A status command
+	// is useful precisely when one local diagnostic is slow; keep the quorum
+	// proof on its own bounded window while still honoring caller cancellation.
+	rootProbeCtx, rootProbeCancel := context.WithTimeout(requestCtx, rootQuorumProbeWindow)
+	rootQuorumConfirmed, rootQuorumErr := confirmRootQuorum(rootProbeCtx, id, clientTLS, view)
+	rootProbeCancel()
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	health := deriveLocalHealth(storage, storageError, repair, repairError)
-	cluster := deriveClusterHealth(view, health, true)
+	cluster := deriveClusterHealth(view, health, rootQuorumConfirmed)
+	if rootQuorumErr != nil && !rootQuorumConfirmed {
+		cluster.Reasons = append(cluster.Reasons, "Root quorum probe failed: "+rootQuorumErr.Error())
+	}
 	cluster = applyPeerRepairHealth(cluster, probePeerRepairs(ctx, id, clientTLS, view))
 	return encoder.Encode(statusReport{ObservedNodeID: remote.NodeID, Root: view, Cluster: cluster, Health: health, LocalStorage: storage, LocalStorageError: storageError,
 		LocalRepair: repair, LocalRepairError: repairError})
