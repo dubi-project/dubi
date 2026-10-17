@@ -137,6 +137,9 @@ func TestDeriveLocalHealthNeverClaimsHealthyWithoutLocalObservations(t *testing.
 	if got := deriveLocalHealth(&volume.Report{Volumes: []volume.Status{{Record: volume.Record{ID: "v1"}, Health: "healthy"}}}, "", &localRepairView{WorkerEnabled: true, LastCheckUnix: 10}, ""); got.State != "healthy" || len(got.Reasons) != 0 {
 		t.Fatal("clean local observations were not marked healthy", got)
 	}
+	if got := deriveLocalHealth(&volume.Report{Volumes: []volume.Status{{Record: volume.Record{ID: "v1", State: volume.Removed}, Health: "removed"}}}, "", &localRepairView{WorkerEnabled: true, LastCheckUnix: 10}, ""); got.State != "healthy" || len(got.Reasons) != 0 {
+		t.Fatal("removed Volume tombstone was treated as a storage failure", got)
+	}
 	if got := deriveLocalHealth(&volume.Report{Volumes: []volume.Status{{Record: volume.Record{ID: "v1"}, Health: "healthy"}}}, "", &localRepairView{WorkerEnabled: true, TotalIssues: 1, LastCheckUnix: 10}, ""); got.State != "degraded" || len(got.Reasons) != 1 {
 		t.Fatal("repair debt was not surfaced", got)
 	}

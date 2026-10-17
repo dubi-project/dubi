@@ -274,14 +274,17 @@ func probePeerRepair(ctx context.Context, id identity.Identity, clientTLS *tls.C
 	observation.RepairDebt = response.GetTotalIssues()
 	observation.GeoDebt = response.GetGeoMetadataDebt() + response.GetGeoRecordDebt()
 	observation.WriteQuarantines = uint32(len(response.GetVolumeWriteErrors()))
-	for _, volume := range response.GetVolumes() {
-		if volume == nil {
+	for _, item := range response.GetVolumes() {
+		if item == nil {
 			observation.Error = "peer returned an invalid Volume status"
 			observation.Reachable = false
 			return observation
 		}
-		observation.Volumes = append(observation.Volumes, peerVolumeView{ID: volume.GetVolumeId(), State: volume.GetState(), Health: volume.GetHealth(), Error: volume.GetError()})
-		if volume.GetHealth() != "healthy" {
+		observation.Volumes = append(observation.Volumes, peerVolumeView{ID: item.GetVolumeId(), State: item.GetState(), Health: item.GetHealth(), Error: item.GetError()})
+		// Removed Volumes remain in the durable registry as tombstones so an
+		// operator can audit the lifecycle. They are no longer a storage
+		// failure and must not keep the Node or Cluster degraded.
+		if item.GetState() != string(volume.Removed) && item.GetHealth() != "healthy" {
 			observation.Error = "peer has an unhealthy Volume"
 		}
 	}
@@ -297,7 +300,7 @@ func deriveLocalHealth(storage *volume.Report, storageErr string, repair *localR
 		health.Reasons = append(health.Reasons, "local storage was not observed")
 	} else {
 		for _, item := range storage.Volumes {
-			if item.Health != "healthy" {
+			if item.State != volume.Removed && item.Health != "healthy" {
 				health.State = "degraded"
 				health.Reasons = append(health.Reasons, fmt.Sprintf("volume %s is %s", item.ID, item.Health))
 			}
