@@ -217,6 +217,19 @@ func TestVolumeCLICompactionUsesRunningNodeWhenStoreIsOwned(t *testing.T) {
 	if response == nil {
 		t.Fatal("empty compaction response")
 	}
+
+	var added volume.Record
+	if err := json.Unmarshal(volumeCommand(t, "volume", "add", "--store", store, "--server", process.LocalAddress(), t.TempDir()), &added); err != nil {
+		t.Fatal("add maintenance Volume:", err)
+	}
+	volumeCommand(t, "volume", "drain", "--store", store, "--server", process.LocalAddress(), added.ID)
+	var removed volume.Record
+	if err := json.Unmarshal(volumeCommand(t, "volume", "remove", "--store", store, "--server", process.LocalAddress(), added.ID), &removed); err != nil {
+		t.Fatal("remove maintenance Volume:", err)
+	}
+	if removed.ID != added.ID || removed.State != volume.Removed {
+		t.Fatalf("removed Volume: %+v", removed)
+	}
 }
 
 func TestJoinPrepareRegistersExplicitVolumes(t *testing.T) {
