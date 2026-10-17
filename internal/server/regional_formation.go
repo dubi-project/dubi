@@ -20,6 +20,13 @@ type regionalFormation struct {
 	report      groupmembership.ErrorReporter
 }
 
+// Formation is a control-plane reconciler. A one-second retry interval causes
+// every Node to continuously enqueue Root/Group barriers while a WAN election
+// or snapshot is still converging, starving the very control traffic needed to
+// recover. Keep the normal retry cadence deliberately slower; an in-flight
+// round is still bounded and resumes from durable intent on the next tick.
+const regionalFormationInterval = 5 * time.Second
+
 // All nodes observe formation intents independently of Root leadership. One
 // in-flight round per node, bounded lifetime, joined before Store resources close.
 func (r *regionalFormation) run(ctx context.Context) {
@@ -47,7 +54,7 @@ func (r *regionalFormation) run(ctx context.Context) {
 		if err != nil && ctx.Err() == nil && r.report != nil {
 			r.report(fmt.Errorf("regional Group reconciliation: %w", err))
 		}
-		timer := time.NewTimer(time.Second)
+		timer := time.NewTimer(regionalFormationInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

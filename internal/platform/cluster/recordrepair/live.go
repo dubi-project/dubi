@@ -185,6 +185,14 @@ func repairReference(ctx context.Context, plan placement.LocalPlan, ref enginest
 		if checkErr != nil {
 			if errors.Is(checkErr, records.ErrUnavailable) {
 				localUnavailable = true
+				// A closed or otherwise unusable local Store cannot be repaired
+				// through the ordinary source-fetch path.  Do not even probe
+				// cohort sources unless the caller supplied the explicit remote
+				// target primitive; otherwise a failed local repair would look
+				// like it made progress while no local holding can be published.
+				if _, ok := client.(RemoteRepairer); !ok {
+					return false, fmt.Errorf("local immutable-record Store is unavailable: %w", checkErr)
+				}
 			} else {
 				return false, fmt.Errorf("verify destination immutable record: %w", checkErr)
 			}

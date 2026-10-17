@@ -27,6 +27,12 @@ type Scheduler struct {
 	report     ErrorReporter
 }
 
+// Membership reconciliation is maintenance work, not a heartbeat. Retrying
+// every second across a WAN can fill the Root control queue while an existing
+// election or snapshot is still converging. Durable tasks remain available for
+// the next pass, so a modest default cadence gives recovery traffic priority.
+const DefaultInterval = 5 * time.Second
+
 func NewScheduler(leadership RootLeadership, reconciler PendingReconciler,
 	interval time.Duration, report ErrorReporter,
 ) (*Scheduler, error) {
@@ -34,7 +40,7 @@ func NewScheduler(leadership RootLeadership, reconciler PendingReconciler,
 		return nil, errors.New("membership scheduler requires leadership, reconciler, and non-negative interval")
 	}
 	if interval == 0 {
-		interval = time.Second
+		interval = DefaultInterval
 	}
 	if report == nil {
 		report = func(error) {}
