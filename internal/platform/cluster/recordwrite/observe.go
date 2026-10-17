@@ -75,6 +75,12 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 	}
 	result := PublishedObservation{Plan: plan, Reference: reference}
 	var failures []error
+	remainingRemote := 0
+	for _, node := range plan.Nodes() {
+		if node.RaftID != localID {
+			remainingRemote++
+		}
+	}
 	for _, node := range plan.Nodes() {
 		if err := ctx.Err(); err != nil {
 			return PublishedObservation{}, err
@@ -98,7 +104,10 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 			}
 			holding = placement.Holding{RaftID: localID, NodeID: localNodeID, StoreID: verified.StoreID, RecordID: verified.RecordID}
 		} else {
-			observed, err := observer.ObserveRecordHolding(ctx, node.RaftID, descriptor)
+			attempt, cancel := observationAttemptContext(ctx, remainingRemote)
+			remainingRemote--
+			observed, err := observer.ObserveRecordHolding(attempt, node.RaftID, descriptor)
+			cancel()
 			if err != nil {
 				if unavailableHolding(err) {
 					failures = append(failures, fmt.Errorf("Node %d: %w", node.RaftID, err))
