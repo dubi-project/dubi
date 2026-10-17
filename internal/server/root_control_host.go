@@ -7,6 +7,7 @@ import (
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enrollment"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	etcdraft "go.etcd.io/raft/v3"
 )
 
 // rootControlHost makes management writes independent of the Node that
@@ -51,7 +52,18 @@ func (h *rootControlHost) Submit(groupID string, command []byte) error {
 	if target := status.LeaderID; target != 0 && target != h.raftID {
 		return h.forwardSubmit(target, groupID, command)
 	}
+	if status.Role != etcdraft.StateLeader || status.LeaderID == 0 {
+		return raft.ErrNoLeader
+	}
 	if err := h.local.Submit(groupID, command); err == nil {
+		// Raft may drop a proposal during the exact leader transition while
+		// still returning nil from Propose. Re-read SoftState before reporting
+		// success so management callers never confirm a command that was not
+		// accepted by a leader.
+		fresh, freshErr := h.local.Status(groupID)
+		if freshErr == nil && (fresh.Role != etcdraft.StateLeader || fresh.LeaderID != h.raftID) {
+			return raft.ErrNoLeader
+		}
 		return nil
 	} else if target, refreshErr := h.leader(); refreshErr == nil && target != 0 && target != h.raftID {
 		// A stale local SoftState can briefly report this Node as leader during

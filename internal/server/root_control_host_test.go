@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	etcdraft "go.etcd.io/raft/v3"
 )
 
 type rootControlLocalFake struct {
@@ -39,7 +40,7 @@ func (f *rootControlClientFake) ReadIndex(_ context.Context, target uint64, _ st
 }
 
 func TestRootControlHostForwardsFollowerRootWrites(t *testing.T) {
-	local := &rootControlLocalFake{status: raft.GroupStatus{RaftID: 11, LeaderID: 22}}
+	local := &rootControlLocalFake{status: raft.GroupStatus{RaftID: 11, LeaderID: 22, Role: etcdraft.StateFollower}}
 	remote := &rootControlClientFake{}
 	host, err := newRootControlHost(local, remote, 11)
 	if err != nil {
@@ -57,7 +58,7 @@ func TestRootControlHostForwardsFollowerRootWrites(t *testing.T) {
 }
 
 func TestRootControlHostUsesLocalLeaderAndForwardsRead(t *testing.T) {
-	local := &rootControlLocalFake{status: raft.GroupStatus{RaftID: 11, LeaderID: 11, AppliedIndex: 3}}
+	local := &rootControlLocalFake{status: raft.GroupStatus{RaftID: 11, LeaderID: 11, Role: etcdraft.StateLeader, AppliedIndex: 3}}
 	remote := &rootControlClientFake{}
 	host, err := newRootControlHost(local, remote, 11)
 	if err != nil {
@@ -78,8 +79,23 @@ func TestRootControlHostUsesLocalLeaderAndForwardsRead(t *testing.T) {
 	}
 }
 
+func TestRootControlHostRejectsProposalDuringLeaderGap(t *testing.T) {
+	local := &rootControlLocalFake{status: raft.GroupStatus{RaftID: 11}}
+	remote := &rootControlClientFake{}
+	host, err := newRootControlHost(local, remote, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Submit(raft.RootGroupID, []byte("command")); !errors.Is(err, raft.ErrNoLeader) {
+		t.Fatalf("error = %v, want ErrNoLeader", err)
+	}
+	if local.submits != 0 || len(remote.submits) != 0 {
+		t.Fatalf("proposal was sent during leader gap: local=%d remote=%v", local.submits, remote.submits)
+	}
+}
+
 func TestRootControlHostRetriesRefreshedLeaderAfterStaleSubmit(t *testing.T) {
-	local := &rootControlLocalFake{status: raft.GroupStatus{RaftID: 11, LeaderID: 11}, submitErr: errors.New("not leader")}
+	local := &rootControlLocalFake{status: raft.GroupStatus{RaftID: 11, LeaderID: 11, Role: etcdraft.StateLeader}, submitErr: errors.New("not leader")}
 	remote := &rootControlClientFake{}
 	host, err := newRootControlHost(local, remote, 11)
 	if err != nil {
