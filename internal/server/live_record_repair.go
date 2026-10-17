@@ -93,7 +93,13 @@ func (cursor liveRepairCursor) debtError(groupID string) error {
 const liveRepairPageLimit = 8
 const liveRepairInterval = 5 * time.Second
 const liveRepairContinuationDelay = 100 * time.Millisecond
-const liveRepairTimeout = 30 * time.Second
+
+// A repair page may cross Regions, read a current Root/Group cut, stream a
+// Pack record and re-confirm its physical holding. Thirty seconds was enough
+// for local tests but too short for a cold WAN path during Raft catch-up; the
+// bounded two-minute budget still prevents a stuck source from monopolizing
+// the worker while avoiding a permanent false repair debt.
+const liveRepairTimeout = 2 * time.Minute
 
 func (worker *liveRecordRepair) run(ctx context.Context) {
 	timer := time.NewTimer(liveRepairInterval)
