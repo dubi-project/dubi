@@ -279,6 +279,12 @@ func (s *dataService) LocalRepairStatus(ctx context.Context, request *datawire.L
 // ClusterRepairStatus is the peer-facing diagnostic path. A current Root
 // member may ask this Node for its own bounded state; the serving Node's
 // certificate and response identity remain authoritative for this report.
+//
+// This is deliberately a best-effort observation path. It validates the
+// caller against this Node's latest applied Root membership, but does not
+// perform a linearizable Root read. Status must remain usable while a quorum
+// is degraded and must never create a fan-out of nested ReadIndex calls that
+// competes with the actual data and membership paths.
 func (s *dataService) ClusterRepairStatus(ctx context.Context, request *datawire.LocalRepairStatusRequest) (*datawire.LocalRepairStatusResponse, error) {
 	if request == nil || proto.Size(request) > 4096 || request.GetFromRaftId() == 0 || request.GetClusterId() != s.runtime.Identity.ClusterID {
 		return nil, status.Error(codes.InvalidArgument, "invalid cluster repair status request")
@@ -290,9 +296,6 @@ func (s *dataService) ClusterRepairStatus(ctx context.Context, request *datawire
 	caller, err := identity.ParseNodeCertificate(leaf)
 	if err != nil || caller.ClusterID != s.runtime.Identity.ClusterID || caller.RaftID != request.GetFromRaftId() {
 		return nil, status.Error(codes.PermissionDenied, "cluster repair status caller identity mismatch")
-	}
-	if _, err := s.runtime.ReadRootIndex(ctx); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "confirm Root membership: %v", err)
 	}
 	member, found, err := s.runtime.Root.RootMember(caller.RaftID)
 	if err != nil || !found || member.NodeID != caller.NodeID {
