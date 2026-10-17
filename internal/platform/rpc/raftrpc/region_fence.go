@@ -40,6 +40,17 @@ type RegionFenceServer struct {
 	authorize AuthorizePeer
 	slots     chan struct{}
 	timeout   time.Duration // Internal bound; shortened only by tests.
+	rootRead  func(context.Context) (uint64, error)
+}
+
+// SetRootReadIndex supplies the server's authenticated Root barrier. A
+// regional observation may arrive while this Node is a Root voter without a
+// fresh local leader hint; reusing the Node-level fallback keeps that request
+// from waiting on a stale local ReadIndex indefinitely.
+func (s *RegionFenceServer) SetRootReadIndex(read func(context.Context) (uint64, error)) {
+	if s != nil {
+		s.rootRead = read
+	}
 }
 
 func NewRegionFenceServer(clusterID string, raftID uint64, host regionReadBarrier, root *rootstate.State, states EngineResolver, authorize AuthorizePeer) (*RegionFenceServer, error) {
@@ -138,7 +149,13 @@ func observationWaitError(err error) error {
 }
 
 func (s *RegionFenceServer) confirmRoot(ctx context.Context, caller uint64, group string) (uint64, error) {
-	index, err := s.host.ReadIndex(ctx, raft.RootGroupID)
+	var index uint64
+	var err error
+	if s.rootRead != nil {
+		index, err = s.rootRead(ctx)
+	} else {
+		index, err = s.host.ReadIndex(ctx, raft.RootGroupID)
+	}
 	if err != nil {
 		return 0, observationWaitError(err)
 	}

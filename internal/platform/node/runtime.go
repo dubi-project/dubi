@@ -85,12 +85,28 @@ func (runtime *Runtime) ReadRootIndex(ctx context.Context) (uint64, error) {
 	if runtime == nil || runtime.Host == nil || runtime.Root == nil {
 		return 0, errors.New("Node runtime is incomplete")
 	}
+	// Use the server-supplied authenticated path whenever it exists. It first
+	// tries the local voter and then a current remote Root voter, with bounded
+	// RPC deadlines. Calling Host.ReadIndex directly here can keep startup in
+	// a long retry cycle when the local follower's leader hint is stale.
 	if runtime.rootReadIndex == nil {
 		return runtime.Host.ReadIndex(ctx, raft.RootGroupID)
 	}
 	index, err := runtime.rootReadIndex(ctx)
 	if err != nil {
 		return 0, err
+	}
+	// Voters already apply the Root log locally as part of normal Raft
+	// progress. Do not chase a moving remote barrier index during startup:
+	// topology reconciliation can advance Root again before a WAN follower
+	// observes the previous cut. Learners still need the explicit wait because
+	// their remote barrier is the only proof that the local Root view is ready.
+	if membership, membershipErr := runtime.Host.Membership(raft.RootGroupID); membershipErr == nil {
+		for _, voter := range membership.GetVoters() {
+			if voter == runtime.Identity.RaftID {
+				return index, nil
+			}
+		}
 	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -244,7 +260,14 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 			continue
 		}
 		joining := targets[groupID]
-		state, err := runtime.Groups.NewState(ctx, groupID)
+		descriptor, found, err := runtime.Root.Group(groupID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("regional Group disappeared from Root")
+		}
+		state, err := runtime.Groups.NewStateFromDescriptor(ctx, descriptor)
 		if err != nil {
 			if errors.Is(err, engineruntime.ErrGroupStateAlreadyOpen) {
 				if waitErr := runtime.waitForGroupOpen(ctx, groupID); waitErr != nil {
@@ -522,6 +545,7 @@ func (runtime *Runtime) RegisterInternalRPC(registrar grpc.ServiceRegistrar,
 	if err != nil {
 		return err
 	}
+	regionServer.SetRootReadIndex(runtime.ReadRootIndex)
 	holdingServer, err := raftrpc.NewRecordHoldingServer(runtime.Identity, runtime.Host, runtime.Root, runtime.Records, authorize)
 	if err != nil {
 		return err

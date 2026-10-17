@@ -62,6 +62,17 @@ func (registry *Registry) NewState(ctx context.Context, groupID string) (raft.St
 	if !found {
 		return nil, errors.New("joining Group is not registered in Root")
 	}
+	return registry.NewStateFromDescriptor(ctx, descriptor)
+}
+
+// NewStateFromDescriptor constructs a state from a descriptor that the caller
+// already read behind a Root barrier. Startup recovery uses this form after
+// its stronger RootReadIndex path; repeating a local Host.ReadIndex here can
+// deadlock a healthy voter while its leader hint is catching up.
+func (registry *Registry) NewStateFromDescriptor(ctx context.Context, descriptor rootstate.Group) (raft.StateMachine, error) {
+	if registry == nil {
+		return nil, errors.New("Group runtime registry is nil")
+	}
 	registry.mu.RLock()
 	factory := registry.factories[descriptor.StateKind]
 	registry.mu.RUnlock()

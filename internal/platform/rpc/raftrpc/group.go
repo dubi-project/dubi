@@ -223,7 +223,12 @@ func (client *GroupClient) peer(raftID uint64) (raftwire.GroupServiceClient, err
 			_ = peer.recordConn.Close()
 		}
 	}
+	// Group RPCs carry bounded control-plane deadlines. Disable gRPC's
+	// transparent retry path so a broken HTTP/2 stream cannot keep a call
+	// parked in waitOnHeader after the caller's context has expired; the
+	// caller will retry against the current directory route instead.
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(client.options.Credentials),
+		grpc.WithDisableRetry(),
 		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(client.options.MaxSize+1024)))
 	if err != nil {
 		return nil, err

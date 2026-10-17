@@ -222,6 +222,25 @@ func Open(options Options) (*Server, error) {
 	}
 	runtime.SetRootReadIndex(func(ctx context.Context) (uint64, error) {
 		status, _ := runtime.Host.Status(raft.RootGroupID)
+		// A Root voter can always ask its local Raft Group to forward a
+		// ReadIndex to the current leader. Prefer that path before dialing a
+		// peer: startup recovery must not depend on a stale cross-node HTTP/2
+		// stream merely because the local voter has not learned the leader hint
+		// yet. Joined learners still use the remote fallback below until Root
+		// promotes them.
+		if membership, membershipErr := runtime.Host.Membership(raft.RootGroupID); membershipErr == nil {
+			for _, voter := range membership.GetVoters() {
+				if voter == runtime.Identity.RaftID {
+					attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+					index, localErr := runtime.Host.ReadIndex(attempt, raft.RootGroupID)
+					cancel()
+					if localErr == nil {
+						return index, nil
+					}
+					break
+				}
+			}
+		}
 		// A fresh bootstrap Root has a voter before its Node descriptor is
 		// registered. The local leader can still prove its own single-node
 		// barrier, so do not build a routing view (which requires descriptors)

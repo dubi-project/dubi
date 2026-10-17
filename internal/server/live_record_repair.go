@@ -15,6 +15,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/node"
+	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 )
 
@@ -43,6 +44,35 @@ type liveRepairCursor struct {
 	cursor       []byte
 	unresolved   uint64
 	firstFailure string
+}
+
+// repairReadBarrier routes Root confirmation through the Node-level fallback
+// path. Joined Nodes are Root learners during enrollment and cannot complete
+// a local Root ReadIndex, while their regional Group is already able to serve
+// local reads. A single Host barrier therefore deadlocks every live-repair
+// pass at the Root cut.
+type repairReadBarrier struct {
+	runtime *node.Runtime
+}
+
+func (barrier repairReadBarrier) ReadIndex(ctx context.Context, groupID string) (uint64, error) {
+	if groupID == raft.RootGroupID {
+		index, err := barrier.runtime.ReadRootIndex(ctx)
+		if err != nil {
+			return 0, err
+		}
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for barrier.runtime.Root.AppliedIndex() < index {
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-ticker.C:
+			}
+		}
+		return index, nil
+	}
+	return barrier.runtime.Host.ReadIndex(ctx, groupID)
 }
 
 func (cursor *liveRepairCursor) addFailures(failures []error) {
@@ -227,7 +257,8 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 			}
 		}
 	}
-	page, err := recordrepair.RepairCurrentLocalPage(ctx, worker.runtime.Host, worker.runtime.Root,
+	readBarrier := repairReadBarrier{runtime: worker.runtime}
+	page, err := recordrepair.RepairCurrentLocalPage(ctx, readBarrier, worker.runtime.Root,
 		owner, groupID, worker.runtime.Identity.RaftID, worker.runtime.Identity.NodeID,
 		worker.runtime.Records, worker.client, previous.cursor, liveRepairPageLimit)
 	if err != nil {
@@ -259,7 +290,7 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 	// cross-Region/Geo repair path; treating them as local-repair failures would
 	// create a false background error even when their configured policy is sound.
 	if status.LeaderID == worker.runtime.Identity.RaftID && len(regionViews[groupID].Current.Nodes) >= 3 {
-		writer := recordwrite.Writer{Barrier: worker.runtime.Host, Root: worker.runtime.Root,
+		writer := recordwrite.Writer{Barrier: readBarrier, Root: worker.runtime.Root,
 			Owner: owner, LocalID: worker.runtime.Identity.RaftID,
 			LocalNodeID: worker.runtime.Identity.NodeID, Store: worker.runtime.Records,
 			Observer: worker.client, Submit: func(call context.Context, groupID string, command []byte) error {

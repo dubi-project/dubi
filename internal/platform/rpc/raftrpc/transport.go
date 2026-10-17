@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -354,28 +357,83 @@ func (t *Transport) deliver(peer *peerSender, request outbound, control bool) er
 		}
 		lane.address, lane.conn, lane.client = address, conn, raftwire.NewRaftServiceClient(conn)
 	}
-	conn := lane.conn
-	client := lane.client
 	peer.mu.Unlock()
 	ctx, cancel := context.WithTimeout(t.ctx, t.options.RPCTimeout)
 	defer cancel()
-	// A context deadline should cancel the unary call on its own. Keep an
-	// explicit connection watchdog as a last-resort escape hatch for a
-	// transport that is stuck before response headers arrive. Close only the
-	// exact lane connection used by this call; a newer replacement must remain
-	// untouched.
-	watchdog := time.AfterFunc(t.options.RPCTimeout, func() {
+	// A gRPC unary call can remain in waitOnHeader after its context expires
+	// when the underlying HTTP/2 stream is wedged. Never let that call pin the
+	// per-peer worker: invoke it in a bounded goroutine and return on the
+	// transport deadline. Clone the wire bytes because the queue owner releases
+	// request.data as soon as deliver returns.
+	message := append([]byte(nil), request.data...)
+	var err error
+	var conn *grpc.ClientConn
+	for {
 		peer.mu.Lock()
-		current := lane.conn == conn
-		peer.mu.Unlock()
-		if current {
-			_ = conn.Close()
+		if lane.conn == nil || lane.address != address {
+			if lane.conn != nil {
+				_ = lane.conn.Close()
+			}
+			fresh, dialErr := grpc.NewClient(address, grpc.WithTransportCredentials(t.options.Credentials),
+				grpc.WithDisableRetry(), grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(t.options.MaxSize+1024)))
+			if dialErr != nil {
+				peer.mu.Unlock()
+				return dialErr
+			}
+			lane.address, lane.conn, lane.client = address, fresh, raftwire.NewRaftServiceClient(fresh)
 		}
-	})
-	defer watchdog.Stop()
-	_, err := client.Step(ctx, &raftwire.StepRequest{ClusterId: t.options.ClusterID,
-		GroupId: request.groupID, FromRaftId: t.options.RaftID, ToRaftId: request.to,
-		Message: request.data})
+		conn = lane.conn
+		client := lane.client
+		peer.mu.Unlock()
+		// Keep the full per-message deadline for the wire call. A short fixed
+		// sub-deadline can cancel TLS/HTTP2 establishment on a WAN before the
+		// peer has a chance to receive the message, causing an endless reconnect
+		// loop. The outer context still bounds the async call and the worker.
+		attemptCtx, attemptCancel := context.WithCancel(ctx)
+		callDone := make(chan error, 1)
+		go func() {
+			_, callErr := client.Step(attemptCtx, &raftwire.StepRequest{ClusterId: t.options.ClusterID,
+				GroupId: request.groupID, FromRaftId: t.options.RaftID, ToRaftId: request.to,
+				Message: message})
+			callDone <- callErr
+		}()
+		select {
+		case err = <-callDone:
+			attemptCancel()
+			if err == nil {
+				break
+			}
+			if ctx.Err() == nil && (groupOpeningError(err) || status.Code(err) == codes.DeadlineExceeded || status.Code(err) == codes.Unavailable) {
+				peer.mu.Lock()
+				if lane.conn == conn {
+					_ = conn.Close()
+					lane.conn, lane.client = nil, nil
+				}
+				peer.mu.Unlock()
+				timer := time.NewTimer(25 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					err = ctx.Err()
+				case <-timer.C:
+					continue
+				}
+			}
+		case <-ctx.Done():
+			attemptCancel()
+			// Close only the exact lane connection used by this call; a newer
+			// replacement must remain untouched. The abandoned call owns its
+			// cloned request and can finish independently after the worker exits.
+			peer.mu.Lock()
+			current := lane.conn == conn
+			peer.mu.Unlock()
+			if current {
+				_ = conn.Close()
+			}
+			err = ctx.Err()
+		}
+		break
+	}
 	// Drop a failed connection so a peer restart or a dead TCP stream is
 	// repaired promptly. Compare the exact connection pointer: another lane may
 	// already have installed a fresh connection while this RPC was in flight;
@@ -391,6 +449,10 @@ func (t *Transport) deliver(peer *peerSender, request outbound, control bool) er
 		peer.mu.Unlock()
 	}
 	return err
+}
+
+func groupOpeningError(err error) bool {
+	return status.Code(err) == codes.Unavailable && strings.Contains(err.Error(), "Raft Group") && strings.Contains(err.Error(), "is not open")
 }
 
 func (t *Transport) Close() error {
@@ -413,10 +475,14 @@ func (t *Transport) Close() error {
 			}
 		}
 		if peer.controlLane.conn != nil {
-			failures = append(failures, peer.controlLane.conn.Close())
+			if err := peer.controlLane.conn.Close(); err != nil && status.Code(err) != codes.Canceled {
+				failures = append(failures, err)
+			}
 		}
 		if peer.dataLane.conn != nil && peer.dataLane.conn != peer.controlLane.conn {
-			failures = append(failures, peer.dataLane.conn.Close())
+			if err := peer.dataLane.conn.Close(); err != nil && status.Code(err) != codes.Canceled {
+				failures = append(failures, err)
+			}
 		}
 	}
 	return errors.Join(failures...)
