@@ -29,6 +29,15 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
+const (
+	// Peer repair status is an operator diagnostic, not a quorum path.  Keep
+	// enough time for a fresh mutual-TLS connection on a small, cross-region
+	// VPS; the old two-second limit produced transient false "unreachable"
+	// observations while the Node was otherwise healthy.
+	peerRepairProbeWindow  = 8 * time.Second
+	peerRepairProbeTimeout = 5 * time.Second
+)
+
 // status is an operator view of one quorum-confirmed Root cut. It uses the
 // Node's managed TLS identity and does not claim that listed data is ready.
 type localRepairView struct {
@@ -200,7 +209,7 @@ func probePeerRepairs(ctx context.Context, id identity.Identity, clientTLS *tls.
 	if probeParent == nil || probeParent.Err() != nil {
 		probeParent = context.Background()
 	}
-	probeCtx, cancel := context.WithTimeout(probeParent, 5*time.Second)
+	probeCtx, cancel := context.WithTimeout(probeParent, peerRepairProbeWindow)
 	defer cancel()
 	// Probe peers concurrently. A failed or slow peer must not consume the
 	// shared status deadline and turn healthy peers later in the list into
@@ -231,7 +240,7 @@ func probePeerRepair(ctx context.Context, id identity.Identity, clientTLS *tls.C
 		observation.Error = err.Error()
 		return observation
 	}
-	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	probe, cancel := context.WithTimeout(ctx, peerRepairProbeTimeout)
 	var actual peer.Peer
 	response, callErr := datawire.NewDataServiceClient(conn).ClusterRepairStatus(probe,
 		&datawire.LocalRepairStatusRequest{ClusterId: id.ClusterID, FromRaftId: id.RaftID}, grpc.Peer(&actual))
