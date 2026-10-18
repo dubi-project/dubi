@@ -146,8 +146,14 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 				Apply: func(applyCtx context.Context, reader io.Reader, size int64) error {
 					switch artifact.Kind {
 					case "pack":
+						if artifact.Format != "DUBIPK02" {
+							return fmt.Errorf("unsupported Pack artifact format %q", artifact.Format)
+						}
 						return runtime.ImportRestoreArtifact(applyCtx, artifact.Name, artifact.Kind, reader, size, placements[sourceID])
 					case "records-index":
+						if artifact.Format != "DUBI_RECORD_INDEX_V1" {
+							return fmt.Errorf("unsupported records index artifact format %q", artifact.Format)
+						}
 						image, readErr := io.ReadAll(io.LimitReader(reader, size+1))
 						if readErr != nil || int64(len(image)) != size {
 							return errors.Join(readErr, errors.New("records index restore artifact size differs from Manifest"))
@@ -155,6 +161,9 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 						pendingRecords = append(pendingRecords, pendingRecordRestore{runtime: runtime, placement: placements[sourceID], data: image})
 						return nil
 					case "root-state":
+						if artifact.Format != "DUBI_ROOT_STATE_V2" {
+							return fmt.Errorf("unsupported Root artifact format %q", artifact.Format)
+						}
 						image, readErr := io.ReadAll(io.LimitReader(reader, size+1))
 						if readErr != nil || int64(len(image)) != size {
 							return errors.Join(readErr, errors.New("Root restore artifact size differs from Manifest"))
@@ -182,6 +191,9 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 						rootInstalled = true
 						return nil
 					case "engine-state":
+						if artifact.Format != "DUBI_ENGINE_STATE_V8" {
+							return fmt.Errorf("unsupported Engine artifact format %q", artifact.Format)
+						}
 						image, readErr := io.ReadAll(io.LimitReader(reader, size+1))
 						if readErr != nil || int64(len(image)) != size {
 							return errors.Join(readErr, errors.New("Engine restore artifact size differs from Manifest"))

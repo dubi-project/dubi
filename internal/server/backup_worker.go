@@ -367,7 +367,7 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 		}
 		rootImage := append([]byte(nil), image...)
 		sources = append(sources, recovery.Source{Name: fmt.Sprintf("root/state/%d/%d", index, term), Kind: "root-state",
-			NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ROOT_STATE_V1", Size: int64(len(rootImage)),
+			NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ROOT_STATE_V2", Size: int64(len(rootImage)),
 			Open: func(openContext context.Context) (io.ReadCloser, error) {
 				if openContext != nil {
 					if err := openContext.Err(); err != nil {
@@ -398,7 +398,7 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 			}
 			state := state
 			sources = append(sources, recovery.Source{Name: fmt.Sprintf("engine/group/%s/state/%d/%d", state.GroupID, state.Index, term), Kind: "engine-state",
-				NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ENGINE_STATE_V7", Size: int64(len(state.Data)),
+				NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ENGINE_STATE_V8", Size: int64(len(state.Data)),
 				Open: func(openContext context.Context) (io.ReadCloser, error) {
 					if openContext != nil {
 						if err := openContext.Err(); err != nil {
