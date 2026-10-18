@@ -497,8 +497,13 @@ func Open(options Options) (*Server, error) {
 	volumeMigration = &volumeMigrationWorker{runtime: runtime, report: options.ReportError, budget: dataServer.maintenance}
 	var publicHTTP *http.Server
 	var publicTLS *tls.Config
+	ready := make(chan struct{})
 	if options.PublicListener != nil {
-		publicHTTP = newPublicHTTPServer(auth.Verifier{Barrier: runtime.Host, Catalog: runtime.Root})
+		var repairSnapshot func() repairObservation
+		if liveRepair != nil {
+			repairSnapshot = liveRepair.snapshot
+		}
+		publicHTTP = newPublicHTTPServerWithMonitoring(auth.Verifier{Barrier: runtime.Host, Catalog: runtime.Root}, runtime, ready, repairSnapshot)
 		publicTLS = normalizeServerTLS(options.ServerTLS)
 		publicTLS.ClientAuth = tls.NoClientCert
 		publicTLS.ClientCAs = nil
@@ -507,7 +512,7 @@ func Open(options Options) (*Server, error) {
 	return &Server{Runtime: runtime, GroupClient: client, EngineData: localData, MembershipReconciler: reconciler, NodeRemoval: nodeRemoval,
 		listener: options.Listener, publicListener: options.PublicListener, publicHTTP: publicHTTP, publicTLS: publicTLS,
 		grpc: grpcServer, transport: transport,
-		scheduler: scheduler, certificates: certificates, regional: regional, liveRepair: liveRepair, ready: make(chan struct{}), localNode: localNode,
+		scheduler: scheduler, certificates: certificates, regional: regional, liveRepair: liveRepair, ready: ready, localNode: localNode,
 		desiredName: func() string {
 			if options.Network != nil {
 				return options.Network.Name

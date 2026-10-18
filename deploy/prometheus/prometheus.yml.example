@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 5s
+
+rule_files:
+  - /etc/prometheus/dubi.rules.yml
+
+scrape_configs:
+  # Replace the addresses and CA path for the deployment. The DUBI API
+  # listener must stay on a private network or behind an allow-list.
+  - job_name: dubi
+    scheme: https
+    static_configs:
+      - targets:
+          - dubi-node-1.example.internal:7444
+          - dubi-node-2.example.internal:7444
+          - dubi-node-3.example.internal:7444
+        labels:
+          cluster: dubi-prod
+    tls_config:
+      ca_file: /etc/prometheus/dubi/cluster-ca.pem
+      # Keep certificate verification enabled. Set server_name when the
+      # certificate SAN is not the scrape target hostname.
+      server_name: dubi-monitoring.internal

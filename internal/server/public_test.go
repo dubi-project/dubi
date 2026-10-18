@@ -153,6 +153,32 @@ func TestPublicHTTPSRequiresVerifiedServerCertificate(t *testing.T) {
 	}
 }
 
+func TestMonitoringEndpointsAreReadOnlyAndSeparateFromTenantAPI(t *testing.T) {
+	ready := make(chan struct{})
+	close(ready)
+	server := newPublicHTTPServerWithMonitoring(auth.Verifier{}, nil, ready, nil)
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		server.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("monitoring endpoint %s returned %d", path, response.Code)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/metrics", nil)
+	response := httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatal("metrics accepted a mutating HTTP method", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	response = httptest.NewRecorder()
+	server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatal("monitoring handler bypassed the Tenant API authorization boundary", response.Code)
+	}
+}
+
 type unavailableRootBarrier struct{}
 
 func (unavailableRootBarrier) ReadIndex(context.Context, string) (uint64, error) {

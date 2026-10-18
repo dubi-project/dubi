@@ -1,0 +1,47 @@
+groups:
+  - name: dubi-foundation
+    rules:
+      - alert: DubiNodeNotReady
+        expr: dubi_node_ready == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: DUBI node is not ready
+          description: "Node {{ $labels.instance }} has not completed startup or local recovery."
+
+      - alert: DubiDiskPressure
+        expr: dubi_disk_pressured == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: DUBI Store disk is under pressure
+          description: "Node {{ $labels.instance }} is rejecting discretionary writes."
+
+      - alert: DubiRepairDebt
+        expr: dubi_node_repair_debt > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: DUBI repair debt is present
+          description: "Node {{ $labels.instance }} has unresolved repair issues."
+
+      - alert: DubiUnhealthyVolume
+        expr: dubi_volume_health{health!="healthy",state!="removed"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: DUBI Volume is unhealthy
+          description: "Volume {{ $labels.volume_id }} on {{ $labels.instance }} is {{ $labels.health }}."
+
+      - alert: DubiLowVolumeCapacity
+        expr: dubi_volume_capacity_bytes > 0 and dubi_volume_available_bytes / dubi_volume_capacity_bytes < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: DUBI Volume capacity is low
+          description: "Volume {{ $labels.volume_id }} on {{ $labels.instance }} has less than 15% free space."

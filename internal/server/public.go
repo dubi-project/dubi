@@ -9,14 +9,24 @@ import (
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/auth"
+	"github.com/dubi-project/dubi/internal/platform/node"
 )
 
 // This listener intentionally has no internal RPC registrations. Module data
 // endpoints will be added only with a constrained, module-owned public API.
 func newPublicHTTPServer(verifier auth.Verifier) *http.Server {
+	return newPublicHTTPServerWithMonitoring(verifier, nil, nil, nil)
+}
+
+func newPublicHTTPServerWithMonitoring(verifier auth.Verifier, runtime *node.Runtime, ready <-chan struct{}, repairSnapshot func() repairObservation) *http.Server {
 	slots := make(chan struct{}, 32)
+	monitoring := monitoringView{runtime: runtime, ready: ready, repairSnapshot: repairSnapshot}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
+			writeMonitoringEndpoint(w, r, monitoring)
+			return
+		}
 		if r.URL.Path != "/v1/me" {
 			http.NotFound(w, r)
 			return
