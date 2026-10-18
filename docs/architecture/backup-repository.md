@@ -142,5 +142,5 @@ Placement / Repair / Rebalance
 - 直接在线写磁带；
 - 依赖外部 Secret Manager 或环境变量保存凭据。
 
-当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、file 内容寻址对象、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server 已有最小本地 worker：领取当前 Node 的任务，封存 Pack 与 Root state Source，写入本节点的 file Repository Manifest 并回报 Root 完成状态。节点之间不交换对象字节；S3 ObjectStore、WAL/Engine snapshot 注册和完整集群 Restore 执行仍未完成。
+当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、file 内容寻址对象、S3-compatible 对象读写、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server 已有最小本地 worker：领取当前 Node 的任务，封存 Pack 与 Root state Source，写入本节点的 file Repository Manifest 并回报 Root 完成状态。节点之间不交换对象字节；S3 凭据解密接线、Server S3 worker、WAL/Engine snapshot 注册和完整集群 Restore 执行仍未完成。
 
