@@ -112,9 +112,6 @@ func (w *backupWorker) syncRepositoryKey(ctx context.Context) error {
 			transferErrors = append(transferErrors, fmt.Errorf("Node %s: %w", target.NodeID, transferErr))
 		}
 		cancel()
-		if closeErr := connection.Close(); closeErr != nil {
-			transferErrors = append(transferErrors, fmt.Errorf("close Node %s key connection: %w", target.NodeID, closeErr))
-		}
 	}
 	return errors.Join(transferErrors...)
 }
