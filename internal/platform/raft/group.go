@@ -869,6 +869,20 @@ func (g *Group) Status() (GroupStatus, error) {
 		LeadTransferee: status.LeadTransferee}, nil
 }
 
+// TermAt returns the Raft term for a persisted applied/snapshot index. Restore
+// snapshots must carry the term at the cut, not merely the current term.
+func (g *Group) TermAt(index uint64) (uint64, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err := g.checkLocked(); err != nil {
+		return 0, err
+	}
+	if index == 0 {
+		return 0, errors.New("snapshot index is required")
+	}
+	return g.storage.Term(index)
+}
+
 func (g *Group) mutate(operation func() error) error {
 	g.mu.Lock()
 	if err := g.checkLocked(); err != nil {

@@ -220,6 +220,14 @@ func (h *Host) Status(groupID string) (GroupStatus, error) {
 	return group.Status()
 }
 
+func (h *Host) TermAt(groupID string, index uint64) (uint64, error) {
+	group, err := h.group(groupID)
+	if err != nil {
+		return 0, err
+	}
+	return group.TermAt(index)
+}
+
 func (h *Host) Membership(groupID string) (*raftpb.ConfState, error) {
 	group, err := h.group(groupID)
 	if err != nil {

@@ -360,8 +360,13 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 			release()
 			return nil, func() {}, fmt.Errorf("snapshot Root state: %w", err)
 		}
+		term, termErr := w.runtime.Host.TermAt(raft.RootGroupID, index)
+		if termErr != nil {
+			release()
+			return nil, func() {}, fmt.Errorf("snapshot Root term: %w", termErr)
+		}
 		rootImage := append([]byte(nil), image...)
-		sources = append(sources, recovery.Source{Name: fmt.Sprintf("root/state/%d", index), Kind: "root-state",
+		sources = append(sources, recovery.Source{Name: fmt.Sprintf("root/state/%d/%d", index, term), Kind: "root-state",
 			NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ROOT_STATE_V1", Size: int64(len(rootImage)),
 			Open: func(openContext context.Context) (io.ReadCloser, error) {
 				if openContext != nil {
@@ -386,8 +391,13 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 		openGroups := make(map[string]struct{}, len(states))
 		for _, state := range states {
 			openGroups[state.GroupID] = struct{}{}
+			term, termErr := w.runtime.Host.TermAt(state.GroupID, state.Index)
+			if termErr != nil {
+				release()
+				return nil, func() {}, fmt.Errorf("snapshot Engine Group %q term: %w", state.GroupID, termErr)
+			}
 			state := state
-			sources = append(sources, recovery.Source{Name: fmt.Sprintf("engine/group/%s/state", state.GroupID), Kind: "engine-state",
+			sources = append(sources, recovery.Source{Name: fmt.Sprintf("engine/group/%s/state/%d/%d", state.GroupID, state.Index, term), Kind: "engine-state",
 				NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ENGINE_STATE_V7", Size: int64(len(state.Data)),
 				Open: func(openContext context.Context) (io.ReadCloser, error) {
 					if openContext != nil {

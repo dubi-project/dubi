@@ -284,6 +284,24 @@ func TestRewriteSnapshotForRestoreChangesOnlyMembership(t *testing.T) {
 	}
 }
 
+func TestRewriteSnapshotForRestoreRewritesRegionalFenceIdentity(t *testing.T) {
+	image, err := json.Marshal(snapshotImage{Version: FormatVersion, GroupID: "data-restore", Applied: 4, Conf: []byte("old"), Entries: []snapshotEntry{{Key: regionFenceKey, Value: []byte(`{"fence":{"members":[{"raft_id":11}],"nodes":[11]}}`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := RewriteSnapshotForRestoreWithIdentity(image, &raftpb.ConfState{Voters: []uint64{21}}, rootstate.RestoreIdentityMap{RaftIDs: map[uint64]uint64{11: 21}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded snapshotImage
+	if err := json.Unmarshal(rewritten, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(decoded.Entries[0].Value, []byte(`"raft_id":21`)) || !bytes.Contains(decoded.Entries[0].Value, []byte(`"nodes":[21]`)) {
+		t.Fatalf("regional identity was not rewritten: %s", decoded.Entries[0].Value)
+	}
+}
+
 func TestEngineStateDirectoryIsBoundToGroup(t *testing.T) {
 	root := t.TempDir()
 	state, err := Open(root, "data-1", &testHandler{})

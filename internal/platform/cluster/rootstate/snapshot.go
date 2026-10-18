@@ -86,6 +86,27 @@ func (s *State) Snapshot() ([]byte, uint64, *raftpb.ConfState, error) {
 	return encoded, s.applied, proto.Clone(s.conf).(*raftpb.ConfState), err
 }
 
+// SnapshotMetadata validates an inline Root image and returns the cut index
+// and stored membership. Restore callers use it to build the Raft snapshot
+// envelope without reimplementing the image format.
+func SnapshotMetadata(encoded []byte) (uint64, *raftpb.ConfState, error) {
+	if len(encoded) == 0 || len(encoded) > maxSnapshotBytes {
+		return 0, nil, errors.New("Root snapshot exceeds inline limit")
+	}
+	var image snapshotImage
+	if err := decodeStreamJSON(encoded, &image); err != nil {
+		return 0, nil, err
+	}
+	if image.Version != FormatVersion || image.Applied == 0 {
+		return 0, nil, errors.New("invalid Root snapshot metadata")
+	}
+	conf := new(raftpb.ConfState)
+	if err := proto.Unmarshal(image.Conf, conf); err != nil {
+		return 0, nil, err
+	}
+	return image.Applied, conf, nil
+}
+
 func (s *State) Restore(index uint64, encoded []byte, conf *raftpb.ConfState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
