@@ -257,13 +257,20 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 				return io.NopCloser(bytes.NewReader(rootImage)), nil
 			}})
 	}
-	if w.runtime.Engines != nil {
+	if w.runtime.Engines != nil && w.runtime.Root != nil {
+		groups, groupsErr := w.runtime.Root.Groups()
+		if groupsErr != nil {
+			release()
+			return nil, func() {}, fmt.Errorf("list Engine Groups for backup: %w", groupsErr)
+		}
 		states, snapshotErr := w.runtime.Engines.SnapshotStates(ctx)
 		if snapshotErr != nil {
 			release()
 			return nil, func() {}, snapshotErr
 		}
+		openGroups := make(map[string]struct{}, len(states))
 		for _, state := range states {
+			openGroups[state.GroupID] = struct{}{}
 			state := state
 			sources = append(sources, recovery.Source{Name: fmt.Sprintf("engine/group/%s/state", state.GroupID), Kind: "engine-state",
 				NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ENGINE_STATE_V7", Size: int64(len(state.Data)),
@@ -276,8 +283,26 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 					return io.NopCloser(bytes.NewReader(state.Data)), nil
 				}})
 		}
+		for _, group := range groups {
+			if group.StateKind != rootstate.GroupStateEngine || !backupGroupContains(group.Members, w.runtime.Identity.RaftID) {
+				continue
+			}
+			if _, open := openGroups[group.GroupID]; !open {
+				release()
+				return nil, func() {}, fmt.Errorf("Engine Group %q is expected on this Node but is not open", group.GroupID)
+			}
+		}
 	}
 	return sources, release, nil
+}
+
+func backupGroupContains(members []rootstate.GroupMember, raftID uint64) bool {
+	for _, member := range members {
+		if member.RaftID == raftID {
+			return true
+		}
+	}
+	return false
 }
 
 func localBackupWorker(job rootstate.BackupJob, raftID uint64, nodeID string) (rootstate.BackupWorker, bool) {
