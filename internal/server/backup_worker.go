@@ -156,13 +156,17 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 	if repositoryConfig.IsFile() {
 		store, err = repository.OpenFile(repositoryConfig)
 	} else {
-		key, keyErr := repository.LoadRepositoryKey(w.storeRoot)
-		if keyErr != nil {
-			return fmt.Errorf("load Repository key for S3 backup: %w", keyErr)
-		}
-		credentials, credentialErr := repository.OpenS3Credentials(repositoryConfig, key)
-		if credentialErr != nil {
-			return fmt.Errorf("decrypt S3 Repository credentials: %w", credentialErr)
+		credentials := repository.S3Credentials{}
+		if len(repositoryConfig.EncryptedCredentials) != 0 {
+			key, keyErr := repository.LoadRepositoryKey(w.storeRoot)
+			if keyErr != nil {
+				return fmt.Errorf("load Repository key for S3 backup: %w", keyErr)
+			}
+			var credentialErr error
+			credentials, credentialErr = repository.OpenS3Credentials(repositoryConfig, key)
+			if credentialErr != nil {
+				return fmt.Errorf("decrypt S3 Repository credentials: %w", credentialErr)
+			}
 		}
 		store, err = repository.OpenS3Node(repositoryConfig, credentials, w.runtime.Identity.NodeID)
 	}
