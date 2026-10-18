@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
@@ -154,6 +155,10 @@ func containsCandidate(allowed map[string]struct{}, id string) bool {
 func (p *Pool) SealAll(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.sealAllLocked(ctx)
+}
+
+func (p *Pool) sealAllLocked(ctx context.Context) error {
 	if p.closed {
 		return errors.New("Pack pool is closed")
 	}
@@ -188,6 +193,48 @@ func (p *Pool) SealAll(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// SnapshotPacks creates a stable list of sealed Pack files for a node-local
+// backup shard. The Pool lock makes sealing and enumeration one local cut:
+// callers may copy the returned files after this method returns without an
+// active writer changing them. It does not publish a cluster Recovery Point
+// or infer any placement/durability semantics.
+func (p *Pool) SnapshotPacks(ctx context.Context) ([]SnapshotPack, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.sealAllLocked(ctx); err != nil {
+		return nil, err
+	}
+	report, err := p.registry.Status()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]SnapshotPack, 0)
+	for _, item := range report.Volumes {
+		if item.State == volume.Removed || item.State == volume.Registered {
+			continue
+		}
+		collection := p.collections[item.ID]
+		if collection == nil {
+			continue
+		}
+		packs, err := collection.snapshotPacks(item.Path)
+		if err != nil {
+			for index := range result {
+				_ = result[index].Close()
+			}
+			return nil, fmt.Errorf("snapshot Volume %s: %w", item.ID, err)
+		}
+		result = append(result, packs...)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].VolumeID != result[j].VolumeID {
+			return result[i].VolumeID < result[j].VolumeID
+		}
+		return result[i].PackID < result[j].PackID
+	})
+	return result, nil
 }
 
 // Read follows the exact persisted VolumeID, never substitutes another copy.

@@ -19,17 +19,29 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataService_CreateDataset_FullMethodName       = "/dubi.internal.data.v1.DataService/CreateDataset"
-	DataService_PutRecord_FullMethodName           = "/dubi.internal.data.v1.DataService/PutRecord"
-	DataService_GetRecord_FullMethodName           = "/dubi.internal.data.v1.DataService/GetRecord"
-	DataService_CreateTenantToken_FullMethodName   = "/dubi.internal.data.v1.DataService/CreateTenantToken"
-	DataService_RevokeTenantToken_FullMethodName   = "/dubi.internal.data.v1.DataService/RevokeTenantToken"
-	DataService_AddVolume_FullMethodName           = "/dubi.internal.data.v1.DataService/AddVolume"
-	DataService_DrainVolume_FullMethodName         = "/dubi.internal.data.v1.DataService/DrainVolume"
-	DataService_RemoveVolume_FullMethodName        = "/dubi.internal.data.v1.DataService/RemoveVolume"
-	DataService_CompactStore_FullMethodName        = "/dubi.internal.data.v1.DataService/CompactStore"
-	DataService_LocalRepairStatus_FullMethodName   = "/dubi.internal.data.v1.DataService/LocalRepairStatus"
-	DataService_ClusterRepairStatus_FullMethodName = "/dubi.internal.data.v1.DataService/ClusterRepairStatus"
+	DataService_CreateDataset_FullMethodName        = "/dubi.internal.data.v1.DataService/CreateDataset"
+	DataService_PutRecord_FullMethodName            = "/dubi.internal.data.v1.DataService/PutRecord"
+	DataService_GetRecord_FullMethodName            = "/dubi.internal.data.v1.DataService/GetRecord"
+	DataService_CreateRepository_FullMethodName     = "/dubi.internal.data.v1.DataService/CreateRepository"
+	DataService_UpdateRepository_FullMethodName     = "/dubi.internal.data.v1.DataService/UpdateRepository"
+	DataService_DeleteRepository_FullMethodName     = "/dubi.internal.data.v1.DataService/DeleteRepository"
+	DataService_SetDefaultRepository_FullMethodName = "/dubi.internal.data.v1.DataService/SetDefaultRepository"
+	DataService_ListRepositories_FullMethodName     = "/dubi.internal.data.v1.DataService/ListRepositories"
+	DataService_CreateBackupJob_FullMethodName      = "/dubi.internal.data.v1.DataService/CreateBackupJob"
+	DataService_GetBackupJob_FullMethodName         = "/dubi.internal.data.v1.DataService/GetBackupJob"
+	DataService_ListBackupJobs_FullMethodName       = "/dubi.internal.data.v1.DataService/ListBackupJobs"
+	DataService_ClaimBackupJob_FullMethodName       = "/dubi.internal.data.v1.DataService/ClaimBackupJob"
+	DataService_CompleteBackupJob_FullMethodName    = "/dubi.internal.data.v1.DataService/CompleteBackupJob"
+	DataService_FailBackupJob_FullMethodName        = "/dubi.internal.data.v1.DataService/FailBackupJob"
+	DataService_FinalizeBackupJob_FullMethodName    = "/dubi.internal.data.v1.DataService/FinalizeBackupJob"
+	DataService_CreateTenantToken_FullMethodName    = "/dubi.internal.data.v1.DataService/CreateTenantToken"
+	DataService_RevokeTenantToken_FullMethodName    = "/dubi.internal.data.v1.DataService/RevokeTenantToken"
+	DataService_AddVolume_FullMethodName            = "/dubi.internal.data.v1.DataService/AddVolume"
+	DataService_DrainVolume_FullMethodName          = "/dubi.internal.data.v1.DataService/DrainVolume"
+	DataService_RemoveVolume_FullMethodName         = "/dubi.internal.data.v1.DataService/RemoveVolume"
+	DataService_CompactStore_FullMethodName         = "/dubi.internal.data.v1.DataService/CompactStore"
+	DataService_LocalRepairStatus_FullMethodName    = "/dubi.internal.data.v1.DataService/LocalRepairStatus"
+	DataService_ClusterRepairStatus_FullMethodName  = "/dubi.internal.data.v1.DataService/ClusterRepairStatus"
 )
 
 // DataServiceClient is the client API for DataService service.
@@ -39,6 +51,20 @@ type DataServiceClient interface {
 	CreateDataset(ctx context.Context, in *CreateDatasetRequest, opts ...grpc.CallOption) (*CreateDatasetResponse, error)
 	PutRecord(ctx context.Context, in *PutRecordRequest, opts ...grpc.CallOption) (*PutRecordResponse, error)
 	GetRecord(ctx context.Context, in *GetRecordRequest, opts ...grpc.CallOption) (*GetRecordResponse, error)
+	// Cluster-level backup/recovery Repository administration. These methods
+	// are Node-authenticated and commit through the Root Group.
+	CreateRepository(ctx context.Context, in *CreateRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error)
+	UpdateRepository(ctx context.Context, in *UpdateRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error)
+	DeleteRepository(ctx context.Context, in *DeleteRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error)
+	SetDefaultRepository(ctx context.Context, in *SetDefaultRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error)
+	ListRepositories(ctx context.Context, in *ListRepositoriesRequest, opts ...grpc.CallOption) (*ListRepositoriesResponse, error)
+	CreateBackupJob(ctx context.Context, in *CreateBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error)
+	GetBackupJob(ctx context.Context, in *GetBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error)
+	ListBackupJobs(ctx context.Context, in *ListBackupJobsRequest, opts ...grpc.CallOption) (*ListBackupJobsResponse, error)
+	ClaimBackupJob(ctx context.Context, in *ClaimBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error)
+	CompleteBackupJob(ctx context.Context, in *CompleteBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error)
+	FailBackupJob(ctx context.Context, in *FailBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error)
+	FinalizeBackupJob(ctx context.Context, in *FinalizeBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error)
 	// Node-authenticated administrative methods, never the Tenant data API.
 	CreateTenantToken(ctx context.Context, in *CreateTenantTokenRequest, opts ...grpc.CallOption) (*CreateTenantTokenResponse, error)
 	RevokeTenantToken(ctx context.Context, in *RevokeTenantTokenRequest, opts ...grpc.CallOption) (*RevokeTenantTokenResponse, error)
@@ -92,6 +118,126 @@ func (c *dataServiceClient) GetRecord(ctx context.Context, in *GetRecordRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetRecordResponse)
 	err := c.cc.Invoke(ctx, DataService_GetRecord_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) CreateRepository(ctx context.Context, in *CreateRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepositoryMutationResponse)
+	err := c.cc.Invoke(ctx, DataService_CreateRepository_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) UpdateRepository(ctx context.Context, in *UpdateRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepositoryMutationResponse)
+	err := c.cc.Invoke(ctx, DataService_UpdateRepository_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) DeleteRepository(ctx context.Context, in *DeleteRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepositoryMutationResponse)
+	err := c.cc.Invoke(ctx, DataService_DeleteRepository_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) SetDefaultRepository(ctx context.Context, in *SetDefaultRepositoryRequest, opts ...grpc.CallOption) (*RepositoryMutationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepositoryMutationResponse)
+	err := c.cc.Invoke(ctx, DataService_SetDefaultRepository_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) ListRepositories(ctx context.Context, in *ListRepositoriesRequest, opts ...grpc.CallOption) (*ListRepositoriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRepositoriesResponse)
+	err := c.cc.Invoke(ctx, DataService_ListRepositories_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) CreateBackupJob(ctx context.Context, in *CreateBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BackupJobResponse)
+	err := c.cc.Invoke(ctx, DataService_CreateBackupJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) GetBackupJob(ctx context.Context, in *GetBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BackupJobResponse)
+	err := c.cc.Invoke(ctx, DataService_GetBackupJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) ListBackupJobs(ctx context.Context, in *ListBackupJobsRequest, opts ...grpc.CallOption) (*ListBackupJobsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBackupJobsResponse)
+	err := c.cc.Invoke(ctx, DataService_ListBackupJobs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) ClaimBackupJob(ctx context.Context, in *ClaimBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BackupJobResponse)
+	err := c.cc.Invoke(ctx, DataService_ClaimBackupJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) CompleteBackupJob(ctx context.Context, in *CompleteBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BackupJobResponse)
+	err := c.cc.Invoke(ctx, DataService_CompleteBackupJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) FailBackupJob(ctx context.Context, in *FailBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BackupJobResponse)
+	err := c.cc.Invoke(ctx, DataService_FailBackupJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) FinalizeBackupJob(ctx context.Context, in *FinalizeBackupJobRequest, opts ...grpc.CallOption) (*BackupJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BackupJobResponse)
+	err := c.cc.Invoke(ctx, DataService_FinalizeBackupJob_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +331,20 @@ type DataServiceServer interface {
 	CreateDataset(context.Context, *CreateDatasetRequest) (*CreateDatasetResponse, error)
 	PutRecord(context.Context, *PutRecordRequest) (*PutRecordResponse, error)
 	GetRecord(context.Context, *GetRecordRequest) (*GetRecordResponse, error)
+	// Cluster-level backup/recovery Repository administration. These methods
+	// are Node-authenticated and commit through the Root Group.
+	CreateRepository(context.Context, *CreateRepositoryRequest) (*RepositoryMutationResponse, error)
+	UpdateRepository(context.Context, *UpdateRepositoryRequest) (*RepositoryMutationResponse, error)
+	DeleteRepository(context.Context, *DeleteRepositoryRequest) (*RepositoryMutationResponse, error)
+	SetDefaultRepository(context.Context, *SetDefaultRepositoryRequest) (*RepositoryMutationResponse, error)
+	ListRepositories(context.Context, *ListRepositoriesRequest) (*ListRepositoriesResponse, error)
+	CreateBackupJob(context.Context, *CreateBackupJobRequest) (*BackupJobResponse, error)
+	GetBackupJob(context.Context, *GetBackupJobRequest) (*BackupJobResponse, error)
+	ListBackupJobs(context.Context, *ListBackupJobsRequest) (*ListBackupJobsResponse, error)
+	ClaimBackupJob(context.Context, *ClaimBackupJobRequest) (*BackupJobResponse, error)
+	CompleteBackupJob(context.Context, *CompleteBackupJobRequest) (*BackupJobResponse, error)
+	FailBackupJob(context.Context, *FailBackupJobRequest) (*BackupJobResponse, error)
+	FinalizeBackupJob(context.Context, *FinalizeBackupJobRequest) (*BackupJobResponse, error)
 	// Node-authenticated administrative methods, never the Tenant data API.
 	CreateTenantToken(context.Context, *CreateTenantTokenRequest) (*CreateTenantTokenResponse, error)
 	RevokeTenantToken(context.Context, *RevokeTenantTokenRequest) (*RevokeTenantTokenResponse, error)
@@ -222,6 +382,42 @@ func (UnimplementedDataServiceServer) PutRecord(context.Context, *PutRecordReque
 }
 func (UnimplementedDataServiceServer) GetRecord(context.Context, *GetRecordRequest) (*GetRecordResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRecord not implemented")
+}
+func (UnimplementedDataServiceServer) CreateRepository(context.Context, *CreateRepositoryRequest) (*RepositoryMutationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateRepository not implemented")
+}
+func (UnimplementedDataServiceServer) UpdateRepository(context.Context, *UpdateRepositoryRequest) (*RepositoryMutationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepository not implemented")
+}
+func (UnimplementedDataServiceServer) DeleteRepository(context.Context, *DeleteRepositoryRequest) (*RepositoryMutationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteRepository not implemented")
+}
+func (UnimplementedDataServiceServer) SetDefaultRepository(context.Context, *SetDefaultRepositoryRequest) (*RepositoryMutationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetDefaultRepository not implemented")
+}
+func (UnimplementedDataServiceServer) ListRepositories(context.Context, *ListRepositoriesRequest) (*ListRepositoriesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListRepositories not implemented")
+}
+func (UnimplementedDataServiceServer) CreateBackupJob(context.Context, *CreateBackupJobRequest) (*BackupJobResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateBackupJob not implemented")
+}
+func (UnimplementedDataServiceServer) GetBackupJob(context.Context, *GetBackupJobRequest) (*BackupJobResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBackupJob not implemented")
+}
+func (UnimplementedDataServiceServer) ListBackupJobs(context.Context, *ListBackupJobsRequest) (*ListBackupJobsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListBackupJobs not implemented")
+}
+func (UnimplementedDataServiceServer) ClaimBackupJob(context.Context, *ClaimBackupJobRequest) (*BackupJobResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimBackupJob not implemented")
+}
+func (UnimplementedDataServiceServer) CompleteBackupJob(context.Context, *CompleteBackupJobRequest) (*BackupJobResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteBackupJob not implemented")
+}
+func (UnimplementedDataServiceServer) FailBackupJob(context.Context, *FailBackupJobRequest) (*BackupJobResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FailBackupJob not implemented")
+}
+func (UnimplementedDataServiceServer) FinalizeBackupJob(context.Context, *FinalizeBackupJobRequest) (*BackupJobResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FinalizeBackupJob not implemented")
 }
 func (UnimplementedDataServiceServer) CreateTenantToken(context.Context, *CreateTenantTokenRequest) (*CreateTenantTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateTenantToken not implemented")
@@ -318,6 +514,222 @@ func _DataService_GetRecord_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DataServiceServer).GetRecord(ctx, req.(*GetRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_CreateRepository_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateRepositoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).CreateRepository(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_CreateRepository_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).CreateRepository(ctx, req.(*CreateRepositoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_UpdateRepository_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRepositoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).UpdateRepository(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_UpdateRepository_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).UpdateRepository(ctx, req.(*UpdateRepositoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_DeleteRepository_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRepositoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).DeleteRepository(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_DeleteRepository_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).DeleteRepository(ctx, req.(*DeleteRepositoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_SetDefaultRepository_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetDefaultRepositoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).SetDefaultRepository(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_SetDefaultRepository_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).SetDefaultRepository(ctx, req.(*SetDefaultRepositoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_ListRepositories_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRepositoriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).ListRepositories(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_ListRepositories_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).ListRepositories(ctx, req.(*ListRepositoriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_CreateBackupJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateBackupJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).CreateBackupJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_CreateBackupJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).CreateBackupJob(ctx, req.(*CreateBackupJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_GetBackupJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBackupJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).GetBackupJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_GetBackupJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).GetBackupJob(ctx, req.(*GetBackupJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_ListBackupJobs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBackupJobsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).ListBackupJobs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_ListBackupJobs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).ListBackupJobs(ctx, req.(*ListBackupJobsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_ClaimBackupJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimBackupJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).ClaimBackupJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_ClaimBackupJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).ClaimBackupJob(ctx, req.(*ClaimBackupJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_CompleteBackupJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteBackupJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).CompleteBackupJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_CompleteBackupJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).CompleteBackupJob(ctx, req.(*CompleteBackupJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_FailBackupJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FailBackupJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).FailBackupJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_FailBackupJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).FailBackupJob(ctx, req.(*FailBackupJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_FinalizeBackupJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinalizeBackupJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).FinalizeBackupJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_FinalizeBackupJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).FinalizeBackupJob(ctx, req.(*FinalizeBackupJobRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -484,6 +896,54 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRecord",
 			Handler:    _DataService_GetRecord_Handler,
+		},
+		{
+			MethodName: "CreateRepository",
+			Handler:    _DataService_CreateRepository_Handler,
+		},
+		{
+			MethodName: "UpdateRepository",
+			Handler:    _DataService_UpdateRepository_Handler,
+		},
+		{
+			MethodName: "DeleteRepository",
+			Handler:    _DataService_DeleteRepository_Handler,
+		},
+		{
+			MethodName: "SetDefaultRepository",
+			Handler:    _DataService_SetDefaultRepository_Handler,
+		},
+		{
+			MethodName: "ListRepositories",
+			Handler:    _DataService_ListRepositories_Handler,
+		},
+		{
+			MethodName: "CreateBackupJob",
+			Handler:    _DataService_CreateBackupJob_Handler,
+		},
+		{
+			MethodName: "GetBackupJob",
+			Handler:    _DataService_GetBackupJob_Handler,
+		},
+		{
+			MethodName: "ListBackupJobs",
+			Handler:    _DataService_ListBackupJobs_Handler,
+		},
+		{
+			MethodName: "ClaimBackupJob",
+			Handler:    _DataService_ClaimBackupJob_Handler,
+		},
+		{
+			MethodName: "CompleteBackupJob",
+			Handler:    _DataService_CompleteBackupJob_Handler,
+		},
+		{
+			MethodName: "FailBackupJob",
+			Handler:    _DataService_FailBackupJob_Handler,
+		},
+		{
+			MethodName: "FinalizeBackupJob",
+			Handler:    _DataService_FinalizeBackupJob_Handler,
 		},
 		{
 			MethodName: "CreateTenantToken",

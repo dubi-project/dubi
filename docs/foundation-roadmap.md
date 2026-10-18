@@ -9,7 +9,7 @@
 1. **同区域运行闭环**：以真实多节点进程、共享 Pack 写入与物理多数为验收对象，核对启动/加入、任意 Node 路由、单节点故障、原 RequestID 重试、冷重启和当前成员自动 Repair。`scripts/foundation_three_node_lab.sh` 已在隔离稀疏卷中通过这组开发门禁；同机三进程仍不能替代独立机器/区域验收。
 2. **成员变更后的持续可用**：补齐缺失/损坏持有、修复中断续跑和“移除成员后新节点自动再平衡”；不缩小原稳定多数分母，不以新空节点冒充原持有。让可用状态与未解决欠账能被观察，而不只在测试断言里出现。
 3. **多区域数据多数**：落实本地多数与多数 Region 的确认/后台补齐规则，给出 `GeoReady` 与降级状态；跨区故障不能靠 Root 可读或 Region 目录已确认来伪装数据安全。
-4. Volume Drain/Pack 回收、节点内迁移、维护门禁和诊断已进入底座闭环；下一阶段接入集群备份恢复。Raft Snapshot 已经是节点重新加入后的 Runtime 状态追赶机制，不另建 Node Snapshot。上述底座闭环稳定后再继续模块公开 API；生产资格另按故障域、资源压力和升级门禁验收。
+4. Volume Drain/Pack 回收、节点内迁移、维护门禁和诊断已进入底座闭环；集群备份恢复已开始落地 Repository 配置、默认目标、file 内容寻址对象和 Recovery Point Manifest，下一阶段接入集群级任务编排与恢复执行。Raft Snapshot 已经是节点重新加入后的 Runtime 状态追赶机制，不另建 Node Snapshot。上述底座闭环稳定后再继续模块公开 API；生产资格另按故障域、资源压力和升级门禁验收。
 
 目前已有真实三节点 TLS/进程内 Engine 测试覆盖通用 Pack 写读、本地多数、路由和部分修复，及四节点跨 Region 非 Owner 转发；这些是开发证据，不等于上述故障闭环全部完成。
 
@@ -29,9 +29,9 @@
 
 | 3 | 多 Region 数据多数 | 稳定 Active Region 集合推导 `GeoReady`；至少三本地节点采用本地多数前台确认、后台跨区补齐，不足三节点必须同步得到多数 Region。故障不能缩小分母。 | 进行中：小 Region 自动形成数据 Group，写入由 `enginedata.Service` 自动选择 `WriteGeoFromRange`，先在 Owner Region 保留物理记录，再取得固定计划的 Region 严格多数并发布对应 Geo metadata mirror；成功响应为 `geo_ready`，跨节点 engine RPC 会传递区域门槛。非必要离线 Region 留作后续修复，不会缩小分母；读取在本地门禁失败时会复核当前 GeoCoverage、重新观察各 Region 并从已验证 Node 补取字节，避免小 Region 写入后无法读取。三节点 Region 仍保持本地多数快速路径；同名 Region 重形成后的 Range generation、Geo 记录修复、metadata retry 和 GeoCoverage 自动重新确认已接通：后台发现旧代际证明，重新观察固定 Region 多数、补发镜像并原子写入新证明。跨区日志追赶、来源 Region 丢失后的完整重平衡和完整故障联测仍待完成。 |
 | 4 | Volume 与 Pack 生命周期 | 加卷后参与放置，限速均衡；卷 Drain/安全移除可续跑；引用与快照保护下的 Pack Compaction/GC 不误删活数据。 | 已完成底座闭环：Volume 有持久 `BeginDrain → RemoveDrained` 边界；Drain 停止新 Pack 写入但保留读取；健康源卷由持久游标驱动迁移，目标写入/读回校验后才替换索引，重启自动续跑；迁移后 catalog 先持久更新再回收死 Pack，混合存活 Pack 可通过 `dubi volume compact --rewrite` 显式重写。迁移/压缩受节点维护预算和单并发门禁限制。跨节点长期容量均衡与完整生产验收仍未完成。 |
-| 5 | 底座级恢复 | 所有持久资源登记与一致性 Checkpoint；Cluster Backup/Restore 在独立目标封存、校验并从空集群恢复。新节点通过普通 Join、Raft Snapshot 追赶和 Placement/Repair 恢复服务；底座不解析能力载荷。 | 未完成：Raft 快照已具备；Cluster Backup/Restore 仍需独立目标、完整资源清单和恢复验收。 |
+| 5 | 底座级恢复 | 所有持久资源登记与一致性 Checkpoint；Cluster Backup/Restore 在独立目标封存、校验并从空集群恢复。新节点通过普通 Join、Raft Snapshot 追赶和 Placement/Repair 恢复服务；底座不解析能力载荷。 | 进行中：Repository 配置、file 对象仓库、Manifest/Shard 原语、Pack Pool 的本地封口清单、Root 集群级 Backup Job、节点工作分片/Lease 接管、分片合并、最小本地 Pack/Root worker 以及 `dubi backup run/list/status` 已落地；跨节点分片汇总/最终 Manifest 协调、Runtime WAL/Engine snapshot 注册、S3 ObjectStore、完整封存和 Restore 执行仍需完成。 |
 | 6 | Tenant 与模块接入边界 | 应用凭据限定 Tenant；两个不同测试 Engine 在同一 Group/Pack 运行且互不越权。通用入口不把 Node 证书当租户身份，不要求模块模拟 File。 | 进行中：内部 Keyspace/Mux 隔离及[高熵 Token 的 Root 哈希登记、撤销、快照恢复和 Tenant 验证](architecture/tenant-entry.md)已实现；Node 管理命令可创建/撤销 Token。独立可选 HTTPS listener 的 `GET /v1/me` 已验证无 Node 证书的 Token 认证、撤销和内部 RPC 隔离。受约束模块数据 API、审计/限流未实现；当前 `record` 仍是 Node 认证的开发入口。 |
-| 7 | 低负担运维与故障门禁 | 默认命令无需反复传 Store/地址；可查询真实读写、数据覆盖、修复、卷和备份状态，`doctor` 指出不可用原因；格式不兼容明确拒绝。多进程强杀、分区、失卷、恢复用例可重复运行。 | 部分完成：`status` 现在在本机状态之外逐个探测 Root 成员的认证修复状态，汇总不可达 Node、Repair/Geo 欠账和 Volume 写隔离；新增只读 `dubi doctor`，复用同一认证观察，以 `healthy/degraded/unknown` 和非零退出码给出可操作结论，并支持 `--json`。数据入口新增默认 128 MiB 请求预算并在状态中显示占用/峰值/拒绝。协议与 Pack/状态格式版本集中登记，启动拒绝本地不兼容格式，Root discovery 广播当前格式；新增隔离稀疏盘的磁盘压力实验脚本和三节点基础闭环脚本，可在开发机安全复现压力门禁、启动加入、Pack 多数读写、单节点离线、RequestID 幂等及重启恢复。备份状态、分区/失卷故障注入和完整集群覆盖仍未接入。 |
+| 7 | 低负担运维与故障门禁 | 默认命令无需反复传 Store/地址；可查询真实读写、数据覆盖、修复、卷和备份状态，`doctor` 指出不可用原因；格式不兼容明确拒绝。多进程强杀、分区、失卷、恢复用例可重复运行。 | 部分完成：`status` 现在在本机状态之外逐个探测 Root 成员的认证修复状态，汇总不可达 Node、Repair/Geo 欠账和 Volume 写隔离；新增只读 `dubi doctor`，复用同一认证观察，以 `healthy/degraded/unknown` 和非零退出码给出可操作结论，并支持 `--json`。数据入口新增默认 128 MiB 请求预算并在状态中显示占用/峰值/拒绝。协议与 Pack/状态格式版本集中登记，启动拒绝本地不兼容格式，Root discovery 广播当前格式；新增隔离稀疏盘的磁盘压力实验脚本和三节点基础闭环脚本，可在开发机安全复现压力门禁、启动加入、Pack 多数读写、单节点离线、RequestID 幂等及重启恢复。备份任务状态现在可通过 `dubi backup list/status` 查询，但真实对象覆盖、分区/失卷故障注入和完整集群覆盖仍未接入。 |
 
 实施顺序按依赖推进，但安全测试、资源界限与诊断随各阶段同步补齐，不把它们拖到最后。阶段 1 优先采用不可变记录作为模块无关的数据载体：先持久复制并复验，再发布权威引用；真正的确认状态必须绑定稳定参与集合和引用代际。来源 Node 的当前健康只用于重试排序，不能改变分母。对于只存在 Raft 内联状态的验证值，单独标明其确认语义，不能把它算作独立 Pack 数据已达到 `LocalReady`。
 

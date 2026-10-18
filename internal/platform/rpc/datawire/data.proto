@@ -44,6 +44,150 @@ message GetRecordResponse {
   string state = 4;
   uint64 region_generation = 5;
 }
+
+// RepositoryConfig is a cluster-level backup/recovery destination. The
+// credential fields are already encrypted by the recovery platform; plaintext
+// access keys and secrets never cross this protocol.
+message RepositoryConfig {
+  string name = 1;
+  string type = 2;
+  string path = 3;
+  string bucket = 4;
+  string prefix = 5;
+  string endpoint = 6;
+  string region = 7;
+  bool path_style = 8;
+  bytes encrypted_credentials = 9;
+  bytes credentials_nonce = 10;
+  string credentials_algorithm = 11;
+  uint32 credentials_key_version = 12;
+  bool credentials_configured = 13;
+}
+message CreateRepositoryRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  RepositoryConfig repository = 4;
+}
+message UpdateRepositoryRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  RepositoryConfig repository = 4;
+}
+message DeleteRepositoryRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string name = 4;
+}
+message SetDefaultRepositoryRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string name = 4;
+}
+message RepositoryMutationResponse {
+  RepositoryConfig repository = 1;
+  uint64 root_index = 2;
+}
+message ListRepositoriesRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+}
+message ListRepositoriesResponse {
+  repeated RepositoryConfig repositories = 1;
+  string default_name = 2;
+  uint64 root_index = 3;
+}
+
+// BackupJob is the engine-neutral, Root-persisted control state for one
+// cluster backup. Worker progress contains no Engine or Module data.
+message BackupJobWorker {
+  uint64 raft_id = 1;
+  string node_id = 2;
+  string state = 3;
+  uint64 lease_epoch = 4;
+  int64 lease_expires_unix = 5;
+  int64 bytes = 6;
+  uint64 objects = 7;
+  string error = 8;
+  uint64 lease_raft_id = 9;
+  string lease_node_id = 10;
+}
+message BackupJob {
+  string job_id = 1;
+  string repository = 2;
+  string cluster_id = 3;
+  uint64 epoch = 4;
+  string state = 5;
+  uint64 created_index = 6;
+  uint64 completed_index = 7;
+  string last_error = 8;
+  repeated BackupJobWorker workers = 9;
+}
+message CreateBackupJobRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string job_id = 4;
+  string repository = 5;
+}
+message GetBackupJobRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string job_id = 3;
+}
+message ListBackupJobsRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+}
+message ClaimBackupJobRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string job_id = 4;
+  int64 observed_unix = 5;
+  int64 lease_expires_unix = 6;
+  uint64 worker_raft_id = 7;
+  string worker_node_id = 8;
+}
+message CompleteBackupJobRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string job_id = 4;
+  uint64 lease_epoch = 5;
+  int64 bytes = 6;
+  uint64 objects = 7;
+  uint64 worker_raft_id = 8;
+  string worker_node_id = 9;
+}
+message FailBackupJobRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string job_id = 4;
+  uint64 lease_epoch = 5;
+  string error = 6;
+  uint64 worker_raft_id = 7;
+  string worker_node_id = 8;
+}
+message FinalizeBackupJobRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  string job_id = 4;
+}
+message BackupJobResponse {
+  BackupJob job = 1;
+  uint64 root_index = 2;
+}
+message ListBackupJobsResponse {
+  repeated BackupJob jobs = 1;
+  uint64 root_index = 2;
+}
+
 message CreateTenantTokenRequest {
   string cluster_id = 1;
   uint64 from_raft_id = 2;
@@ -155,6 +299,20 @@ service DataService {
   rpc CreateDataset(CreateDatasetRequest) returns (CreateDatasetResponse);
   rpc PutRecord(PutRecordRequest) returns (PutRecordResponse);
   rpc GetRecord(GetRecordRequest) returns (GetRecordResponse);
+  // Cluster-level backup/recovery Repository administration. These methods
+  // are Node-authenticated and commit through the Root Group.
+  rpc CreateRepository(CreateRepositoryRequest) returns (RepositoryMutationResponse);
+  rpc UpdateRepository(UpdateRepositoryRequest) returns (RepositoryMutationResponse);
+  rpc DeleteRepository(DeleteRepositoryRequest) returns (RepositoryMutationResponse);
+  rpc SetDefaultRepository(SetDefaultRepositoryRequest) returns (RepositoryMutationResponse);
+  rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse);
+  rpc CreateBackupJob(CreateBackupJobRequest) returns (BackupJobResponse);
+  rpc GetBackupJob(GetBackupJobRequest) returns (BackupJobResponse);
+  rpc ListBackupJobs(ListBackupJobsRequest) returns (ListBackupJobsResponse);
+  rpc ClaimBackupJob(ClaimBackupJobRequest) returns (BackupJobResponse);
+  rpc CompleteBackupJob(CompleteBackupJobRequest) returns (BackupJobResponse);
+  rpc FailBackupJob(FailBackupJobRequest) returns (BackupJobResponse);
+  rpc FinalizeBackupJob(FinalizeBackupJobRequest) returns (BackupJobResponse);
   // Node-authenticated administrative methods, never the Tenant data API.
   rpc CreateTenantToken(CreateTenantTokenRequest) returns (CreateTenantTokenResponse);
   rpc RevokeTenantToken(RevokeTenantTokenRequest) returns (RevokeTenantTokenResponse);

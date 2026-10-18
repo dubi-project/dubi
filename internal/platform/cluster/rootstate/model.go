@@ -10,6 +10,7 @@ import (
 
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
 )
 
 const FormatVersion = 1
@@ -32,6 +33,15 @@ const (
 	RetireRegionGroup          = "retire_region_group"
 	PlanRegionGroupRebuild     = "plan_region_group_rebuild"
 	MarkNodeReady              = "mark_node_ready"
+	CreateRepository           = "create_repository"
+	UpdateRepository           = "update_repository"
+	DeleteRepository           = "delete_repository"
+	SetDefaultRepository       = "set_default_repository"
+	CreateBackupJob            = "create_backup_job"
+	ClaimBackupJob             = "claim_backup_job"
+	CompleteBackupJob          = "complete_backup_job"
+	FailBackupJob              = "fail_backup_job"
+	FinalizeBackupJob          = "finalize_backup_job"
 )
 
 const (
@@ -206,6 +216,18 @@ type Dataset struct {
 	OwnerGroupID string `json:"owner_group_id"`
 }
 
+// RepositoryDelete and RepositoryDefault are the small Root command payloads
+// for lifecycle operations on a cluster-level backup/recovery Repository.
+// Repository itself is the complete structured configuration; it intentionally
+// has no URI field and carries only encrypted credential bytes.
+type RepositoryDelete struct {
+	Name string `json:"name"`
+}
+
+type RepositoryDefault struct {
+	Name string `json:"name"`
+}
+
 func (value Dataset) Keyspace() Keyspace {
 	return Keyspace{TenantID: value.TenantID, EngineID: value.EngineID, DatasetID: value.DatasetID}
 }
@@ -344,6 +366,14 @@ type Command struct {
 	GroupRetirement     *RegionGroupRetirement      `json:"group_retirement,omitempty"`
 	GroupRebuild        *RegionGroupRebuild         `json:"group_rebuild,omitempty"`
 	NodeReady           *NodeReadyRecord            `json:"node_ready,omitempty"`
+	Repository          *repository.Repository      `json:"repository,omitempty"`
+	RepositoryDelete    *RepositoryDelete           `json:"repository_delete,omitempty"`
+	RepositoryDefault   *RepositoryDefault          `json:"repository_default,omitempty"`
+	BackupJob           *BackupJob                  `json:"backup_job,omitempty"`
+	BackupJobClaim      *BackupJobClaim             `json:"backup_job_claim,omitempty"`
+	BackupJobCompletion *BackupJobCompletion        `json:"backup_job_completion,omitempty"`
+	BackupJobFailure    *BackupJobFailure           `json:"backup_job_failure,omitempty"`
+	BackupJobReference  *BackupJobReference         `json:"backup_job_reference,omitempty"`
 }
 
 type Result struct {
@@ -371,7 +401,7 @@ func (command Command) validate() error {
 		command.TenantCredential != nil, command.TenantRevocation != nil, command.Dataset != nil,
 		command.Activation != nil, command.Membership != nil, command.GroupPlan != nil, command.GroupCompletion != nil,
 		command.JoinGrant != nil, command.JoinConsumption != nil, command.JoinRevocation != nil,
-		command.RootJoinStart != nil, command.RootJoinFinish != nil, command.RegionPlan != nil, command.RegionConfirmation != nil, command.RegionGrowth != nil, command.EnrollmentAuthority != nil, command.RangePlacement != nil, command.GroupRetirement != nil, command.GroupRebuild != nil, command.NodeReady != nil} {
+		command.RootJoinStart != nil, command.RootJoinFinish != nil, command.RegionPlan != nil, command.RegionConfirmation != nil, command.RegionGrowth != nil, command.EnrollmentAuthority != nil, command.RangePlacement != nil, command.GroupRetirement != nil, command.GroupRebuild != nil, command.NodeReady != nil, command.Repository != nil, command.RepositoryDelete != nil, command.RepositoryDefault != nil, command.BackupJob != nil, command.BackupJobClaim != nil, command.BackupJobCompletion != nil, command.BackupJobFailure != nil, command.BackupJobReference != nil} {
 		if present {
 			payloads++
 		}
@@ -542,6 +572,44 @@ func (command Command) validate() error {
 		if value == nil || !nodeIdentity.MatchString(value.NodeID) || value.RaftID == 0 || value.ActivatedIndex == 0 {
 			return errors.New("invalid Node readiness record")
 		}
+	case CreateRepository, UpdateRepository:
+		if command.Repository == nil {
+			return fmt.Errorf("%s requires Repository payload", command.Type)
+		}
+		return command.Repository.Validate()
+	case DeleteRepository:
+		if command.RepositoryDelete == nil || repository.ValidateName(command.RepositoryDelete.Name) != nil {
+			return errors.New("invalid Repository deletion")
+		}
+	case SetDefaultRepository:
+		if command.RepositoryDefault == nil || repository.ValidateName(command.RepositoryDefault.Name) != nil {
+			return errors.New("invalid default Repository")
+		}
+	case CreateBackupJob:
+		if command.BackupJob == nil {
+			return errors.New("create_backup_job requires job payload")
+		}
+		return command.BackupJob.ValidateForCreate()
+	case ClaimBackupJob:
+		if command.BackupJobClaim == nil {
+			return errors.New("claim_backup_job requires claim payload")
+		}
+		return command.BackupJobClaim.Validate()
+	case CompleteBackupJob:
+		if command.BackupJobCompletion == nil {
+			return errors.New("complete_backup_job requires completion payload")
+		}
+		return command.BackupJobCompletion.Validate()
+	case FailBackupJob:
+		if command.BackupJobFailure == nil {
+			return errors.New("fail_backup_job requires failure payload")
+		}
+		return command.BackupJobFailure.Validate()
+	case FinalizeBackupJob:
+		if command.BackupJobReference == nil {
+			return errors.New("finalize_backup_job requires job reference")
+		}
+		return command.BackupJobReference.Validate()
 	default:
 		return fmt.Errorf("unsupported Root command %q", command.Type)
 	}

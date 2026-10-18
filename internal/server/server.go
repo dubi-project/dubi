@@ -91,6 +91,7 @@ type Server struct {
 	geoRecordRepair *recordrepair.GeoRecordRepairStore
 	geoRepair       *geoMetadataRepair
 	volumeMigration *volumeMigrationWorker
+	backup          *backupWorker
 	ready           chan struct{}
 	localNode       *rootstate.Node
 	desiredName     string
@@ -447,6 +448,7 @@ func Open(options Options) (*Server, error) {
 	var geoRecordRepair *recordrepair.GeoRecordRepairStore
 	var geoRepair *geoMetadataRepair
 	var volumeMigration *volumeMigrationWorker
+	var backup *backupWorker
 	if options.Network != nil {
 		certificates = newCertificateRenewal(options.StoreRoot, runtime.Identity, runtime.Host, runtime.Root, options.EnrollmentSigner, options.ReportError)
 		coordinator, err := regiongroups.New(runtime.Host, runtime.Root, client, runtime)
@@ -496,6 +498,7 @@ func Open(options Options) (*Server, error) {
 		dataServer.geoRecords = geoRecordRepair
 	}
 	volumeMigration = &volumeMigrationWorker{runtime: runtime, report: options.ReportError, budget: dataServer.maintenance}
+	backup = &backupWorker{runtime: runtime, report: options.ReportError}
 	var publicHTTP *http.Server
 	var publicTLS *tls.Config
 	ready := make(chan struct{})
@@ -520,7 +523,7 @@ func Open(options Options) (*Server, error) {
 			}
 			return ""
 		}(),
-		storeRoot: options.StoreRoot, repairProgress: repairProgress, geoRetry: geoRetry, geoRecordRepair: geoRecordRepair, geoRepair: geoRepair, volumeMigration: volumeMigration, closeDone: make(chan struct{})}, nil
+		storeRoot: options.StoreRoot, repairProgress: repairProgress, geoRetry: geoRetry, geoRecordRepair: geoRecordRepair, geoRepair: geoRepair, volumeMigration: volumeMigration, backup: backup, closeDone: make(chan struct{})}, nil
 }
 
 // RemoveNode runs one explicit operator-requested removal pass. It is not
@@ -780,6 +783,10 @@ func (server *Server) run(runCtx context.Context, cancel context.CancelCauseFunc
 	if server.volumeMigration != nil {
 		server.workers.Add(1)
 		go func() { defer server.workers.Done(); server.volumeMigration.run(runCtx) }()
+	}
+	if server.backup != nil {
+		server.workers.Add(1)
+		go func() { defer server.workers.Done(); server.backup.run(runCtx) }()
 	}
 	server.mu.Unlock()
 

@@ -470,6 +470,1479 @@ func (x *GetRecordResponse) GetRegionGeneration() uint64 {
 	return 0
 }
 
+// RepositoryConfig is a cluster-level backup/recovery destination. The
+// credential fields are already encrypted by the recovery platform; plaintext
+// access keys and secrets never cross this protocol.
+type RepositoryConfig struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Name                  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type                  string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	Path                  string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	Bucket                string                 `protobuf:"bytes,4,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	Prefix                string                 `protobuf:"bytes,5,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	Endpoint              string                 `protobuf:"bytes,6,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	Region                string                 `protobuf:"bytes,7,opt,name=region,proto3" json:"region,omitempty"`
+	PathStyle             bool                   `protobuf:"varint,8,opt,name=path_style,json=pathStyle,proto3" json:"path_style,omitempty"`
+	EncryptedCredentials  []byte                 `protobuf:"bytes,9,opt,name=encrypted_credentials,json=encryptedCredentials,proto3" json:"encrypted_credentials,omitempty"`
+	CredentialsNonce      []byte                 `protobuf:"bytes,10,opt,name=credentials_nonce,json=credentialsNonce,proto3" json:"credentials_nonce,omitempty"`
+	CredentialsAlgorithm  string                 `protobuf:"bytes,11,opt,name=credentials_algorithm,json=credentialsAlgorithm,proto3" json:"credentials_algorithm,omitempty"`
+	CredentialsKeyVersion uint32                 `protobuf:"varint,12,opt,name=credentials_key_version,json=credentialsKeyVersion,proto3" json:"credentials_key_version,omitempty"`
+	CredentialsConfigured bool                   `protobuf:"varint,13,opt,name=credentials_configured,json=credentialsConfigured,proto3" json:"credentials_configured,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *RepositoryConfig) Reset() {
+	*x = RepositoryConfig{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepositoryConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepositoryConfig) ProtoMessage() {}
+
+func (x *RepositoryConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepositoryConfig.ProtoReflect.Descriptor instead.
+func (*RepositoryConfig) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RepositoryConfig) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetBucket() string {
+	if x != nil {
+		return x.Bucket
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetRegion() string {
+	if x != nil {
+		return x.Region
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetPathStyle() bool {
+	if x != nil {
+		return x.PathStyle
+	}
+	return false
+}
+
+func (x *RepositoryConfig) GetEncryptedCredentials() []byte {
+	if x != nil {
+		return x.EncryptedCredentials
+	}
+	return nil
+}
+
+func (x *RepositoryConfig) GetCredentialsNonce() []byte {
+	if x != nil {
+		return x.CredentialsNonce
+	}
+	return nil
+}
+
+func (x *RepositoryConfig) GetCredentialsAlgorithm() string {
+	if x != nil {
+		return x.CredentialsAlgorithm
+	}
+	return ""
+}
+
+func (x *RepositoryConfig) GetCredentialsKeyVersion() uint32 {
+	if x != nil {
+		return x.CredentialsKeyVersion
+	}
+	return 0
+}
+
+func (x *RepositoryConfig) GetCredentialsConfigured() bool {
+	if x != nil {
+		return x.CredentialsConfigured
+	}
+	return false
+}
+
+type CreateRepositoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Repository    *RepositoryConfig      `protobuf:"bytes,4,opt,name=repository,proto3" json:"repository,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateRepositoryRequest) Reset() {
+	*x = CreateRepositoryRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateRepositoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateRepositoryRequest) ProtoMessage() {}
+
+func (x *CreateRepositoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateRepositoryRequest.ProtoReflect.Descriptor instead.
+func (*CreateRepositoryRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CreateRepositoryRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *CreateRepositoryRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *CreateRepositoryRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CreateRepositoryRequest) GetRepository() *RepositoryConfig {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
+type UpdateRepositoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Repository    *RepositoryConfig      `protobuf:"bytes,4,opt,name=repository,proto3" json:"repository,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateRepositoryRequest) Reset() {
+	*x = UpdateRepositoryRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateRepositoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateRepositoryRequest) ProtoMessage() {}
+
+func (x *UpdateRepositoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateRepositoryRequest.ProtoReflect.Descriptor instead.
+func (*UpdateRepositoryRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *UpdateRepositoryRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *UpdateRepositoryRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *UpdateRepositoryRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *UpdateRepositoryRequest) GetRepository() *RepositoryConfig {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
+type DeleteRepositoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteRepositoryRequest) Reset() {
+	*x = DeleteRepositoryRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteRepositoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteRepositoryRequest) ProtoMessage() {}
+
+func (x *DeleteRepositoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteRepositoryRequest.ProtoReflect.Descriptor instead.
+func (*DeleteRepositoryRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DeleteRepositoryRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *DeleteRepositoryRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *DeleteRepositoryRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *DeleteRepositoryRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type SetDefaultRepositoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetDefaultRepositoryRequest) Reset() {
+	*x = SetDefaultRepositoryRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetDefaultRepositoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetDefaultRepositoryRequest) ProtoMessage() {}
+
+func (x *SetDefaultRepositoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetDefaultRepositoryRequest.ProtoReflect.Descriptor instead.
+func (*SetDefaultRepositoryRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SetDefaultRepositoryRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *SetDefaultRepositoryRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *SetDefaultRepositoryRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SetDefaultRepositoryRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type RepositoryMutationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Repository    *RepositoryConfig      `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
+	RootIndex     uint64                 `protobuf:"varint,2,opt,name=root_index,json=rootIndex,proto3" json:"root_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RepositoryMutationResponse) Reset() {
+	*x = RepositoryMutationResponse{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepositoryMutationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepositoryMutationResponse) ProtoMessage() {}
+
+func (x *RepositoryMutationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepositoryMutationResponse.ProtoReflect.Descriptor instead.
+func (*RepositoryMutationResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RepositoryMutationResponse) GetRepository() *RepositoryConfig {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
+func (x *RepositoryMutationResponse) GetRootIndex() uint64 {
+	if x != nil {
+		return x.RootIndex
+	}
+	return 0
+}
+
+type ListRepositoriesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRepositoriesRequest) Reset() {
+	*x = ListRepositoriesRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRepositoriesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRepositoriesRequest) ProtoMessage() {}
+
+func (x *ListRepositoriesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRepositoriesRequest.ProtoReflect.Descriptor instead.
+func (*ListRepositoriesRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ListRepositoriesRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ListRepositoriesRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+type ListRepositoriesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Repositories  []*RepositoryConfig    `protobuf:"bytes,1,rep,name=repositories,proto3" json:"repositories,omitempty"`
+	DefaultName   string                 `protobuf:"bytes,2,opt,name=default_name,json=defaultName,proto3" json:"default_name,omitempty"`
+	RootIndex     uint64                 `protobuf:"varint,3,opt,name=root_index,json=rootIndex,proto3" json:"root_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRepositoriesResponse) Reset() {
+	*x = ListRepositoriesResponse{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRepositoriesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRepositoriesResponse) ProtoMessage() {}
+
+func (x *ListRepositoriesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRepositoriesResponse.ProtoReflect.Descriptor instead.
+func (*ListRepositoriesResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ListRepositoriesResponse) GetRepositories() []*RepositoryConfig {
+	if x != nil {
+		return x.Repositories
+	}
+	return nil
+}
+
+func (x *ListRepositoriesResponse) GetDefaultName() string {
+	if x != nil {
+		return x.DefaultName
+	}
+	return ""
+}
+
+func (x *ListRepositoriesResponse) GetRootIndex() uint64 {
+	if x != nil {
+		return x.RootIndex
+	}
+	return 0
+}
+
+// BackupJob is the engine-neutral, Root-persisted control state for one
+// cluster backup. Worker progress contains no Engine or Module data.
+type BackupJobWorker struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	RaftId           uint64                 `protobuf:"varint,1,opt,name=raft_id,json=raftId,proto3" json:"raft_id,omitempty"`
+	NodeId           string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	State            string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	LeaseEpoch       uint64                 `protobuf:"varint,4,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	LeaseExpiresUnix int64                  `protobuf:"varint,5,opt,name=lease_expires_unix,json=leaseExpiresUnix,proto3" json:"lease_expires_unix,omitempty"`
+	Bytes            int64                  `protobuf:"varint,6,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	Objects          uint64                 `protobuf:"varint,7,opt,name=objects,proto3" json:"objects,omitempty"`
+	Error            string                 `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
+	LeaseRaftId      uint64                 `protobuf:"varint,9,opt,name=lease_raft_id,json=leaseRaftId,proto3" json:"lease_raft_id,omitempty"`
+	LeaseNodeId      string                 `protobuf:"bytes,10,opt,name=lease_node_id,json=leaseNodeId,proto3" json:"lease_node_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *BackupJobWorker) Reset() {
+	*x = BackupJobWorker{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackupJobWorker) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackupJobWorker) ProtoMessage() {}
+
+func (x *BackupJobWorker) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackupJobWorker.ProtoReflect.Descriptor instead.
+func (*BackupJobWorker) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *BackupJobWorker) GetRaftId() uint64 {
+	if x != nil {
+		return x.RaftId
+	}
+	return 0
+}
+
+func (x *BackupJobWorker) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *BackupJobWorker) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *BackupJobWorker) GetLeaseEpoch() uint64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
+}
+
+func (x *BackupJobWorker) GetLeaseExpiresUnix() int64 {
+	if x != nil {
+		return x.LeaseExpiresUnix
+	}
+	return 0
+}
+
+func (x *BackupJobWorker) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *BackupJobWorker) GetObjects() uint64 {
+	if x != nil {
+		return x.Objects
+	}
+	return 0
+}
+
+func (x *BackupJobWorker) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *BackupJobWorker) GetLeaseRaftId() uint64 {
+	if x != nil {
+		return x.LeaseRaftId
+	}
+	return 0
+}
+
+func (x *BackupJobWorker) GetLeaseNodeId() string {
+	if x != nil {
+		return x.LeaseNodeId
+	}
+	return ""
+}
+
+type BackupJob struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	JobId          string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Repository     string                 `protobuf:"bytes,2,opt,name=repository,proto3" json:"repository,omitempty"`
+	ClusterId      string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Epoch          uint64                 `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	State          string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
+	CreatedIndex   uint64                 `protobuf:"varint,6,opt,name=created_index,json=createdIndex,proto3" json:"created_index,omitempty"`
+	CompletedIndex uint64                 `protobuf:"varint,7,opt,name=completed_index,json=completedIndex,proto3" json:"completed_index,omitempty"`
+	LastError      string                 `protobuf:"bytes,8,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	Workers        []*BackupJobWorker     `protobuf:"bytes,9,rep,name=workers,proto3" json:"workers,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *BackupJob) Reset() {
+	*x = BackupJob{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackupJob) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackupJob) ProtoMessage() {}
+
+func (x *BackupJob) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackupJob.ProtoReflect.Descriptor instead.
+func (*BackupJob) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *BackupJob) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *BackupJob) GetRepository() string {
+	if x != nil {
+		return x.Repository
+	}
+	return ""
+}
+
+func (x *BackupJob) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *BackupJob) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *BackupJob) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *BackupJob) GetCreatedIndex() uint64 {
+	if x != nil {
+		return x.CreatedIndex
+	}
+	return 0
+}
+
+func (x *BackupJob) GetCompletedIndex() uint64 {
+	if x != nil {
+		return x.CompletedIndex
+	}
+	return 0
+}
+
+func (x *BackupJob) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+func (x *BackupJob) GetWorkers() []*BackupJobWorker {
+	if x != nil {
+		return x.Workers
+	}
+	return nil
+}
+
+type CreateBackupJobRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Repository    string                 `protobuf:"bytes,5,opt,name=repository,proto3" json:"repository,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateBackupJobRequest) Reset() {
+	*x = CreateBackupJobRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateBackupJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateBackupJobRequest) ProtoMessage() {}
+
+func (x *CreateBackupJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateBackupJobRequest.ProtoReflect.Descriptor instead.
+func (*CreateBackupJobRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CreateBackupJobRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *CreateBackupJobRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *CreateBackupJobRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CreateBackupJobRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *CreateBackupJobRequest) GetRepository() string {
+	if x != nil {
+		return x.Repository
+	}
+	return ""
+}
+
+type GetBackupJobRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBackupJobRequest) Reset() {
+	*x = GetBackupJobRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBackupJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBackupJobRequest) ProtoMessage() {}
+
+func (x *GetBackupJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBackupJobRequest.ProtoReflect.Descriptor instead.
+func (*GetBackupJobRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetBackupJobRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *GetBackupJobRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *GetBackupJobRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+type ListBackupJobsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBackupJobsRequest) Reset() {
+	*x = ListBackupJobsRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBackupJobsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBackupJobsRequest) ProtoMessage() {}
+
+func (x *ListBackupJobsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBackupJobsRequest.ProtoReflect.Descriptor instead.
+func (*ListBackupJobsRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ListBackupJobsRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ListBackupJobsRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+type ClaimBackupJobRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId        string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId       uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId        string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	JobId            string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	ObservedUnix     int64                  `protobuf:"varint,5,opt,name=observed_unix,json=observedUnix,proto3" json:"observed_unix,omitempty"`
+	LeaseExpiresUnix int64                  `protobuf:"varint,6,opt,name=lease_expires_unix,json=leaseExpiresUnix,proto3" json:"lease_expires_unix,omitempty"`
+	WorkerRaftId     uint64                 `protobuf:"varint,7,opt,name=worker_raft_id,json=workerRaftId,proto3" json:"worker_raft_id,omitempty"`
+	WorkerNodeId     string                 `protobuf:"bytes,8,opt,name=worker_node_id,json=workerNodeId,proto3" json:"worker_node_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ClaimBackupJobRequest) Reset() {
+	*x = ClaimBackupJobRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClaimBackupJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClaimBackupJobRequest) ProtoMessage() {}
+
+func (x *ClaimBackupJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClaimBackupJobRequest.ProtoReflect.Descriptor instead.
+func (*ClaimBackupJobRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ClaimBackupJobRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ClaimBackupJobRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *ClaimBackupJobRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ClaimBackupJobRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *ClaimBackupJobRequest) GetObservedUnix() int64 {
+	if x != nil {
+		return x.ObservedUnix
+	}
+	return 0
+}
+
+func (x *ClaimBackupJobRequest) GetLeaseExpiresUnix() int64 {
+	if x != nil {
+		return x.LeaseExpiresUnix
+	}
+	return 0
+}
+
+func (x *ClaimBackupJobRequest) GetWorkerRaftId() uint64 {
+	if x != nil {
+		return x.WorkerRaftId
+	}
+	return 0
+}
+
+func (x *ClaimBackupJobRequest) GetWorkerNodeId() string {
+	if x != nil {
+		return x.WorkerNodeId
+	}
+	return ""
+}
+
+type CompleteBackupJobRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	LeaseEpoch    uint64                 `protobuf:"varint,5,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	Bytes         int64                  `protobuf:"varint,6,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	Objects       uint64                 `protobuf:"varint,7,opt,name=objects,proto3" json:"objects,omitempty"`
+	WorkerRaftId  uint64                 `protobuf:"varint,8,opt,name=worker_raft_id,json=workerRaftId,proto3" json:"worker_raft_id,omitempty"`
+	WorkerNodeId  string                 `protobuf:"bytes,9,opt,name=worker_node_id,json=workerNodeId,proto3" json:"worker_node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompleteBackupJobRequest) Reset() {
+	*x = CompleteBackupJobRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompleteBackupJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompleteBackupJobRequest) ProtoMessage() {}
+
+func (x *CompleteBackupJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompleteBackupJobRequest.ProtoReflect.Descriptor instead.
+func (*CompleteBackupJobRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *CompleteBackupJobRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *CompleteBackupJobRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *CompleteBackupJobRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CompleteBackupJobRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *CompleteBackupJobRequest) GetLeaseEpoch() uint64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
+}
+
+func (x *CompleteBackupJobRequest) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *CompleteBackupJobRequest) GetObjects() uint64 {
+	if x != nil {
+		return x.Objects
+	}
+	return 0
+}
+
+func (x *CompleteBackupJobRequest) GetWorkerRaftId() uint64 {
+	if x != nil {
+		return x.WorkerRaftId
+	}
+	return 0
+}
+
+func (x *CompleteBackupJobRequest) GetWorkerNodeId() string {
+	if x != nil {
+		return x.WorkerNodeId
+	}
+	return ""
+}
+
+type FailBackupJobRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	LeaseEpoch    uint64                 `protobuf:"varint,5,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	WorkerRaftId  uint64                 `protobuf:"varint,7,opt,name=worker_raft_id,json=workerRaftId,proto3" json:"worker_raft_id,omitempty"`
+	WorkerNodeId  string                 `protobuf:"bytes,8,opt,name=worker_node_id,json=workerNodeId,proto3" json:"worker_node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FailBackupJobRequest) Reset() {
+	*x = FailBackupJobRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FailBackupJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FailBackupJobRequest) ProtoMessage() {}
+
+func (x *FailBackupJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FailBackupJobRequest.ProtoReflect.Descriptor instead.
+func (*FailBackupJobRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *FailBackupJobRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *FailBackupJobRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *FailBackupJobRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *FailBackupJobRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *FailBackupJobRequest) GetLeaseEpoch() uint64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
+}
+
+func (x *FailBackupJobRequest) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *FailBackupJobRequest) GetWorkerRaftId() uint64 {
+	if x != nil {
+		return x.WorkerRaftId
+	}
+	return 0
+}
+
+func (x *FailBackupJobRequest) GetWorkerNodeId() string {
+	if x != nil {
+		return x.WorkerNodeId
+	}
+	return ""
+}
+
+type FinalizeBackupJobRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FinalizeBackupJobRequest) Reset() {
+	*x = FinalizeBackupJobRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FinalizeBackupJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FinalizeBackupJobRequest) ProtoMessage() {}
+
+func (x *FinalizeBackupJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FinalizeBackupJobRequest.ProtoReflect.Descriptor instead.
+func (*FinalizeBackupJobRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *FinalizeBackupJobRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *FinalizeBackupJobRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *FinalizeBackupJobRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *FinalizeBackupJobRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+type BackupJobResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Job           *BackupJob             `protobuf:"bytes,1,opt,name=job,proto3" json:"job,omitempty"`
+	RootIndex     uint64                 `protobuf:"varint,2,opt,name=root_index,json=rootIndex,proto3" json:"root_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BackupJobResponse) Reset() {
+	*x = BackupJobResponse{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackupJobResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackupJobResponse) ProtoMessage() {}
+
+func (x *BackupJobResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackupJobResponse.ProtoReflect.Descriptor instead.
+func (*BackupJobResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *BackupJobResponse) GetJob() *BackupJob {
+	if x != nil {
+		return x.Job
+	}
+	return nil
+}
+
+func (x *BackupJobResponse) GetRootIndex() uint64 {
+	if x != nil {
+		return x.RootIndex
+	}
+	return 0
+}
+
+type ListBackupJobsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Jobs          []*BackupJob           `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
+	RootIndex     uint64                 `protobuf:"varint,2,opt,name=root_index,json=rootIndex,proto3" json:"root_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBackupJobsResponse) Reset() {
+	*x = ListBackupJobsResponse{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBackupJobsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBackupJobsResponse) ProtoMessage() {}
+
+func (x *ListBackupJobsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBackupJobsResponse.ProtoReflect.Descriptor instead.
+func (*ListBackupJobsResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ListBackupJobsResponse) GetJobs() []*BackupJob {
+	if x != nil {
+		return x.Jobs
+	}
+	return nil
+}
+
+func (x *ListBackupJobsResponse) GetRootIndex() uint64 {
+	if x != nil {
+		return x.RootIndex
+	}
+	return 0
+}
+
 type CreateTenantTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
@@ -483,7 +1956,7 @@ type CreateTenantTokenRequest struct {
 
 func (x *CreateTenantTokenRequest) Reset() {
 	*x = CreateTenantTokenRequest{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[6]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -495,7 +1968,7 @@ func (x *CreateTenantTokenRequest) String() string {
 func (*CreateTenantTokenRequest) ProtoMessage() {}
 
 func (x *CreateTenantTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[6]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -508,7 +1981,7 @@ func (x *CreateTenantTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTenantTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateTenantTokenRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{6}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *CreateTenantTokenRequest) GetClusterId() string {
@@ -557,7 +2030,7 @@ type CreateTenantTokenResponse struct {
 
 func (x *CreateTenantTokenResponse) Reset() {
 	*x = CreateTenantTokenResponse{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[7]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -569,7 +2042,7 @@ func (x *CreateTenantTokenResponse) String() string {
 func (*CreateTenantTokenResponse) ProtoMessage() {}
 
 func (x *CreateTenantTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[7]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -582,7 +2055,7 @@ func (x *CreateTenantTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTenantTokenResponse.ProtoReflect.Descriptor instead.
 func (*CreateTenantTokenResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{7}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CreateTenantTokenResponse) GetCredentialId() string {
@@ -618,7 +2091,7 @@ type RevokeTenantTokenRequest struct {
 
 func (x *RevokeTenantTokenRequest) Reset() {
 	*x = RevokeTenantTokenRequest{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[8]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +2103,7 @@ func (x *RevokeTenantTokenRequest) String() string {
 func (*RevokeTenantTokenRequest) ProtoMessage() {}
 
 func (x *RevokeTenantTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[8]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +2116,7 @@ func (x *RevokeTenantTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeTenantTokenRequest.ProtoReflect.Descriptor instead.
 func (*RevokeTenantTokenRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{8}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RevokeTenantTokenRequest) GetClusterId() string {
@@ -683,7 +2156,7 @@ type RevokeTenantTokenResponse struct {
 
 func (x *RevokeTenantTokenResponse) Reset() {
 	*x = RevokeTenantTokenResponse{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[9]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -695,7 +2168,7 @@ func (x *RevokeTenantTokenResponse) String() string {
 func (*RevokeTenantTokenResponse) ProtoMessage() {}
 
 func (x *RevokeTenantTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[9]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -708,7 +2181,7 @@ func (x *RevokeTenantTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeTenantTokenResponse.ProtoReflect.Descriptor instead.
 func (*RevokeTenantTokenResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{9}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RevokeTenantTokenResponse) GetRootIndex() uint64 {
@@ -729,7 +2202,7 @@ type AddVolumeRequest struct {
 
 func (x *AddVolumeRequest) Reset() {
 	*x = AddVolumeRequest{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[10]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -741,7 +2214,7 @@ func (x *AddVolumeRequest) String() string {
 func (*AddVolumeRequest) ProtoMessage() {}
 
 func (x *AddVolumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[10]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -754,7 +2227,7 @@ func (x *AddVolumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddVolumeRequest.ProtoReflect.Descriptor instead.
 func (*AddVolumeRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{10}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AddVolumeRequest) GetClusterId() string {
@@ -789,7 +2262,7 @@ type AddVolumeResponse struct {
 
 func (x *AddVolumeResponse) Reset() {
 	*x = AddVolumeResponse{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[11]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +2274,7 @@ func (x *AddVolumeResponse) String() string {
 func (*AddVolumeResponse) ProtoMessage() {}
 
 func (x *AddVolumeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[11]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +2287,7 @@ func (x *AddVolumeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddVolumeResponse.ProtoReflect.Descriptor instead.
 func (*AddVolumeResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{11}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AddVolumeResponse) GetVolumeId() string {
@@ -849,7 +2322,7 @@ type DrainVolumeRequest struct {
 
 func (x *DrainVolumeRequest) Reset() {
 	*x = DrainVolumeRequest{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[12]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -861,7 +2334,7 @@ func (x *DrainVolumeRequest) String() string {
 func (*DrainVolumeRequest) ProtoMessage() {}
 
 func (x *DrainVolumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[12]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -874,7 +2347,7 @@ func (x *DrainVolumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainVolumeRequest.ProtoReflect.Descriptor instead.
 func (*DrainVolumeRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{12}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *DrainVolumeRequest) GetClusterId() string {
@@ -909,7 +2382,7 @@ type DrainVolumeResponse struct {
 
 func (x *DrainVolumeResponse) Reset() {
 	*x = DrainVolumeResponse{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[13]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -921,7 +2394,7 @@ func (x *DrainVolumeResponse) String() string {
 func (*DrainVolumeResponse) ProtoMessage() {}
 
 func (x *DrainVolumeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[13]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -934,7 +2407,7 @@ func (x *DrainVolumeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainVolumeResponse.ProtoReflect.Descriptor instead.
 func (*DrainVolumeResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{13}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DrainVolumeResponse) GetVolumeId() string {
@@ -969,7 +2442,7 @@ type RemoveVolumeRequest struct {
 
 func (x *RemoveVolumeRequest) Reset() {
 	*x = RemoveVolumeRequest{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[14]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -981,7 +2454,7 @@ func (x *RemoveVolumeRequest) String() string {
 func (*RemoveVolumeRequest) ProtoMessage() {}
 
 func (x *RemoveVolumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[14]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -994,7 +2467,7 @@ func (x *RemoveVolumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveVolumeRequest.ProtoReflect.Descriptor instead.
 func (*RemoveVolumeRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{14}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *RemoveVolumeRequest) GetClusterId() string {
@@ -1029,7 +2502,7 @@ type RemoveVolumeResponse struct {
 
 func (x *RemoveVolumeResponse) Reset() {
 	*x = RemoveVolumeResponse{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[15]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1041,7 +2514,7 @@ func (x *RemoveVolumeResponse) String() string {
 func (*RemoveVolumeResponse) ProtoMessage() {}
 
 func (x *RemoveVolumeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[15]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1054,7 +2527,7 @@ func (x *RemoveVolumeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveVolumeResponse.ProtoReflect.Descriptor instead.
 func (*RemoveVolumeResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{15}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *RemoveVolumeResponse) GetVolumeId() string {
@@ -1089,7 +2562,7 @@ type CompactStoreRequest struct {
 
 func (x *CompactStoreRequest) Reset() {
 	*x = CompactStoreRequest{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[16]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1101,7 +2574,7 @@ func (x *CompactStoreRequest) String() string {
 func (*CompactStoreRequest) ProtoMessage() {}
 
 func (x *CompactStoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[16]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1114,7 +2587,7 @@ func (x *CompactStoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactStoreRequest.ProtoReflect.Descriptor instead.
 func (*CompactStoreRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{16}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *CompactStoreRequest) GetClusterId() string {
@@ -1150,7 +2623,7 @@ type CompactStoreResponse struct {
 
 func (x *CompactStoreResponse) Reset() {
 	*x = CompactStoreResponse{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[17]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1162,7 +2635,7 @@ func (x *CompactStoreResponse) String() string {
 func (*CompactStoreResponse) ProtoMessage() {}
 
 func (x *CompactStoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[17]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1175,7 +2648,7 @@ func (x *CompactStoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactStoreResponse.ProtoReflect.Descriptor instead.
 func (*CompactStoreResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{17}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *CompactStoreResponse) GetScannedPacks() uint64 {
@@ -1216,7 +2689,7 @@ type LocalRepairStatusRequest struct {
 
 func (x *LocalRepairStatusRequest) Reset() {
 	*x = LocalRepairStatusRequest{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[18]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1228,7 +2701,7 @@ func (x *LocalRepairStatusRequest) String() string {
 func (*LocalRepairStatusRequest) ProtoMessage() {}
 
 func (x *LocalRepairStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[18]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1241,7 +2714,7 @@ func (x *LocalRepairStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalRepairStatusRequest.ProtoReflect.Descriptor instead.
 func (*LocalRepairStatusRequest) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{18}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *LocalRepairStatusRequest) GetClusterId() string {
@@ -1268,7 +2741,7 @@ type LocalRepairIssue struct {
 
 func (x *LocalRepairIssue) Reset() {
 	*x = LocalRepairIssue{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[19]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1280,7 +2753,7 @@ func (x *LocalRepairIssue) String() string {
 func (*LocalRepairIssue) ProtoMessage() {}
 
 func (x *LocalRepairIssue) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[19]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1293,7 +2766,7 @@ func (x *LocalRepairIssue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalRepairIssue.ProtoReflect.Descriptor instead.
 func (*LocalRepairIssue) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{19}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *LocalRepairIssue) GetGroupId() string {
@@ -1331,7 +2804,7 @@ type LocalRepairStatusResponse struct {
 
 func (x *LocalRepairStatusResponse) Reset() {
 	*x = LocalRepairStatusResponse{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[20]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1343,7 +2816,7 @@ func (x *LocalRepairStatusResponse) String() string {
 func (*LocalRepairStatusResponse) ProtoMessage() {}
 
 func (x *LocalRepairStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[20]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1356,7 +2829,7 @@ func (x *LocalRepairStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalRepairStatusResponse.ProtoReflect.Descriptor instead.
 func (*LocalRepairStatusResponse) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{20}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *LocalRepairStatusResponse) GetWorkerEnabled() bool {
@@ -1464,7 +2937,7 @@ type VolumeMigrationStatus struct {
 
 func (x *VolumeMigrationStatus) Reset() {
 	*x = VolumeMigrationStatus{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[21]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1476,7 +2949,7 @@ func (x *VolumeMigrationStatus) String() string {
 func (*VolumeMigrationStatus) ProtoMessage() {}
 
 func (x *VolumeMigrationStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[21]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1489,7 +2962,7 @@ func (x *VolumeMigrationStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeMigrationStatus.ProtoReflect.Descriptor instead.
 func (*VolumeMigrationStatus) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{21}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *VolumeMigrationStatus) GetActive() bool {
@@ -1544,7 +3017,7 @@ type VolumeWriteIssue struct {
 
 func (x *VolumeWriteIssue) Reset() {
 	*x = VolumeWriteIssue{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[22]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1556,7 +3029,7 @@ func (x *VolumeWriteIssue) String() string {
 func (*VolumeWriteIssue) ProtoMessage() {}
 
 func (x *VolumeWriteIssue) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[22]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1569,7 +3042,7 @@ func (x *VolumeWriteIssue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeWriteIssue.ProtoReflect.Descriptor instead.
 func (*VolumeWriteIssue) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{22}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *VolumeWriteIssue) GetVolumeId() string {
@@ -1598,7 +3071,7 @@ type ResourceBudgetStatus struct {
 
 func (x *ResourceBudgetStatus) Reset() {
 	*x = ResourceBudgetStatus{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[23]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1610,7 +3083,7 @@ func (x *ResourceBudgetStatus) String() string {
 func (*ResourceBudgetStatus) ProtoMessage() {}
 
 func (x *ResourceBudgetStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[23]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1623,7 +3096,7 @@ func (x *ResourceBudgetStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResourceBudgetStatus.ProtoReflect.Descriptor instead.
 func (*ResourceBudgetStatus) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{23}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ResourceBudgetStatus) GetLimitBytes() uint64 {
@@ -1666,7 +3139,7 @@ type VolumeHealthStatus struct {
 
 func (x *VolumeHealthStatus) Reset() {
 	*x = VolumeHealthStatus{}
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[24]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1678,7 +3151,7 @@ func (x *VolumeHealthStatus) String() string {
 func (*VolumeHealthStatus) ProtoMessage() {}
 
 func (x *VolumeHealthStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[24]
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1691,7 +3164,7 @@ func (x *VolumeHealthStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeHealthStatus.ProtoReflect.Descriptor instead.
 func (*VolumeHealthStatus) Descriptor() ([]byte, []int) {
-	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{24}
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *VolumeHealthStatus) GetVolumeId() string {
@@ -1773,7 +3246,179 @@ const file_internal_platform_rpc_datawire_data_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12'\n" +
 	"\x0fconfirmed_index\x18\x03 \x01(\x04R\x0econfirmedIndex\x12\x14\n" +
 	"\x05state\x18\x04 \x01(\tR\x05state\x12+\n" +
-	"\x11region_generation\x18\x05 \x01(\x04R\x10regionGeneration\"\xb8\x01\n" +
+	"\x11region_generation\x18\x05 \x01(\x04R\x10regionGeneration\"\xd7\x03\n" +
+	"\x10RepositoryConfig\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x12\x16\n" +
+	"\x06bucket\x18\x04 \x01(\tR\x06bucket\x12\x16\n" +
+	"\x06prefix\x18\x05 \x01(\tR\x06prefix\x12\x1a\n" +
+	"\bendpoint\x18\x06 \x01(\tR\bendpoint\x12\x16\n" +
+	"\x06region\x18\a \x01(\tR\x06region\x12\x1d\n" +
+	"\n" +
+	"path_style\x18\b \x01(\bR\tpathStyle\x123\n" +
+	"\x15encrypted_credentials\x18\t \x01(\fR\x14encryptedCredentials\x12+\n" +
+	"\x11credentials_nonce\x18\n" +
+	" \x01(\fR\x10credentialsNonce\x123\n" +
+	"\x15credentials_algorithm\x18\v \x01(\tR\x14credentialsAlgorithm\x126\n" +
+	"\x17credentials_key_version\x18\f \x01(\rR\x15credentialsKeyVersion\x125\n" +
+	"\x16credentials_configured\x18\r \x01(\bR\x15credentialsConfigured\"\xc2\x01\n" +
+	"\x17CreateRepositoryRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12G\n" +
+	"\n" +
+	"repository\x18\x04 \x01(\v2'.dubi.internal.data.v1.RepositoryConfigR\n" +
+	"repository\"\xc2\x01\n" +
+	"\x17UpdateRepositoryRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12G\n" +
+	"\n" +
+	"repository\x18\x04 \x01(\v2'.dubi.internal.data.v1.RepositoryConfigR\n" +
+	"repository\"\x8d\x01\n" +
+	"\x17DeleteRepositoryRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\"\x91\x01\n" +
+	"\x1bSetDefaultRepositoryRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\"\x84\x01\n" +
+	"\x1aRepositoryMutationResponse\x12G\n" +
+	"\n" +
+	"repository\x18\x01 \x01(\v2'.dubi.internal.data.v1.RepositoryConfigR\n" +
+	"repository\x12\x1d\n" +
+	"\n" +
+	"root_index\x18\x02 \x01(\x04R\trootIndex\"Z\n" +
+	"\x17ListRepositoriesRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\"\xa9\x01\n" +
+	"\x18ListRepositoriesResponse\x12K\n" +
+	"\frepositories\x18\x01 \x03(\v2'.dubi.internal.data.v1.RepositoryConfigR\frepositories\x12!\n" +
+	"\fdefault_name\x18\x02 \x01(\tR\vdefaultName\x12\x1d\n" +
+	"\n" +
+	"root_index\x18\x03 \x01(\x04R\trootIndex\"\xb6\x02\n" +
+	"\x0fBackupJobWorker\x12\x17\n" +
+	"\araft_id\x18\x01 \x01(\x04R\x06raftId\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\x12\x1f\n" +
+	"\vlease_epoch\x18\x04 \x01(\x04R\n" +
+	"leaseEpoch\x12,\n" +
+	"\x12lease_expires_unix\x18\x05 \x01(\x03R\x10leaseExpiresUnix\x12\x14\n" +
+	"\x05bytes\x18\x06 \x01(\x03R\x05bytes\x12\x18\n" +
+	"\aobjects\x18\a \x01(\x04R\aobjects\x12\x14\n" +
+	"\x05error\x18\b \x01(\tR\x05error\x12\"\n" +
+	"\rlease_raft_id\x18\t \x01(\x04R\vleaseRaftId\x12\"\n" +
+	"\rlease_node_id\x18\n" +
+	" \x01(\tR\vleaseNodeId\"\xbc\x02\n" +
+	"\tBackupJob\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1e\n" +
+	"\n" +
+	"repository\x18\x02 \x01(\tR\n" +
+	"repository\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x14\n" +
+	"\x05epoch\x18\x04 \x01(\x04R\x05epoch\x12\x14\n" +
+	"\x05state\x18\x05 \x01(\tR\x05state\x12#\n" +
+	"\rcreated_index\x18\x06 \x01(\x04R\fcreatedIndex\x12'\n" +
+	"\x0fcompleted_index\x18\a \x01(\x04R\x0ecompletedIndex\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\b \x01(\tR\tlastError\x12@\n" +
+	"\aworkers\x18\t \x03(\v2&.dubi.internal.data.v1.BackupJobWorkerR\aworkers\"\xaf\x01\n" +
+	"\x16CreateBackupJobRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12\x1e\n" +
+	"\n" +
+	"repository\x18\x05 \x01(\tR\n" +
+	"repository\"m\n" +
+	"\x13GetBackupJobRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x15\n" +
+	"\x06job_id\x18\x03 \x01(\tR\x05jobId\"X\n" +
+	"\x15ListBackupJobsRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\"\xad\x02\n" +
+	"\x15ClaimBackupJobRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12#\n" +
+	"\robserved_unix\x18\x05 \x01(\x03R\fobservedUnix\x12,\n" +
+	"\x12lease_expires_unix\x18\x06 \x01(\x03R\x10leaseExpiresUnix\x12$\n" +
+	"\x0eworker_raft_id\x18\a \x01(\x04R\fworkerRaftId\x12$\n" +
+	"\x0eworker_node_id\x18\b \x01(\tR\fworkerNodeId\"\xae\x02\n" +
+	"\x18CompleteBackupJobRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12\x1f\n" +
+	"\vlease_epoch\x18\x05 \x01(\x04R\n" +
+	"leaseEpoch\x12\x14\n" +
+	"\x05bytes\x18\x06 \x01(\x03R\x05bytes\x12\x18\n" +
+	"\aobjects\x18\a \x01(\x04R\aobjects\x12$\n" +
+	"\x0eworker_raft_id\x18\b \x01(\x04R\fworkerRaftId\x12$\n" +
+	"\x0eworker_node_id\x18\t \x01(\tR\fworkerNodeId\"\x90\x02\n" +
+	"\x14FailBackupJobRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12\x1f\n" +
+	"\vlease_epoch\x18\x05 \x01(\x04R\n" +
+	"leaseEpoch\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\x12$\n" +
+	"\x0eworker_raft_id\x18\a \x01(\x04R\fworkerRaftId\x12$\n" +
+	"\x0eworker_node_id\x18\b \x01(\tR\fworkerNodeId\"\x91\x01\n" +
+	"\x18FinalizeBackupJobRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06job_id\x18\x04 \x01(\tR\x05jobId\"f\n" +
+	"\x11BackupJobResponse\x122\n" +
+	"\x03job\x18\x01 \x01(\v2 .dubi.internal.data.v1.BackupJobR\x03job\x12\x1d\n" +
+	"\n" +
+	"root_index\x18\x02 \x01(\x04R\trootIndex\"m\n" +
+	"\x16ListBackupJobsResponse\x124\n" +
+	"\x04jobs\x18\x01 \x03(\v2 .dubi.internal.data.v1.BackupJobR\x04jobs\x12\x1d\n" +
+	"\n" +
+	"root_index\x18\x02 \x01(\x04R\trootIndex\"\xb8\x01\n" +
 	"\x18CreateTenantTokenRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
@@ -1886,11 +3531,23 @@ const file_internal_platform_rpc_datawire_data_proto_rawDesc = "" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x16\n" +
 	"\x06health\x18\x03 \x01(\tR\x06health\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error2\xb3\t\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error2\xff\x13\n" +
 	"\vDataService\x12j\n" +
 	"\rCreateDataset\x12+.dubi.internal.data.v1.CreateDatasetRequest\x1a,.dubi.internal.data.v1.CreateDatasetResponse\x12^\n" +
 	"\tPutRecord\x12'.dubi.internal.data.v1.PutRecordRequest\x1a(.dubi.internal.data.v1.PutRecordResponse\x12^\n" +
-	"\tGetRecord\x12'.dubi.internal.data.v1.GetRecordRequest\x1a(.dubi.internal.data.v1.GetRecordResponse\x12v\n" +
+	"\tGetRecord\x12'.dubi.internal.data.v1.GetRecordRequest\x1a(.dubi.internal.data.v1.GetRecordResponse\x12u\n" +
+	"\x10CreateRepository\x12..dubi.internal.data.v1.CreateRepositoryRequest\x1a1.dubi.internal.data.v1.RepositoryMutationResponse\x12u\n" +
+	"\x10UpdateRepository\x12..dubi.internal.data.v1.UpdateRepositoryRequest\x1a1.dubi.internal.data.v1.RepositoryMutationResponse\x12u\n" +
+	"\x10DeleteRepository\x12..dubi.internal.data.v1.DeleteRepositoryRequest\x1a1.dubi.internal.data.v1.RepositoryMutationResponse\x12}\n" +
+	"\x14SetDefaultRepository\x122.dubi.internal.data.v1.SetDefaultRepositoryRequest\x1a1.dubi.internal.data.v1.RepositoryMutationResponse\x12s\n" +
+	"\x10ListRepositories\x12..dubi.internal.data.v1.ListRepositoriesRequest\x1a/.dubi.internal.data.v1.ListRepositoriesResponse\x12j\n" +
+	"\x0fCreateBackupJob\x12-.dubi.internal.data.v1.CreateBackupJobRequest\x1a(.dubi.internal.data.v1.BackupJobResponse\x12d\n" +
+	"\fGetBackupJob\x12*.dubi.internal.data.v1.GetBackupJobRequest\x1a(.dubi.internal.data.v1.BackupJobResponse\x12m\n" +
+	"\x0eListBackupJobs\x12,.dubi.internal.data.v1.ListBackupJobsRequest\x1a-.dubi.internal.data.v1.ListBackupJobsResponse\x12h\n" +
+	"\x0eClaimBackupJob\x12,.dubi.internal.data.v1.ClaimBackupJobRequest\x1a(.dubi.internal.data.v1.BackupJobResponse\x12n\n" +
+	"\x11CompleteBackupJob\x12/.dubi.internal.data.v1.CompleteBackupJobRequest\x1a(.dubi.internal.data.v1.BackupJobResponse\x12f\n" +
+	"\rFailBackupJob\x12+.dubi.internal.data.v1.FailBackupJobRequest\x1a(.dubi.internal.data.v1.BackupJobResponse\x12n\n" +
+	"\x11FinalizeBackupJob\x12/.dubi.internal.data.v1.FinalizeBackupJobRequest\x1a(.dubi.internal.data.v1.BackupJobResponse\x12v\n" +
 	"\x11CreateTenantToken\x12/.dubi.internal.data.v1.CreateTenantTokenRequest\x1a0.dubi.internal.data.v1.CreateTenantTokenResponse\x12v\n" +
 	"\x11RevokeTenantToken\x12/.dubi.internal.data.v1.RevokeTenantTokenRequest\x1a0.dubi.internal.data.v1.RevokeTenantTokenResponse\x12^\n" +
 	"\tAddVolume\x12'.dubi.internal.data.v1.AddVolumeRequest\x1a(.dubi.internal.data.v1.AddVolumeResponse\x12d\n" +
@@ -1912,68 +3569,118 @@ func file_internal_platform_rpc_datawire_data_proto_rawDescGZIP() []byte {
 	return file_internal_platform_rpc_datawire_data_proto_rawDescData
 }
 
-var file_internal_platform_rpc_datawire_data_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_internal_platform_rpc_datawire_data_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_internal_platform_rpc_datawire_data_proto_goTypes = []any{
-	(*CreateDatasetRequest)(nil),      // 0: dubi.internal.data.v1.CreateDatasetRequest
-	(*CreateDatasetResponse)(nil),     // 1: dubi.internal.data.v1.CreateDatasetResponse
-	(*PutRecordRequest)(nil),          // 2: dubi.internal.data.v1.PutRecordRequest
-	(*PutRecordResponse)(nil),         // 3: dubi.internal.data.v1.PutRecordResponse
-	(*GetRecordRequest)(nil),          // 4: dubi.internal.data.v1.GetRecordRequest
-	(*GetRecordResponse)(nil),         // 5: dubi.internal.data.v1.GetRecordResponse
-	(*CreateTenantTokenRequest)(nil),  // 6: dubi.internal.data.v1.CreateTenantTokenRequest
-	(*CreateTenantTokenResponse)(nil), // 7: dubi.internal.data.v1.CreateTenantTokenResponse
-	(*RevokeTenantTokenRequest)(nil),  // 8: dubi.internal.data.v1.RevokeTenantTokenRequest
-	(*RevokeTenantTokenResponse)(nil), // 9: dubi.internal.data.v1.RevokeTenantTokenResponse
-	(*AddVolumeRequest)(nil),          // 10: dubi.internal.data.v1.AddVolumeRequest
-	(*AddVolumeResponse)(nil),         // 11: dubi.internal.data.v1.AddVolumeResponse
-	(*DrainVolumeRequest)(nil),        // 12: dubi.internal.data.v1.DrainVolumeRequest
-	(*DrainVolumeResponse)(nil),       // 13: dubi.internal.data.v1.DrainVolumeResponse
-	(*RemoveVolumeRequest)(nil),       // 14: dubi.internal.data.v1.RemoveVolumeRequest
-	(*RemoveVolumeResponse)(nil),      // 15: dubi.internal.data.v1.RemoveVolumeResponse
-	(*CompactStoreRequest)(nil),       // 16: dubi.internal.data.v1.CompactStoreRequest
-	(*CompactStoreResponse)(nil),      // 17: dubi.internal.data.v1.CompactStoreResponse
-	(*LocalRepairStatusRequest)(nil),  // 18: dubi.internal.data.v1.LocalRepairStatusRequest
-	(*LocalRepairIssue)(nil),          // 19: dubi.internal.data.v1.LocalRepairIssue
-	(*LocalRepairStatusResponse)(nil), // 20: dubi.internal.data.v1.LocalRepairStatusResponse
-	(*VolumeMigrationStatus)(nil),     // 21: dubi.internal.data.v1.VolumeMigrationStatus
-	(*VolumeWriteIssue)(nil),          // 22: dubi.internal.data.v1.VolumeWriteIssue
-	(*ResourceBudgetStatus)(nil),      // 23: dubi.internal.data.v1.ResourceBudgetStatus
-	(*VolumeHealthStatus)(nil),        // 24: dubi.internal.data.v1.VolumeHealthStatus
+	(*CreateDatasetRequest)(nil),        // 0: dubi.internal.data.v1.CreateDatasetRequest
+	(*CreateDatasetResponse)(nil),       // 1: dubi.internal.data.v1.CreateDatasetResponse
+	(*PutRecordRequest)(nil),            // 2: dubi.internal.data.v1.PutRecordRequest
+	(*PutRecordResponse)(nil),           // 3: dubi.internal.data.v1.PutRecordResponse
+	(*GetRecordRequest)(nil),            // 4: dubi.internal.data.v1.GetRecordRequest
+	(*GetRecordResponse)(nil),           // 5: dubi.internal.data.v1.GetRecordResponse
+	(*RepositoryConfig)(nil),            // 6: dubi.internal.data.v1.RepositoryConfig
+	(*CreateRepositoryRequest)(nil),     // 7: dubi.internal.data.v1.CreateRepositoryRequest
+	(*UpdateRepositoryRequest)(nil),     // 8: dubi.internal.data.v1.UpdateRepositoryRequest
+	(*DeleteRepositoryRequest)(nil),     // 9: dubi.internal.data.v1.DeleteRepositoryRequest
+	(*SetDefaultRepositoryRequest)(nil), // 10: dubi.internal.data.v1.SetDefaultRepositoryRequest
+	(*RepositoryMutationResponse)(nil),  // 11: dubi.internal.data.v1.RepositoryMutationResponse
+	(*ListRepositoriesRequest)(nil),     // 12: dubi.internal.data.v1.ListRepositoriesRequest
+	(*ListRepositoriesResponse)(nil),    // 13: dubi.internal.data.v1.ListRepositoriesResponse
+	(*BackupJobWorker)(nil),             // 14: dubi.internal.data.v1.BackupJobWorker
+	(*BackupJob)(nil),                   // 15: dubi.internal.data.v1.BackupJob
+	(*CreateBackupJobRequest)(nil),      // 16: dubi.internal.data.v1.CreateBackupJobRequest
+	(*GetBackupJobRequest)(nil),         // 17: dubi.internal.data.v1.GetBackupJobRequest
+	(*ListBackupJobsRequest)(nil),       // 18: dubi.internal.data.v1.ListBackupJobsRequest
+	(*ClaimBackupJobRequest)(nil),       // 19: dubi.internal.data.v1.ClaimBackupJobRequest
+	(*CompleteBackupJobRequest)(nil),    // 20: dubi.internal.data.v1.CompleteBackupJobRequest
+	(*FailBackupJobRequest)(nil),        // 21: dubi.internal.data.v1.FailBackupJobRequest
+	(*FinalizeBackupJobRequest)(nil),    // 22: dubi.internal.data.v1.FinalizeBackupJobRequest
+	(*BackupJobResponse)(nil),           // 23: dubi.internal.data.v1.BackupJobResponse
+	(*ListBackupJobsResponse)(nil),      // 24: dubi.internal.data.v1.ListBackupJobsResponse
+	(*CreateTenantTokenRequest)(nil),    // 25: dubi.internal.data.v1.CreateTenantTokenRequest
+	(*CreateTenantTokenResponse)(nil),   // 26: dubi.internal.data.v1.CreateTenantTokenResponse
+	(*RevokeTenantTokenRequest)(nil),    // 27: dubi.internal.data.v1.RevokeTenantTokenRequest
+	(*RevokeTenantTokenResponse)(nil),   // 28: dubi.internal.data.v1.RevokeTenantTokenResponse
+	(*AddVolumeRequest)(nil),            // 29: dubi.internal.data.v1.AddVolumeRequest
+	(*AddVolumeResponse)(nil),           // 30: dubi.internal.data.v1.AddVolumeResponse
+	(*DrainVolumeRequest)(nil),          // 31: dubi.internal.data.v1.DrainVolumeRequest
+	(*DrainVolumeResponse)(nil),         // 32: dubi.internal.data.v1.DrainVolumeResponse
+	(*RemoveVolumeRequest)(nil),         // 33: dubi.internal.data.v1.RemoveVolumeRequest
+	(*RemoveVolumeResponse)(nil),        // 34: dubi.internal.data.v1.RemoveVolumeResponse
+	(*CompactStoreRequest)(nil),         // 35: dubi.internal.data.v1.CompactStoreRequest
+	(*CompactStoreResponse)(nil),        // 36: dubi.internal.data.v1.CompactStoreResponse
+	(*LocalRepairStatusRequest)(nil),    // 37: dubi.internal.data.v1.LocalRepairStatusRequest
+	(*LocalRepairIssue)(nil),            // 38: dubi.internal.data.v1.LocalRepairIssue
+	(*LocalRepairStatusResponse)(nil),   // 39: dubi.internal.data.v1.LocalRepairStatusResponse
+	(*VolumeMigrationStatus)(nil),       // 40: dubi.internal.data.v1.VolumeMigrationStatus
+	(*VolumeWriteIssue)(nil),            // 41: dubi.internal.data.v1.VolumeWriteIssue
+	(*ResourceBudgetStatus)(nil),        // 42: dubi.internal.data.v1.ResourceBudgetStatus
+	(*VolumeHealthStatus)(nil),          // 43: dubi.internal.data.v1.VolumeHealthStatus
 }
 var file_internal_platform_rpc_datawire_data_proto_depIdxs = []int32{
-	19, // 0: dubi.internal.data.v1.LocalRepairStatusResponse.issues:type_name -> dubi.internal.data.v1.LocalRepairIssue
-	21, // 1: dubi.internal.data.v1.LocalRepairStatusResponse.volume_migration:type_name -> dubi.internal.data.v1.VolumeMigrationStatus
-	22, // 2: dubi.internal.data.v1.LocalRepairStatusResponse.volume_write_errors:type_name -> dubi.internal.data.v1.VolumeWriteIssue
-	23, // 3: dubi.internal.data.v1.LocalRepairStatusResponse.maintenance_budget:type_name -> dubi.internal.data.v1.ResourceBudgetStatus
-	23, // 4: dubi.internal.data.v1.LocalRepairStatusResponse.request_budget:type_name -> dubi.internal.data.v1.ResourceBudgetStatus
-	24, // 5: dubi.internal.data.v1.LocalRepairStatusResponse.volumes:type_name -> dubi.internal.data.v1.VolumeHealthStatus
-	0,  // 6: dubi.internal.data.v1.DataService.CreateDataset:input_type -> dubi.internal.data.v1.CreateDatasetRequest
-	2,  // 7: dubi.internal.data.v1.DataService.PutRecord:input_type -> dubi.internal.data.v1.PutRecordRequest
-	4,  // 8: dubi.internal.data.v1.DataService.GetRecord:input_type -> dubi.internal.data.v1.GetRecordRequest
-	6,  // 9: dubi.internal.data.v1.DataService.CreateTenantToken:input_type -> dubi.internal.data.v1.CreateTenantTokenRequest
-	8,  // 10: dubi.internal.data.v1.DataService.RevokeTenantToken:input_type -> dubi.internal.data.v1.RevokeTenantTokenRequest
-	10, // 11: dubi.internal.data.v1.DataService.AddVolume:input_type -> dubi.internal.data.v1.AddVolumeRequest
-	12, // 12: dubi.internal.data.v1.DataService.DrainVolume:input_type -> dubi.internal.data.v1.DrainVolumeRequest
-	14, // 13: dubi.internal.data.v1.DataService.RemoveVolume:input_type -> dubi.internal.data.v1.RemoveVolumeRequest
-	16, // 14: dubi.internal.data.v1.DataService.CompactStore:input_type -> dubi.internal.data.v1.CompactStoreRequest
-	18, // 15: dubi.internal.data.v1.DataService.LocalRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
-	18, // 16: dubi.internal.data.v1.DataService.ClusterRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
-	1,  // 17: dubi.internal.data.v1.DataService.CreateDataset:output_type -> dubi.internal.data.v1.CreateDatasetResponse
-	3,  // 18: dubi.internal.data.v1.DataService.PutRecord:output_type -> dubi.internal.data.v1.PutRecordResponse
-	5,  // 19: dubi.internal.data.v1.DataService.GetRecord:output_type -> dubi.internal.data.v1.GetRecordResponse
-	7,  // 20: dubi.internal.data.v1.DataService.CreateTenantToken:output_type -> dubi.internal.data.v1.CreateTenantTokenResponse
-	9,  // 21: dubi.internal.data.v1.DataService.RevokeTenantToken:output_type -> dubi.internal.data.v1.RevokeTenantTokenResponse
-	11, // 22: dubi.internal.data.v1.DataService.AddVolume:output_type -> dubi.internal.data.v1.AddVolumeResponse
-	13, // 23: dubi.internal.data.v1.DataService.DrainVolume:output_type -> dubi.internal.data.v1.DrainVolumeResponse
-	15, // 24: dubi.internal.data.v1.DataService.RemoveVolume:output_type -> dubi.internal.data.v1.RemoveVolumeResponse
-	17, // 25: dubi.internal.data.v1.DataService.CompactStore:output_type -> dubi.internal.data.v1.CompactStoreResponse
-	20, // 26: dubi.internal.data.v1.DataService.LocalRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
-	20, // 27: dubi.internal.data.v1.DataService.ClusterRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
-	17, // [17:28] is the sub-list for method output_type
-	6,  // [6:17] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	6,  // 0: dubi.internal.data.v1.CreateRepositoryRequest.repository:type_name -> dubi.internal.data.v1.RepositoryConfig
+	6,  // 1: dubi.internal.data.v1.UpdateRepositoryRequest.repository:type_name -> dubi.internal.data.v1.RepositoryConfig
+	6,  // 2: dubi.internal.data.v1.RepositoryMutationResponse.repository:type_name -> dubi.internal.data.v1.RepositoryConfig
+	6,  // 3: dubi.internal.data.v1.ListRepositoriesResponse.repositories:type_name -> dubi.internal.data.v1.RepositoryConfig
+	14, // 4: dubi.internal.data.v1.BackupJob.workers:type_name -> dubi.internal.data.v1.BackupJobWorker
+	15, // 5: dubi.internal.data.v1.BackupJobResponse.job:type_name -> dubi.internal.data.v1.BackupJob
+	15, // 6: dubi.internal.data.v1.ListBackupJobsResponse.jobs:type_name -> dubi.internal.data.v1.BackupJob
+	38, // 7: dubi.internal.data.v1.LocalRepairStatusResponse.issues:type_name -> dubi.internal.data.v1.LocalRepairIssue
+	40, // 8: dubi.internal.data.v1.LocalRepairStatusResponse.volume_migration:type_name -> dubi.internal.data.v1.VolumeMigrationStatus
+	41, // 9: dubi.internal.data.v1.LocalRepairStatusResponse.volume_write_errors:type_name -> dubi.internal.data.v1.VolumeWriteIssue
+	42, // 10: dubi.internal.data.v1.LocalRepairStatusResponse.maintenance_budget:type_name -> dubi.internal.data.v1.ResourceBudgetStatus
+	42, // 11: dubi.internal.data.v1.LocalRepairStatusResponse.request_budget:type_name -> dubi.internal.data.v1.ResourceBudgetStatus
+	43, // 12: dubi.internal.data.v1.LocalRepairStatusResponse.volumes:type_name -> dubi.internal.data.v1.VolumeHealthStatus
+	0,  // 13: dubi.internal.data.v1.DataService.CreateDataset:input_type -> dubi.internal.data.v1.CreateDatasetRequest
+	2,  // 14: dubi.internal.data.v1.DataService.PutRecord:input_type -> dubi.internal.data.v1.PutRecordRequest
+	4,  // 15: dubi.internal.data.v1.DataService.GetRecord:input_type -> dubi.internal.data.v1.GetRecordRequest
+	7,  // 16: dubi.internal.data.v1.DataService.CreateRepository:input_type -> dubi.internal.data.v1.CreateRepositoryRequest
+	8,  // 17: dubi.internal.data.v1.DataService.UpdateRepository:input_type -> dubi.internal.data.v1.UpdateRepositoryRequest
+	9,  // 18: dubi.internal.data.v1.DataService.DeleteRepository:input_type -> dubi.internal.data.v1.DeleteRepositoryRequest
+	10, // 19: dubi.internal.data.v1.DataService.SetDefaultRepository:input_type -> dubi.internal.data.v1.SetDefaultRepositoryRequest
+	12, // 20: dubi.internal.data.v1.DataService.ListRepositories:input_type -> dubi.internal.data.v1.ListRepositoriesRequest
+	16, // 21: dubi.internal.data.v1.DataService.CreateBackupJob:input_type -> dubi.internal.data.v1.CreateBackupJobRequest
+	17, // 22: dubi.internal.data.v1.DataService.GetBackupJob:input_type -> dubi.internal.data.v1.GetBackupJobRequest
+	18, // 23: dubi.internal.data.v1.DataService.ListBackupJobs:input_type -> dubi.internal.data.v1.ListBackupJobsRequest
+	19, // 24: dubi.internal.data.v1.DataService.ClaimBackupJob:input_type -> dubi.internal.data.v1.ClaimBackupJobRequest
+	20, // 25: dubi.internal.data.v1.DataService.CompleteBackupJob:input_type -> dubi.internal.data.v1.CompleteBackupJobRequest
+	21, // 26: dubi.internal.data.v1.DataService.FailBackupJob:input_type -> dubi.internal.data.v1.FailBackupJobRequest
+	22, // 27: dubi.internal.data.v1.DataService.FinalizeBackupJob:input_type -> dubi.internal.data.v1.FinalizeBackupJobRequest
+	25, // 28: dubi.internal.data.v1.DataService.CreateTenantToken:input_type -> dubi.internal.data.v1.CreateTenantTokenRequest
+	27, // 29: dubi.internal.data.v1.DataService.RevokeTenantToken:input_type -> dubi.internal.data.v1.RevokeTenantTokenRequest
+	29, // 30: dubi.internal.data.v1.DataService.AddVolume:input_type -> dubi.internal.data.v1.AddVolumeRequest
+	31, // 31: dubi.internal.data.v1.DataService.DrainVolume:input_type -> dubi.internal.data.v1.DrainVolumeRequest
+	33, // 32: dubi.internal.data.v1.DataService.RemoveVolume:input_type -> dubi.internal.data.v1.RemoveVolumeRequest
+	35, // 33: dubi.internal.data.v1.DataService.CompactStore:input_type -> dubi.internal.data.v1.CompactStoreRequest
+	37, // 34: dubi.internal.data.v1.DataService.LocalRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
+	37, // 35: dubi.internal.data.v1.DataService.ClusterRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
+	1,  // 36: dubi.internal.data.v1.DataService.CreateDataset:output_type -> dubi.internal.data.v1.CreateDatasetResponse
+	3,  // 37: dubi.internal.data.v1.DataService.PutRecord:output_type -> dubi.internal.data.v1.PutRecordResponse
+	5,  // 38: dubi.internal.data.v1.DataService.GetRecord:output_type -> dubi.internal.data.v1.GetRecordResponse
+	11, // 39: dubi.internal.data.v1.DataService.CreateRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	11, // 40: dubi.internal.data.v1.DataService.UpdateRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	11, // 41: dubi.internal.data.v1.DataService.DeleteRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	11, // 42: dubi.internal.data.v1.DataService.SetDefaultRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	13, // 43: dubi.internal.data.v1.DataService.ListRepositories:output_type -> dubi.internal.data.v1.ListRepositoriesResponse
+	23, // 44: dubi.internal.data.v1.DataService.CreateBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 45: dubi.internal.data.v1.DataService.GetBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	24, // 46: dubi.internal.data.v1.DataService.ListBackupJobs:output_type -> dubi.internal.data.v1.ListBackupJobsResponse
+	23, // 47: dubi.internal.data.v1.DataService.ClaimBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 48: dubi.internal.data.v1.DataService.CompleteBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 49: dubi.internal.data.v1.DataService.FailBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 50: dubi.internal.data.v1.DataService.FinalizeBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	26, // 51: dubi.internal.data.v1.DataService.CreateTenantToken:output_type -> dubi.internal.data.v1.CreateTenantTokenResponse
+	28, // 52: dubi.internal.data.v1.DataService.RevokeTenantToken:output_type -> dubi.internal.data.v1.RevokeTenantTokenResponse
+	30, // 53: dubi.internal.data.v1.DataService.AddVolume:output_type -> dubi.internal.data.v1.AddVolumeResponse
+	32, // 54: dubi.internal.data.v1.DataService.DrainVolume:output_type -> dubi.internal.data.v1.DrainVolumeResponse
+	34, // 55: dubi.internal.data.v1.DataService.RemoveVolume:output_type -> dubi.internal.data.v1.RemoveVolumeResponse
+	36, // 56: dubi.internal.data.v1.DataService.CompactStore:output_type -> dubi.internal.data.v1.CompactStoreResponse
+	39, // 57: dubi.internal.data.v1.DataService.LocalRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
+	39, // 58: dubi.internal.data.v1.DataService.ClusterRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
+	36, // [36:59] is the sub-list for method output_type
+	13, // [13:36] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_internal_platform_rpc_datawire_data_proto_init() }
@@ -1987,7 +3694,7 @@ func file_internal_platform_rpc_datawire_data_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_platform_rpc_datawire_data_proto_rawDesc), len(file_internal_platform_rpc_datawire_data_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

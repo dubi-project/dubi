@@ -19,6 +19,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
 	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/datawire"
@@ -48,6 +49,348 @@ type dataService struct {
 
 const maxDemoRecordBytes = 1 << 20
 const maxTenantTokenTTLSeconds = 366 * 24 * 60 * 60
+
+func repositoryFromWire(value *datawire.RepositoryConfig) (repository.Repository, error) {
+	if value == nil {
+		return repository.Repository{}, errors.New("Repository configuration is required")
+	}
+	config := repository.Repository{
+		Name: value.GetName(), Type: repository.Type(value.GetType()), Path: value.GetPath(),
+		Bucket: value.GetBucket(), Prefix: value.GetPrefix(), Endpoint: value.GetEndpoint(),
+		Region: value.GetRegion(), PathStyle: value.GetPathStyle(),
+		EncryptedCredentials: append([]byte(nil), value.GetEncryptedCredentials()...),
+		CredentialsNonce:     append([]byte(nil), value.GetCredentialsNonce()...),
+		CredentialsAlgorithm: value.GetCredentialsAlgorithm(), CredentialsKeyVersion: value.GetCredentialsKeyVersion(),
+	}
+	if value.GetCredentialsConfigured() && len(config.EncryptedCredentials) == 0 {
+		return repository.Repository{}, errors.New("credentials_configured is server-generated")
+	}
+	if err := config.Validate(); err != nil {
+		return repository.Repository{}, err
+	}
+	return config, nil
+}
+
+// repositoryToWire deliberately redacts the encrypted envelope. Although the
+// bytes are not plaintext, returning them from list/show would make an
+// operator-facing command copy reusable ciphertext unnecessarily. Mutations
+// accept an envelope only from an internal recovery caller in a later phase.
+func repositoryToWire(value repository.Repository) *datawire.RepositoryConfig {
+	return &datawire.RepositoryConfig{Name: value.Name, Type: string(value.Type), Path: value.Path,
+		Bucket: value.Bucket, Prefix: value.Prefix, Endpoint: value.Endpoint, Region: value.Region,
+		PathStyle: value.PathStyle, CredentialsAlgorithm: value.CredentialsAlgorithm,
+		CredentialsKeyVersion: value.CredentialsKeyVersion, CredentialsConfigured: len(value.EncryptedCredentials) != 0}
+}
+
+func (s *dataService) repositoryMutation(ctx context.Context, cluster string, raftID uint64, size int, requestID string, command rootstate.Command, value repository.Repository) (*datawire.RepositoryMutationResponse, error) {
+	if rootstate.ValidateRequestID(requestID) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Repository request ID")
+	}
+	ctx, release, err := s.begin(ctx, cluster, raftID, size)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if err := s.rootCommand(ctx, command); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "commit Repository configuration: %v", err)
+	}
+	result, found, err := s.runtime.Root.Result(requestID)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read Repository result: %v", err)
+	}
+	if !found {
+		return nil, status.Error(codes.Unavailable, "Repository command result is missing")
+	}
+	if result.Error != "" {
+		return nil, status.Error(codes.FailedPrecondition, result.Error)
+	}
+	return &datawire.RepositoryMutationResponse{Repository: repositoryToWire(value), RootIndex: result.Index}, nil
+}
+
+func (s *dataService) CreateRepository(ctx context.Context, request *datawire.CreateRepositoryRequest) (*datawire.RepositoryMutationResponse, error) {
+	if request == nil || proto.Size(request) > 128<<10 {
+		return nil, status.Error(codes.InvalidArgument, "invalid Repository request")
+	}
+	value, err := repositoryFromWire(request.GetRepository())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid Repository configuration: %v", err)
+	}
+	return s.repositoryMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.CreateRepository, Repository: &value}, value)
+}
+
+func (s *dataService) UpdateRepository(ctx context.Context, request *datawire.UpdateRepositoryRequest) (*datawire.RepositoryMutationResponse, error) {
+	if request == nil || proto.Size(request) > 128<<10 {
+		return nil, status.Error(codes.InvalidArgument, "invalid Repository request")
+	}
+	value, err := repositoryFromWire(request.GetRepository())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid Repository configuration: %v", err)
+	}
+	return s.repositoryMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.UpdateRepository, Repository: &value}, value)
+}
+
+func (s *dataService) DeleteRepository(ctx context.Context, request *datawire.DeleteRepositoryRequest) (*datawire.RepositoryMutationResponse, error) {
+	if request == nil || proto.Size(request) > 32<<10 || repository.ValidateName(request.GetName()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Repository name")
+	}
+	value, found, err := s.runtime.Root.Repository(request.GetName())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read Repository before deletion: %v", err)
+	}
+	if !found {
+		return nil, status.Error(codes.NotFound, "Repository is not registered")
+	}
+	return s.repositoryMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.DeleteRepository, RepositoryDelete: &rootstate.RepositoryDelete{Name: request.GetName()}}, value)
+}
+
+func (s *dataService) SetDefaultRepository(ctx context.Context, request *datawire.SetDefaultRepositoryRequest) (*datawire.RepositoryMutationResponse, error) {
+	if request == nil || proto.Size(request) > 32<<10 || repository.ValidateName(request.GetName()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid default Repository name")
+	}
+	value, found, err := s.runtime.Root.Repository(request.GetName())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read Repository before selecting default: %v", err)
+	}
+	if !found {
+		return nil, status.Error(codes.NotFound, "Repository is not registered")
+	}
+	return s.repositoryMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.SetDefaultRepository, RepositoryDefault: &rootstate.RepositoryDefault{Name: request.GetName()}}, value)
+}
+
+func (s *dataService) ListRepositories(ctx context.Context, request *datawire.ListRepositoriesRequest) (*datawire.ListRepositoriesResponse, error) {
+	if request == nil || proto.Size(request) > 16<<10 {
+		return nil, status.Error(codes.InvalidArgument, "invalid Repository list request")
+	}
+	_, release, err := s.begin(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	values, err := s.runtime.Root.Repositories()
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "list Repositories: %v", err)
+	}
+	response := &datawire.ListRepositoriesResponse{RootIndex: s.runtime.Root.AppliedIndex()}
+	for _, value := range values {
+		response.Repositories = append(response.Repositories, repositoryToWire(value))
+	}
+	if value, found, err := s.runtime.Root.DefaultRepository(); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read default Repository: %v", err)
+	} else if found {
+		response.DefaultName = value.Name
+	}
+	return response, nil
+}
+
+func backupJobWorkerToWire(value rootstate.BackupWorker) *datawire.BackupJobWorker {
+	return &datawire.BackupJobWorker{RaftId: value.RaftID, NodeId: value.NodeID, State: value.State,
+		LeaseEpoch: value.LeaseEpoch, LeaseExpiresUnix: value.LeaseExpiresUnix, Bytes: value.Bytes,
+		Objects: value.Objects, Error: value.Error, LeaseRaftId: value.LeaseRaftID, LeaseNodeId: value.LeaseNodeID}
+}
+
+func backupJobToWire(value rootstate.BackupJob) *datawire.BackupJob {
+	result := &datawire.BackupJob{JobId: value.JobID, Repository: value.Repository, ClusterId: value.ClusterID,
+		Epoch: value.Epoch, State: value.State, CreatedIndex: value.CreatedIndex,
+		CompletedIndex: value.CompletedIndex, LastError: value.LastError}
+	for _, worker := range value.Workers {
+		result.Workers = append(result.Workers, backupJobWorkerToWire(worker))
+	}
+	return result
+}
+
+func (s *dataService) readBackupJob(jobID string) (*datawire.BackupJobResponse, error) {
+	job, found, err := s.runtime.Root.BackupJob(jobID)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read Backup job: %v", err)
+	}
+	if !found {
+		return nil, status.Error(codes.NotFound, "Backup job is not registered")
+	}
+	return &datawire.BackupJobResponse{Job: backupJobToWire(job), RootIndex: s.runtime.Root.AppliedIndex()}, nil
+}
+
+func (s *dataService) backupWorkerNode(jobID string, raftID uint64, nodeID string) (string, error) {
+	if raftID == s.runtime.Identity.RaftID && nodeID == "" {
+		return s.runtime.Identity.NodeID, nil
+	}
+	job, found, err := s.runtime.Root.BackupJob(jobID)
+	if err != nil {
+		return "", status.Errorf(codes.Unavailable, "read Backup job worker: %v", err)
+	}
+	if !found {
+		return "", status.Error(codes.NotFound, "Backup job is not registered")
+	}
+	for _, worker := range job.Workers {
+		if worker.RaftID == raftID {
+			if nodeID != "" && nodeID != worker.NodeID {
+				return "", status.Error(codes.InvalidArgument, "Backup worker identity does not match the job")
+			}
+			return worker.NodeID, nil
+		}
+	}
+	return "", status.Error(codes.NotFound, "Backup worker is not assigned to the job")
+}
+
+func (s *dataService) backupJobMutation(ctx context.Context, cluster string, raftID uint64, size int, requestID string, command rootstate.Command, jobID string) (*datawire.BackupJobResponse, error) {
+	if rootstate.ValidateRequestID(requestID) != nil || rootstate.ValidateRequestID(jobID) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup job request ID")
+	}
+	ctx, release, err := s.begin(ctx, cluster, raftID, size)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if err := s.rootCommand(ctx, command); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "commit Backup job: %v", err)
+	}
+	return s.readBackupJob(jobID)
+}
+
+func (s *dataService) CreateBackupJob(ctx context.Context, request *datawire.CreateBackupJobRequest) (*datawire.BackupJobResponse, error) {
+	if request == nil || proto.Size(request) > 32<<10 || rootstate.ValidateRequestID(request.GetRequestId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup job request")
+	}
+	jobID := request.GetJobId()
+	if jobID == "" {
+		jobID = request.GetRequestId()
+	}
+	if rootstate.ValidateRequestID(jobID) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup job ID")
+	}
+	repositoryName := request.GetRepository()
+	if repositoryName == "" {
+		value, found, err := s.runtime.Root.DefaultRepository()
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "read default Backup Repository: %v", err)
+		}
+		if !found {
+			return nil, status.Error(codes.FailedPrecondition, "no default Backup Repository is configured")
+		}
+		repositoryName = value.Name
+	}
+	if err := repository.ValidateName(repositoryName); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid Backup Repository: %v", err)
+	}
+	value, found, err := s.runtime.Root.Repository(repositoryName)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read Backup Repository: %v", err)
+	}
+	if !found {
+		return nil, status.Error(codes.NotFound, "Backup Repository is not registered")
+	}
+	job := rootstate.BackupJob{JobID: jobID, Repository: value.Name, ClusterID: request.GetClusterId()}
+	return s.backupJobMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.CreateBackupJob, BackupJob: &job}, jobID)
+}
+
+func (s *dataService) GetBackupJob(ctx context.Context, request *datawire.GetBackupJobRequest) (*datawire.BackupJobResponse, error) {
+	if request == nil || proto.Size(request) > 16<<10 || rootstate.ValidateRequestID(request.GetJobId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup job ID")
+	}
+	_, release, err := s.begin(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.readBackupJob(request.GetJobId())
+}
+
+func (s *dataService) ListBackupJobs(ctx context.Context, request *datawire.ListBackupJobsRequest) (*datawire.ListBackupJobsResponse, error) {
+	if request == nil || proto.Size(request) > 16<<10 {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup job list request")
+	}
+	_, release, err := s.begin(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	jobs, err := s.runtime.Root.BackupJobs()
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "list Backup jobs: %v", err)
+	}
+	response := &datawire.ListBackupJobsResponse{RootIndex: s.runtime.Root.AppliedIndex()}
+	for _, job := range jobs {
+		response.Jobs = append(response.Jobs, backupJobToWire(job))
+	}
+	return response, nil
+}
+
+func (s *dataService) ClaimBackupJob(ctx context.Context, request *datawire.ClaimBackupJobRequest) (*datawire.BackupJobResponse, error) {
+	if request == nil || proto.Size(request) > 16<<10 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || rootstate.ValidateRequestID(request.GetJobId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup lease claim")
+	}
+	now := request.GetObservedUnix()
+	if now == 0 {
+		now = time.Now().Unix()
+	}
+	expires := request.GetLeaseExpiresUnix()
+	if expires == 0 {
+		expires = now + 10*60
+	}
+	workerRaftID := request.GetWorkerRaftId()
+	if workerRaftID == 0 {
+		workerRaftID = request.GetFromRaftId()
+	}
+	workerNodeID, err := s.backupWorkerNode(request.GetJobId(), workerRaftID, request.GetWorkerNodeId())
+	if err != nil {
+		return nil, err
+	}
+	claim := rootstate.BackupJobClaim{JobID: request.GetJobId(), RaftID: workerRaftID, NodeID: workerNodeID,
+		ClaimantRaftID: request.GetFromRaftId(), ClaimantNodeID: s.runtime.Identity.NodeID,
+		ObservedUnix: now, LeaseExpiresUnix: expires}
+	return s.backupJobMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.ClaimBackupJob, BackupJobClaim: &claim}, claim.JobID)
+}
+
+func (s *dataService) CompleteBackupJob(ctx context.Context, request *datawire.CompleteBackupJobRequest) (*datawire.BackupJobResponse, error) {
+	if request == nil || proto.Size(request) > 16<<10 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || rootstate.ValidateRequestID(request.GetJobId()) != nil || request.GetLeaseEpoch() == 0 || request.GetBytes() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup completion")
+	}
+	workerRaftID := request.GetWorkerRaftId()
+	if workerRaftID == 0 {
+		workerRaftID = request.GetFromRaftId()
+	}
+	workerNodeID, err := s.backupWorkerNode(request.GetJobId(), workerRaftID, request.GetWorkerNodeId())
+	if err != nil {
+		return nil, err
+	}
+	completion := rootstate.BackupJobCompletion{JobID: request.GetJobId(), RaftID: workerRaftID, NodeID: workerNodeID,
+		ClaimantRaftID: request.GetFromRaftId(), ClaimantNodeID: s.runtime.Identity.NodeID,
+		LeaseEpoch: request.GetLeaseEpoch(), Bytes: request.GetBytes(), Objects: request.GetObjects()}
+	return s.backupJobMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.CompleteBackupJob, BackupJobCompletion: &completion}, completion.JobID)
+}
+
+func (s *dataService) FailBackupJob(ctx context.Context, request *datawire.FailBackupJobRequest) (*datawire.BackupJobResponse, error) {
+	if request == nil || proto.Size(request) > 16<<10 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || rootstate.ValidateRequestID(request.GetJobId()) != nil || request.GetLeaseEpoch() == 0 || len(request.GetError()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup failure")
+	}
+	workerRaftID := request.GetWorkerRaftId()
+	if workerRaftID == 0 {
+		workerRaftID = request.GetFromRaftId()
+	}
+	workerNodeID, err := s.backupWorkerNode(request.GetJobId(), workerRaftID, request.GetWorkerNodeId())
+	if err != nil {
+		return nil, err
+	}
+	failure := rootstate.BackupJobFailure{JobID: request.GetJobId(), RaftID: workerRaftID, NodeID: workerNodeID,
+		ClaimantRaftID: request.GetFromRaftId(), ClaimantNodeID: s.runtime.Identity.NodeID,
+		LeaseEpoch: request.GetLeaseEpoch(), Error: request.GetError()}
+	return s.backupJobMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.FailBackupJob, BackupJobFailure: &failure}, failure.JobID)
+}
+
+func (s *dataService) FinalizeBackupJob(ctx context.Context, request *datawire.FinalizeBackupJobRequest) (*datawire.BackupJobResponse, error) {
+	if request == nil || proto.Size(request) > 16<<10 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || rootstate.ValidateRequestID(request.GetJobId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Backup finalization")
+	}
+	return s.backupJobMutation(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request), request.GetRequestId(),
+		rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.GetRequestId(), Type: rootstate.FinalizeBackupJob, BackupJobReference: &rootstate.BackupJobReference{JobID: request.GetJobId()}}, request.GetJobId())
+}
 
 // AddVolume is deliberately local to the Store-owning Node. Unlike data and
 // Tenant administration it does not need a Root quorum: a disk can be added

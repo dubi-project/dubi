@@ -174,7 +174,7 @@ DUBI 底座只定义 Raft 快照和整集群备份/恢复两类恢复机制。Ra
 
 每种持久资源必须由 Store/Group 底座登记其所有者、文件范围、格式版本、Checkpoint/恢复操作和垃圾回收保护；能力若只使用底座支持的存储引擎，不需要实现单独的备份编码器。Pack、Pebble/SST、顺序日志段和索引段都可作为不透明物理资源截取。未登记的外部文件不能悄悄遗漏；系统必须拒绝将这样的任务标记为完整 Cluster Backup。内存 Cache 等明确可丢弃的状态可以排除，并在恢复后按其能力语义重建。
 
-Backup Repository 是独立于源集群故障域的备份目标；Recovery Point 是已封存并完成完整性校验的不可变清单，而不是“某个任务显示上传完成”。清单记录源 Cluster、各 Group/Store 的切点、资源清单、格式版本、对象摘要和恢复所需的集群配置。底座统一提供任务持久化、Lease 接管、外部目标适配、流式传输、限速、容量预约、完整性校验、加密与密钥恢复边界、审计及状态查询。备份使用临时对象和最后发布的完成清单；未完成、校验失败或遭隔离的清单不得作为恢复点。Repository 的保留、校验、清理与修复必须有互斥门禁，不能与正在运行的备份或恢复交叉破坏对象。
+Backup Repository 是独立于源集群故障域的备份目标；Recovery Point 是已封存并完成完整性校验的不可变清单，而不是“某个任务显示上传完成”。清单记录源 Cluster、各 Group/Store 的切点、资源清单、格式版本、对象摘要和恢复所需的集群配置。底座统一提供任务持久化、Lease 接管、外部目标适配、流式传输、限速、容量预约、完整性校验、加密与密钥恢复边界、审计及状态查询。备份使用临时对象和最后发布的完成清单；未完成、校验失败或遭隔离的清单不得作为恢复点。Repository 的保留、校验、清理与修复必须有互斥门禁，不能与正在运行的备份或恢复交叉破坏对象。Repository 的结构化配置、file 节点本地布局、S3 参数和第一阶段代码边界见 [Backup / Restore Repository](docs/architecture/backup-repository.md)。
 
 “不解析数据格式”不等于可以随时复制文件。底座必须协调 Group 提交点、各存储引擎的 Checkpoint/WAL、Pack 封存和 GC/Compaction 保护，确保每个 Recovery Point 包含其切点引用的全部数据。若没有统一写入/提交屏障，多个资源的切点可能不同，清单必须准确记录并标注一致性级别，不能宣称全局原子恢复点。新能力若使用底座以外的存储路径，必须先接入通用资源登记与 Checkpoint 协议；不能因为底座不解析格式，就让部分持久数据遗漏于整集群备份。
 
@@ -259,7 +259,7 @@ Root Group 负责集群目录和成员变更，必须有独立的多数派与恢
 | `platform/placement` | 本地/区域多数派目标、安全预检、Repair、迁移任务与均衡 | 把尚未校验的实际拷贝当作已达到多数派 |
 | `platform/resource`、`platform/task` | 统一准入、预算、公平调度、后台任务限额及可恢复进度 | 允许能力绕过物理或 Tenant 硬上限 |
 | `platform/storage` | Store/Volume 的生命周期、故障隔离、空间安全预留及 Pack 通用容器生命周期 | 决定能力的载荷编码、索引和保留规则 |
-| `platform/recovery` | 注册持久资源、协调 Checkpoint、整节点 Snapshot、整集群 Backup/Restore、Recovery Point、任务门禁、恢复预检和演练证据 | 按 Tenant/能力筛选备份或解析业务记录格式 |
+| `platform/recovery` | 注册持久资源、协调 Checkpoint、整集群 Backup/Restore、Recovery Point、任务门禁、恢复预检和演练证据 | 按 Tenant/能力筛选备份、解析业务记录格式或另建 Node Snapshot/Replacement 流程 |
 | `engine/*` | RoutingKey、数据格式、复制/保留语义和业务数据导入/导出；持久资源接入底座登记和 Checkpoint 协议 | 自建另一套节点身份、集群目录或整集群备份系统 |
 
 ## 11. 需要在实现前定稿的参数

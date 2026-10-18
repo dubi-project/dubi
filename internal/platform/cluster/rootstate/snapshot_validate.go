@@ -13,6 +13,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
 	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
 )
 
@@ -245,6 +246,34 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 		}
 		var tenant Tenant
 		if streamJSON(view, tenantKey(credential.TenantID), &tenant) != nil || tenant.TenantID != credential.TenantID {
+			return bad()
+		}
+	case strings.HasPrefix(name, "data/repository/"):
+		var config repository.Repository
+		if decodeStreamJSON(value, &config) != nil || config.Validate() != nil || !bytes.Equal(key, repositoryKey(config.Name)) {
+			return bad()
+		}
+	case strings.HasPrefix(name, "data/backup-job/"):
+		var job BackupJob
+		if decodeStreamJSON(value, &job) != nil || job.ValidateStored(index) != nil || !bytes.Equal(key, backupJobKey(job.JobID)) {
+			return bad()
+		}
+		var configured repository.Repository
+		if streamJSON(view, repositoryKey(job.Repository), &configured) != nil || configured.Name != job.Repository || configured.Validate() != nil {
+			return bad()
+		}
+		for _, worker := range job.Workers {
+			var node Node
+			if streamJSON(view, nodeKey(worker.RaftID), &node) != nil || node.RaftID != worker.RaftID || node.NodeID != worker.NodeID {
+				return bad()
+			}
+		}
+	case bytes.Equal(key, defaultRepositoryKey):
+		if repository.ValidateName(string(value)) != nil {
+			return bad()
+		}
+		var configured repository.Repository
+		if streamJSON(view, repositoryKey(string(value)), &configured) != nil || configured.Name != string(value) || configured.Validate() != nil {
 			return bad()
 		}
 	case strings.HasPrefix(name, "data/dataset/"):

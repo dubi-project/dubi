@@ -15,6 +15,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
 	"github.com/dubi-project/dubi/internal/platform/storage/pebbleutil"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
@@ -266,6 +267,70 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		return s.applyRegionGroupRebuild(batch, *command.GroupRebuild)
 	case MarkNodeReady:
 		return s.applyNodeReady(batch, *command.NodeReady)
+	case CreateRepository:
+		value := command.Repository
+		if _, found, err := s.get(repositoryKey(value.Name)); err != nil {
+			return "", err
+		} else if found {
+			return "Repository name is already registered", nil
+		}
+		return "", setJSON(batch, repositoryKey(value.Name), value)
+	case UpdateRepository:
+		value := command.Repository
+		encoded, found, err := s.get(repositoryKey(value.Name))
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "Repository is not registered", nil
+		}
+		// CLI updates intentionally do not accept plaintext or ciphertext
+		// credentials. Preserve the existing encrypted envelope when a caller
+		// changes only the non-secret destination settings.
+		var previous repository.Repository
+		if err := decodeStreamJSON(encoded, &previous); err != nil {
+			return "", err
+		}
+		if len(value.EncryptedCredentials) == 0 {
+			value.EncryptedCredentials = append([]byte(nil), previous.EncryptedCredentials...)
+			value.CredentialsNonce = append([]byte(nil), previous.CredentialsNonce...)
+			value.CredentialsAlgorithm = previous.CredentialsAlgorithm
+			value.CredentialsKeyVersion = previous.CredentialsKeyVersion
+		}
+		return "", setJSON(batch, repositoryKey(value.Name), value)
+	case DeleteRepository:
+		name := command.RepositoryDelete.Name
+		if _, found, err := s.get(repositoryKey(name)); err != nil {
+			return "", err
+		} else if !found {
+			return "Repository is not registered", nil
+		}
+		if current, found, err := s.get(defaultRepositoryKey); err != nil {
+			return "", err
+		} else if found && string(current) == name {
+			if err := batch.Delete(defaultRepositoryKey, nil); err != nil {
+				return "", err
+			}
+		}
+		return "", batch.Delete(repositoryKey(name), nil)
+	case SetDefaultRepository:
+		name := command.RepositoryDefault.Name
+		if _, found, err := s.get(repositoryKey(name)); err != nil {
+			return "", err
+		} else if !found {
+			return "Repository is not registered", nil
+		}
+		return "", batch.Set(defaultRepositoryKey, []byte(name), nil)
+	case CreateBackupJob:
+		return s.applyCreateBackupJob(batch, *command.BackupJob)
+	case ClaimBackupJob:
+		return s.applyClaimBackupJob(batch, *command.BackupJobClaim)
+	case CompleteBackupJob:
+		return s.applyCompleteBackupJob(batch, *command.BackupJobCompletion)
+	case FailBackupJob:
+		return s.applyFailBackupJob(batch, *command.BackupJobFailure)
+	case FinalizeBackupJob:
+		return s.applyFinalizeBackupJob(batch, *command.BackupJobReference)
 	case BeginRootJoin, CompleteRootJoin:
 		return s.applyRootJoin(batch, command)
 	case CreateJoinGrant, ConsumeJoinGrant, RevokeJoinGrant:
@@ -673,6 +738,10 @@ func groupKey(id string) []byte                  { return []byte("data/group/" +
 func groupChangeKey(id string) []byte            { return []byte("data/group-change/" + id) }
 func activeGroupChangeKey(groupID string) []byte { return []byte("data/group-active/" + groupID) }
 func tenantKey(id string) []byte                 { return []byte("data/tenant/" + id) }
+func repositoryKey(name string) []byte           { return []byte("data/repository/" + name) }
+
+var defaultRepositoryKey = []byte("data/repository-default")
+
 func (value Keyspace) path() string {
 	return value.TenantID + "/" + value.EngineID + "/" + value.DatasetID
 }
@@ -916,6 +985,75 @@ func (s *State) Tenant(tenantID string) (Tenant, bool, error) {
 	var value Tenant
 	err = json.Unmarshal(encoded, &value)
 	return value, err == nil, err
+}
+
+func (s *State) Repository(name string) (repository.Repository, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return repository.Repository{}, false, err
+	}
+	if err := repository.ValidateName(name); err != nil {
+		return repository.Repository{}, false, err
+	}
+	encoded, found, err := s.get(repositoryKey(name))
+	if !found || err != nil {
+		return repository.Repository{}, found, err
+	}
+	var value repository.Repository
+	if err := decodeStreamJSON(encoded, &value); err != nil {
+		return repository.Repository{}, false, err
+	}
+	return value, true, value.Validate()
+}
+
+func (s *State) Repositories() ([]repository.Repository, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
+	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/repository/"), UpperBound: []byte("data/repository0")})
+	if err != nil {
+		return nil, err
+	}
+	defer iterator.Close()
+	values := make([]repository.Repository, 0)
+	for iterator.First(); iterator.Valid(); iterator.Next() {
+		var value repository.Repository
+		if err := decodeStreamJSON(iterator.Value(), &value); err != nil {
+			return nil, err
+		}
+		if err := value.Validate(); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, iterator.Error()
+}
+
+func (s *State) DefaultRepository() (repository.Repository, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return repository.Repository{}, false, err
+	}
+	encoded, found, err := s.get(defaultRepositoryKey)
+	if err != nil || !found {
+		return repository.Repository{}, found, err
+	}
+	repositoryValue, found, err := s.get(repositoryKey(string(encoded)))
+	if err != nil || !found {
+		return repository.Repository{}, false, errors.New("default Repository is missing")
+	}
+	var value repository.Repository
+	if err := decodeStreamJSON(repositoryValue, &value); err != nil {
+		return repository.Repository{}, false, err
+	}
+	if err := value.Validate(); err != nil {
+		return repository.Repository{}, false, err
+	}
+	return value, true, nil
 }
 
 func (s *State) Dataset(tenantID, engineID, datasetID string) (Dataset, bool, error) {
