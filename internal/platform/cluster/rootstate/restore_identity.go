@@ -225,6 +225,47 @@ func rewriteJSONValue(value any, field string, mapping RestoreIdentityMap) (any,
 			}
 			typed[index] = rewritten
 		}
+		// Root validates identity lists in canonical numeric order. A new
+		// cluster receives fresh Raft IDs, so translating an already-sorted
+		// source list does not preserve that order automatically.
+		if isRaftListField(field) {
+			allNumbers := true
+			for _, child := range typed {
+				if _, ok := child.(json.Number); !ok {
+					allNumbers = false
+					break
+				}
+			}
+			if allNumbers {
+				sort.Slice(typed, func(i, j int) bool {
+					left, _ := strconv.ParseUint(string(typed[i].(json.Number)), 10, 64)
+					right, _ := strconv.ParseUint(string(typed[j].(json.Number)), 10, 64)
+					return left < right
+				})
+			} else {
+				allMembers := true
+				for _, child := range typed {
+					member, ok := child.(map[string]any)
+					if !ok {
+						allMembers = false
+						break
+					}
+					if _, ok := member["raft_id"].(json.Number); !ok {
+						allMembers = false
+						break
+					}
+				}
+				if allMembers {
+					sort.Slice(typed, func(i, j int) bool {
+						left := typed[i].(map[string]any)["raft_id"].(json.Number)
+						right := typed[j].(map[string]any)["raft_id"].(json.Number)
+						leftID, _ := strconv.ParseUint(string(left), 10, 64)
+						rightID, _ := strconv.ParseUint(string(right), 10, 64)
+						return leftID < rightID
+					})
+				}
+			}
+		}
 		return typed, nil
 	case string:
 		if isNodeIdentityField(field) {
@@ -261,7 +302,7 @@ func isRaftIdentityField(field string) bool {
 
 func isRaftListField(field string) bool {
 	switch field {
-	case "nodes", "ready_members", "previous_nodes", "target_nodes":
+	case "members", "nodes", "ready_members", "previous_nodes", "target_nodes":
 		return true
 	default:
 		return false

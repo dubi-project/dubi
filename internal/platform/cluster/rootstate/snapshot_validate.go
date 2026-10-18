@@ -178,11 +178,13 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 		}
 	case strings.HasPrefix(name, "data/group-change/"):
 		var change GroupChange
-		if decodeStreamJSON(value, &change) != nil || !validID(change.ChangeID) ||
-			!bytes.Equal(key, groupChangeKey(change.ChangeID)) || raft.ValidateGroupID(change.GroupID) != nil ||
+		if err := decodeStreamJSON(value, &change); err != nil {
+			return fmt.Errorf("%w: decode Group change: %v", bad(), err)
+		}
+		if !validID(change.ChangeID) || !bytes.Equal(key, groupChangeKey(change.ChangeID)) || raft.ValidateGroupID(change.GroupID) != nil ||
 			change.ExpectedEpoch == 0 || change.ExpectedEpoch == math.MaxUint64 ||
 			(change.Maintenance && (change.RegionID != "" || change.GrowthGeneration != 0)) || !membersValid(change.Members) {
-			return bad()
+			return fmt.Errorf("%w: invalid Group change %s", bad(), change.ChangeID)
 		}
 		var group Group
 		if streamJSON(view, groupKey(change.GroupID), &group) != nil || group.GroupID != change.GroupID {

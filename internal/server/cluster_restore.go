@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -71,7 +70,7 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 	if err != nil {
 		return err
 	}
-	if err := validateIndexedRootArtifacts(ctx, point, open, rootName, rootImage); err != nil {
+	if err := validateIndexedRootArtifacts(ctx, point, open); err != nil {
 		return err
 	}
 	identityMap, err := rootstate.BuildRestoreIdentityMap(rootImage, destinationNodes)
@@ -123,7 +122,6 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 		}
 	}
 
-	var installedRoot []byte
 	rootInstalled := false
 	pendingEngines := make([]pendingEngineRestore, 0)
 	pendingRecords := make([]pendingRecordRestore, 0)
@@ -164,15 +162,22 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 						if artifact.Format != "DUBI_ROOT_STATE_V2" {
 							return fmt.Errorf("unsupported Root artifact format %q", artifact.Format)
 						}
+						// Workers capture the same cluster checkpoint at slightly
+						// different local Root apply positions. The highest valid Root
+						// image selected above is authoritative; the other images were
+						// already integrity-checked during preflight and are not
+						// installed a second time.
+						if artifact.Name != rootName {
+							_, drainErr := io.Copy(io.Discard, reader)
+							return drainErr
+						}
+						if rootInstalled {
+							_, drainErr := io.Copy(io.Discard, reader)
+							return drainErr
+						}
 						image, readErr := io.ReadAll(io.LimitReader(reader, size+1))
 						if readErr != nil || int64(len(image)) != size {
 							return errors.Join(readErr, errors.New("Root restore artifact size differs from Manifest"))
-						}
-						if rootInstalled && !bytes.Equal(installedRoot, image) {
-							return errors.New("Root restore artifacts disagree across source Nodes")
-						}
-						if rootInstalled {
-							return nil
 						}
 						for destinationID, destinationRuntime := range destinations {
 							conf, confErr := destinationRuntime.Host.Membership(raft.RootGroupID)
@@ -187,7 +192,6 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 								return fmt.Errorf("install Root snapshot on Node %s: %w", destinationID, installErr)
 							}
 						}
-						installedRoot = image
 						rootInstalled = true
 						return nil
 					case "engine-state":
@@ -278,36 +282,59 @@ func readIndexedRootArtifact(ctx context.Context, point repository.RecoveryPoint
 	if len(point.Nodes) == 0 {
 		return nil, "", errors.New("Recovery Point has no source Nodes")
 	}
-	store, err := open(ctx, point.Nodes[0].NodeID)
-	if err != nil {
-		return nil, "", err
-	}
-	manifest, err := store.ReadManifest(point.Epoch)
-	if err != nil {
-		return nil, "", err
-	}
-	for _, artifact := range manifest.Artifacts {
-		if artifact.Kind != "root-state" {
-			continue
+	var selected []byte
+	selectedName := ""
+	var selectedIndex uint64
+	for _, source := range point.Nodes {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
 		}
-		reader, err := store.OpenObject(artifact.Object.ID)
+		store, err := open(ctx, source.NodeID)
 		if err != nil {
 			return nil, "", err
 		}
-		image, readErr := io.ReadAll(io.LimitReader(reader, artifact.Object.Size+1))
-		closeErr := reader.Close()
-		if readErr != nil || closeErr != nil || int64(len(image)) != artifact.Object.Size {
-			return nil, "", errors.Join(readErr, closeErr, errors.New("Root artifact size differs from Manifest"))
-		}
-		if _, _, err := rootstate.SnapshotMetadata(image); err != nil {
+		manifest, err := store.ReadManifest(point.Epoch)
+		if err != nil {
 			return nil, "", err
 		}
-		return image, artifact.Name, nil
+		found := false
+		for _, artifact := range manifest.Artifacts {
+			if artifact.Kind != "root-state" {
+				continue
+			}
+			found = true
+			index, _, err := snapshotPosition(artifact.Name, "root/state")
+			if err != nil {
+				return nil, "", err
+			}
+			reader, err := store.OpenObject(artifact.Object.ID)
+			if err != nil {
+				return nil, "", err
+			}
+			image, readErr := io.ReadAll(io.LimitReader(reader, artifact.Object.Size+1))
+			closeErr := reader.Close()
+			if readErr != nil || closeErr != nil || int64(len(image)) != artifact.Object.Size {
+				return nil, "", errors.Join(readErr, closeErr, errors.New("Root artifact size differs from Manifest"))
+			}
+			metadataIndex, _, metadataErr := rootstate.SnapshotMetadata(image)
+			if metadataErr != nil || metadataIndex != index {
+				return nil, "", errors.Join(metadataErr, errors.New("Root snapshot name and image index disagree"))
+			}
+			if selected == nil || index > selectedIndex || (index == selectedIndex && artifact.Name > selectedName) {
+				selected, selectedName, selectedIndex = image, artifact.Name, index
+			}
+		}
+		if !found {
+			return nil, "", fmt.Errorf("source Node %s has no Root state artifact", source.NodeID)
+		}
 	}
-	return nil, "", errors.New("Recovery Point source Node has no Root state artifact")
+	if selected == nil {
+		return nil, "", errors.New("Recovery Point has no Root state artifact")
+	}
+	return selected, selectedName, nil
 }
 
-func validateIndexedRootArtifacts(ctx context.Context, point repository.RecoveryPoint, open recovery.NodeStore, expectedName string, expected []byte) error {
+func validateIndexedRootArtifacts(ctx context.Context, point repository.RecoveryPoint, open recovery.NodeStore) error {
 	for _, source := range point.Nodes {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -326,8 +353,9 @@ func validateIndexedRootArtifacts(ctx context.Context, point repository.Recovery
 				continue
 			}
 			found = true
-			if artifact.Name != expectedName {
-				return fmt.Errorf("Root restore artifact name differs for source Node %s", source.NodeID)
+			index, _, err := snapshotPosition(artifact.Name, "root/state")
+			if err != nil {
+				return err
 			}
 			reader, err := store.OpenObject(artifact.Object.ID)
 			if err != nil {
@@ -338,8 +366,9 @@ func validateIndexedRootArtifacts(ctx context.Context, point repository.Recovery
 			if readErr != nil || closeErr != nil || int64(len(image)) != artifact.Object.Size {
 				return errors.Join(readErr, closeErr, errors.New("Root artifact size differs from Manifest"))
 			}
-			if !bytes.Equal(image, expected) {
-				return fmt.Errorf("Root restore artifacts disagree for source Node %s", source.NodeID)
+			metadataIndex, _, metadataErr := rootstate.SnapshotMetadata(image)
+			if metadataErr != nil || metadataIndex != index {
+				return errors.Join(metadataErr, errors.New("Root snapshot name and image index disagree"))
 			}
 		}
 		if !found {
