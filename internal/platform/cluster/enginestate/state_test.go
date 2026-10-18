@@ -254,6 +254,36 @@ func TestEngineStateSnapshotRestoresFenceDataAndResults(t *testing.T) {
 	}
 }
 
+func TestRewriteSnapshotForRestoreChangesOnlyMembership(t *testing.T) {
+	source, err := Open(t.TempDir(), "data-restore", &testHandler{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if err := source.ApplyMembership(1, &raftpb.ConfState{Voters: []uint64{11}}); err != nil {
+		t.Fatal(err)
+	}
+	image, index, _, err := source.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := RewriteSnapshotForRestore(image, &raftpb.ConfState{Voters: []uint64{21}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := Open(t.TempDir(), "data-restore", &testHandler{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if err := destination.Restore(index, rewritten, &raftpb.ConfState{Voters: []uint64{21}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := destination.ConfState().GetVoters(); len(got) != 1 || got[0] != 21 {
+		t.Fatalf("restored membership = %v", got)
+	}
+}
+
 func TestEngineStateDirectoryIsBoundToGroup(t *testing.T) {
 	root := t.TempDir()
 	state, err := Open(root, "data-1", &testHandler{})
