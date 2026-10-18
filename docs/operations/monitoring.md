@@ -23,6 +23,8 @@ curl --cacert <cluster-ca.pem> https://127.0.0.1:7444/metrics
 
 生产 Prometheus 配置示例见 [`deploy/prometheus/prometheus.yml.example`](../../deploy/prometheus/prometheus.yml.example)，告警规则见 [`dubi.rules.yml`](../../deploy/prometheus/dubi.rules.yml)。开发机的 Docker 快速验证可参考 [`prometheus.dev.yml.example`](../../deploy/prometheus/prometheus.dev.yml.example)；它使用 `insecure_skip_verify`，只允许本地临时测试，生产环境必须使用集群 CA 校验证书。
 
+9 台测试 VPS 的 SSH 隧道验收配置见 [`prometheus.vps-acceptance.yml.example`](../../deploy/prometheus/prometheus.vps-acceptance.yml.example)。该配置只适合一次性验收，不是生产部署配置。
+
 ## 主要指标
 
 - `dubi_node_up`、`dubi_node_ready`

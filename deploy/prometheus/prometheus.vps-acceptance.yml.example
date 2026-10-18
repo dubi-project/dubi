@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 5s
+  scrape_timeout: 2s
+
+rule_files:
+  - dubi.rules.yml
+
+# The VPS monitoring listeners bind to 127.0.0.1:12444. Create the matching
+# SSH tunnels before starting Prometheus; see docs/operations/monitoring.md.
+scrape_configs:
+  - job_name: dubi-vps-acceptance
+    scheme: https
+    static_configs:
+      - targets:
+          - 127.0.0.1:17444 # sg01 -> 206.206.78.113:12444
+          - 127.0.0.1:17445 # sg02 -> 206.206.78.205:12444
+          - 127.0.0.1:17446 # sg03 -> 206.206.77.203:12444
+          - 127.0.0.1:17447 # ff01 -> 146.103.40.3:12444
+          - 127.0.0.1:17448 # ff02 -> 146.103.40.71:12444
+          - 127.0.0.1:17449 # ff03 -> 146.103.42.179:12444
+          - 127.0.0.1:17450 # tt01 -> 209.200.246.159:12444
+          - 127.0.0.1:17451 # tt02 -> 209.200.246.165:12444
+          - 127.0.0.1:17452 # tt03 -> 209.200.246.10:12444
+    tls_config:
+      # Acceptance only: the tunnel terminates on localhost and the DUBI
+      # listener uses its managed certificate. Production must use ca_file.
+      insecure_skip_verify: true
