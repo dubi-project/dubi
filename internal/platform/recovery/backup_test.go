@@ -62,6 +62,29 @@ func TestRunFileBackupDoesNotPublishOnSourceFailure(t *testing.T) {
 	}
 }
 
+func TestRunFileBackupRetriesPublishedManifestIdempotently(t *testing.T) {
+	config := repository.Repository{Name: "local", Type: repository.TypeFile, Path: t.TempDir()}
+	store, err := repository.OpenFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := []Source{{Name: "root-state", Kind: "root", NodeID: "node-a", StoreID: "store-a", Size: 7,
+		Open: func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("payload")), nil
+		}}}
+	first, err := RunFileBackup(context.Background(), store, Plan{Repository: config, ClusterID: "cluster-a", Epoch: 6}, sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := RunFileBackup(context.Background(), store, Plan{Repository: config, ClusterID: "cluster-a", Epoch: 6}, sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameManifestContent(first.Manifest, second.Manifest) || second.Objects != 1 || second.Bytes != 7 {
+		t.Fatalf("idempotent retry changed result: first=%+v second=%+v", first, second)
+	}
+}
+
 func TestSortSourcesReturnsIndependentDeterministicOrder(t *testing.T) {
 	sources := []Source{{Name: "z", Kind: "x", NodeID: "b"}, {Name: "a", Kind: "x", NodeID: "a"}}
 	sorted := SortSources(sources)
@@ -138,5 +161,32 @@ func TestRestoreFileRejectsPartialTarget(t *testing.T) {
 	}
 	if _, err := RestoreFile(context.Background(), store, 4, []Target{{Name: "root-state", NodeID: "node-a", Apply: func(_ context.Context, _ io.Reader, _ int64) error { return nil }}}); err == nil {
 		t.Fatal("partial restore target was accepted")
+	}
+}
+
+func TestRestorePreflightsAllTargetsBeforeApplying(t *testing.T) {
+	config := repository.Repository{Name: "local", Type: repository.TypeFile, Path: t.TempDir()}
+	store, err := repository.OpenFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("restore me")
+	if _, err := RunFileBackup(context.Background(), store, Plan{Repository: config, ClusterID: "cluster-a", Epoch: 5}, []Source{
+		{Name: "first", Kind: "pack", NodeID: "node-a", Size: int64(len(content)), Open: func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(content)), nil
+		}},
+		{Name: "second", Kind: "pack", NodeID: "node-a", Size: int64(len(content)), Open: func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(content)), nil
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	applied := 0
+	_, err = RestoreFile(context.Background(), store, 5, []Target{{Name: "first", NodeID: "node-a", Apply: func(_ context.Context, _ io.Reader, _ int64) error {
+		applied++
+		return nil
+	}}})
+	if err == nil || applied != 0 {
+		t.Fatalf("restore applied before target preflight: err=%v applied=%d", err, applied)
 	}
 }

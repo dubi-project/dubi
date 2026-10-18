@@ -196,7 +196,7 @@ func (p *Pool) sealAllLocked(ctx context.Context) error {
 }
 
 // SnapshotPacks creates a stable list of sealed Pack files for a node-local
-// backup shard. The Pool lock makes sealing and enumeration one local cut:
+// backup checkpoint. The Pool lock makes sealing and enumeration one local cut:
 // callers may copy the returned files after this method returns without an
 // active writer changing them. It does not publish a cluster Recovery Point
 // or infer any placement/durability semantics.

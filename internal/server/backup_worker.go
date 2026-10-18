@@ -23,10 +23,9 @@ const (
 	backupWorkerLease    = 10 * time.Minute
 )
 
-// backupWorker executes only the local member's shard. It deliberately does
-// not pretend that a node-local file Repository is a shared filesystem: shard
-// completion is recorded in Root, while cluster-level manifest aggregation is
-// a later coordinator step.
+// backupWorker executes the local member's checkpoint. Each Node writes its
+// own Repository objects and Manifest; Root only coordinates the cluster job
+// completion. The worker never treats a node-local Repository as shared.
 type backupWorker struct {
 	runtime *node.Runtime
 	report  func(error)
@@ -85,7 +84,7 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 		return fmt.Errorf("Backup Repository type %q is not implemented by the local worker", repositoryConfig.Type)
 	}
 	if worker.State == rootstate.BackupWorkerCompleted || worker.State == rootstate.BackupWorkerFailed {
-		return w.tryFinalize(ctx, job, repositoryConfig)
+		return w.finalizeIfComplete(ctx, job)
 	}
 	now := time.Now().Unix()
 	leaseEpoch := worker.LeaseEpoch
@@ -125,9 +124,8 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 		return err
 	}
 	defer release()
-	result, _, err := recovery.RunFileNodeBackup(ctx, store, recovery.ShardPlan{Repository: repositoryConfig,
-		JobID: job.JobID, ClusterID: job.ClusterID, Epoch: job.Epoch, NodeID: w.runtime.Identity.NodeID,
-		StoreID: w.runtime.Packs.StoreID()}, sources)
+	result, err := recovery.RunFileBackup(ctx, store, recovery.Plan{Repository: repositoryConfig,
+		ClusterID: job.ClusterID, Epoch: job.Epoch}, sources)
 	if err != nil {
 		return err
 	}
@@ -138,42 +136,16 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 	if err := w.submit(ctx, completeID, rootstate.Command{Version: rootstate.FormatVersion, RequestID: completeID, Type: rootstate.CompleteBackupJob, BackupJobCompletion: &completion}); err != nil {
 		return err
 	}
-	return w.tryFinalize(ctx, job, repositoryConfig)
+	return w.finalizeIfComplete(ctx, job)
 }
 
-// tryFinalize is intentionally opportunistic. It succeeds when all shards
-// and their objects are visible in the same file namespace (for example a
-// shared filesystem), but returns quietly for the documented node-local file
-// layout where another Node's objects must first be exchanged by a future
-// coordinator.
-func (w *backupWorker) tryFinalize(ctx context.Context, job rootstate.BackupJob, config repository.Repository) error {
-	store, err := repository.OpenFile(config)
-	if err != nil {
-		return err
-	}
-	shards, err := store.ListShards(job.JobID)
-	if err != nil || len(shards) != len(job.Workers) {
-		return err
-	}
-	for _, shard := range shards {
-		for _, object := range shard.Objects {
-			found, err := store.HasObject(object.ID)
-			if err != nil {
-				return err
-			}
-			if !found {
-				return nil
-			}
-		}
-	}
-	if _, err := recovery.FinalizeShards(ctx, store, recovery.Plan{Repository: config, ClusterID: job.ClusterID, Epoch: job.Epoch}, shards); err != nil {
-		if _, readErr := store.ReadManifest(job.Epoch); readErr != nil {
-			return err
-		}
-	}
+func (w *backupWorker) finalizeIfComplete(ctx context.Context, job rootstate.BackupJob) error {
 	latest, found, err := w.runtime.Root.BackupJob(job.JobID)
 	if err != nil || !found {
 		return err
+	}
+	if latest.State == rootstate.BackupJobCompleted || latest.State == rootstate.BackupJobFailed {
+		return nil
 	}
 	for _, item := range latest.Workers {
 		if item.State != rootstate.BackupWorkerCompleted {

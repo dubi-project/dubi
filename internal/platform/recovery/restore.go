@@ -45,6 +45,25 @@ func Restore(ctx context.Context, store repository.ObjectStore, epoch uint64, ta
 		}
 		byName[key] = target
 	}
+	// Preflight the complete restore before invoking any target. A missing
+	// target or an unavailable object must not leave an earlier artifact
+	// already published while a later artifact fails. Target.Apply remains
+	// responsible for its own atomic publication once the preflight passes.
+	for _, artifact := range manifest.Artifacts {
+		if err := ctx.Err(); err != nil {
+			return repository.Manifest{}, err
+		}
+		if _, found := byName[artifact.NodeID+"\x00"+artifact.Name]; !found {
+			return repository.Manifest{}, fmt.Errorf("restore target is missing for artifact %q", artifact.Name)
+		}
+		reader, err := store.OpenObject(artifact.Object.ID)
+		if err != nil {
+			return repository.Manifest{}, fmt.Errorf("open restore artifact %q: %w", artifact.Name, err)
+		}
+		if err := reader.Close(); err != nil {
+			return repository.Manifest{}, fmt.Errorf("close restore artifact %q: %w", artifact.Name, err)
+		}
+	}
 	for _, artifact := range manifest.Artifacts {
 		if err := ctx.Err(); err != nil {
 			return repository.Manifest{}, err
@@ -55,7 +74,7 @@ func Restore(ctx context.Context, store repository.ObjectStore, epoch uint64, ta
 		}
 		reader, err := store.OpenObject(artifact.Object.ID)
 		if err != nil {
-			return repository.Manifest{}, err
+			return repository.Manifest{}, fmt.Errorf("open restore artifact %q: %w", artifact.Name, err)
 		}
 		stream := &contextReader{ctx: ctx, reader: reader}
 		copyErr := target.Apply(ctx, stream, artifact.Object.Size)

@@ -51,7 +51,6 @@ func TestFileStoreContentAddressingAndManifestCommit(t *testing.T) {
 		t.Fatal("duplicate Recovery Point committed")
 	}
 }
-
 func TestFileStoreRejectsIncompleteOrMissingObjectManifest(t *testing.T) {
 	store, err := OpenFile(Repository{Name: "local", Type: TypeFile, Path: t.TempDir()})
 	if err != nil {
@@ -64,23 +63,6 @@ func TestFileStoreRejectsIncompleteOrMissingObjectManifest(t *testing.T) {
 	}
 	if _, err := store.ReadManifest(1); err == nil {
 		t.Fatal("incomplete manifest was readable")
-	}
-}
-
-func TestFileStoreDistributedManifestAllowsRemoteObjects(t *testing.T) {
-	store, err := OpenFile(Repository{Name: "local", Type: TypeFile, Path: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	object := ObjectRef{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 0}
-	manifest := Manifest{Version: 1, Repository: "local", ClusterID: "cluster_test", Epoch: 2, CreatedAt: time.Unix(2, 0).UTC(), Distributed: true,
-		Objects: []ObjectRef{object}, Artifacts: []Artifact{{Name: "remote-pack", Kind: "pack", NodeID: "node_b", StoreID: "store_b", Object: object}}}
-	if err := store.CommitManifest(context.Background(), manifest); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := store.ReadManifest(2)
-	if err != nil || !loaded.Distributed {
-		t.Fatalf("distributed manifest = %+v, %v", loaded, err)
 	}
 }
 
@@ -105,37 +87,5 @@ func TestFileStoreManifestReadVerifiesObjectHash(t *testing.T) {
 	}
 	if _, err := store.ReadManifest(manifest.Epoch); err == nil {
 		t.Fatal("tampered object was accepted")
-	}
-}
-
-func TestFileStoreShardCommitAndRead(t *testing.T) {
-	config := Repository{Name: "local", Type: TypeFile, Path: t.TempDir()}
-	store, err := OpenFile(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	object, err := store.PutObject(context.Background(), bytes.NewReader([]byte("node bytes")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	shard := Shard{Version: 1, JobID: "backup_01", Repository: config.Name, ClusterID: "cluster_test", Epoch: 7,
-		CreatedAt: time.Unix(7, 0).UTC(), NodeID: "node_a", StoreID: "store_a", Objects: []ObjectRef{object},
-		Artifacts: []Artifact{{Name: "pack/pack_01", Kind: "pack", NodeID: "node_a", StoreID: "store_a", Object: object}}}
-	if err := store.CommitShard(context.Background(), shard); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := store.ReadShard(shard.JobID, shard.NodeID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.JobID != shard.JobID || loaded.NodeID != shard.NodeID || len(loaded.Artifacts) != 1 {
-		t.Fatalf("loaded shard = %+v", loaded)
-	}
-	shards, err := store.ListShards(shard.JobID)
-	if err != nil || len(shards) != 1 || shards[0].NodeID != shard.NodeID {
-		t.Fatalf("shard list = %+v, %v", shards, err)
-	}
-	if err := store.CommitShard(context.Background(), shard); err == nil {
-		t.Fatal("duplicate backup shard committed")
 	}
 }

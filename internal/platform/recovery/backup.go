@@ -75,7 +75,15 @@ func RunBackup(ctx context.Context, store repository.ObjectStore, plan Plan, sou
 	manifest := repository.Manifest{Version: 1, Repository: plan.Repository.Name, ClusterID: plan.ClusterID,
 		Epoch: plan.Epoch, CreatedAt: plan.CreatedAt.UTC(), Objects: objectList, Artifacts: artifacts}
 	if err := store.CommitManifest(ctx, manifest); err != nil {
-		return Result{}, err
+		// A worker may crash after the immutable Manifest is published but
+		// before it records completion in Root. Treat an identical already
+		// committed Manifest as a successful retry; a different Manifest for
+		// the same Recovery Point remains a hard conflict.
+		existing, readErr := store.ReadManifest(plan.Epoch)
+		if readErr != nil || !sameManifestContent(existing, manifest) {
+			return Result{}, err
+		}
+		manifest = existing
 	}
 	return Result{Manifest: manifest, Bytes: total, Objects: len(objectList), Artifacts: len(artifacts)}, nil
 }
@@ -153,6 +161,12 @@ func validateSource(source Source) error {
 		}
 	}
 	return nil
+}
+
+func sameManifestContent(left, right repository.Manifest) bool {
+	return left.Version == right.Version && left.Repository == right.Repository &&
+		left.ClusterID == right.ClusterID && left.Epoch == right.Epoch &&
+		slices.Equal(left.Objects, right.Objects) && slices.Equal(left.Artifacts, right.Artifacts)
 }
 
 // SortSources is shared by schedulers before they create checkpoint cuts. It

@@ -52,7 +52,7 @@ dubi repository add local --type file --path /backup/dubi
   └── node-03:/backup/dubi
 ```
 
-它不是多个独立备份任务。Root 创建一个集群级任务，各节点并行读取数据并把对象写入本地目录，最终提交一个集群级 Manifest。恢复同样读取各节点本地 Repository 分片，再执行 Repair/Placement/Rebalance。
+它不是多个独立备份任务。Root 创建一个集群级任务，各节点并行读取自己的数据并把对象写入本地目录；每个节点保存该 Recovery Point 的本地 Manifest，Root 在所有节点完成后封存集群任务。恢复时按 Root 任务记录读取各节点的本地 Manifest 和对象，再执行 Repair/Placement/Rebalance。
 
 `file` 不要求 NFS/NAS 或其它共享目录。NFS、NAS、独立存储服务器挂载后也可以作为 `file` 路径，但不是单独的 `nfs://` 后端。
 
@@ -92,7 +92,7 @@ Access Key、Secret Key 等凭据作为 Repository 记录中的加密字段保�
 - 备份期间，GC/Compaction 不能删除被当前任务引用的对象；
 - 失败、取消、校验不完整的任务不能作为恢复源。
 
-Manifest 至少记录源 Cluster、Recovery Point 代际、持久资源清单、对象摘要、格式版本、节点本地对象位置和校验结果。跨节点的最终 Manifest 标记为 `distributed`：每个节点可以保存同一份元数据，即使对象字节仍位于来源节点的本地 Repository；恢复器必须按 Artifact 的 Node/Store 来源做认证读取和哈希复验。节点本地 `file` Repository 还必须复制或重新生成集群级完成标记，避免把每个节点目录误认为独立备份。
+Manifest 至少记录源 Cluster、Recovery Point 代际、持久资源清单、对象摘要、格式版本、节点和 Store 标识以及校验结果。节点本地 `file` Repository 的每个节点各自保存自己的 Manifest 和对象；Root 的 Backup Job 完成状态把这些本地结果绑定到同一个 Recovery Point。对象不需要在节点之间搬运。
 
 Root 为每个 Backup Job 在创建时分配不可变 `Epoch`（取创建日志位置），它是该 Recovery Point 在 Repository 内的唯一封存命名空间；领取租约、节点接管和完成状态变化不会改写这个 Epoch。
 
@@ -131,7 +131,7 @@ Placement / Repair / Rebalance
 1. Root 中的 Repository 配置、默认 Repository 和生命周期操作；
 2. `file` 本地对象仓库：内容寻址对象、原子封存、Manifest、完整性校验；
 3. 结构化 `s3` 配置和加密凭据字段；
-4. 集群级备份任务、节点本地工作分片和完成状态；
+4. 集群级备份任务、节点本地 Manifest 和完成状态；
 5. 从完整 Recovery Point 恢复到空集群的最小闭环。
 
 第一阶段不实现：
@@ -142,5 +142,5 @@ Placement / Repair / Rebalance
 - 直接在线写磁带；
 - 依赖外部 Secret Manager 或环境变量保存凭据。
 
-当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、file 内容寻址对象、完整性校验、原子 Manifest 和节点工作 Shard；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器，`RunNodeBackup`/`FinalizeShards` 已把节点分片汇总为 Recovery Point。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server 已有最小本地 worker：领取当前 Node 的任务分片，封存 Pack 与 Root state Source，写入 file Repository Shard 并回报 Root 完成状态；如果所有分片和对象恰好在同一文件命名空间可见，还会尝试发布 Manifest，否则保持分片完成但不伪造集群完成。它不会把失败 Node 的数据冒充为接管结果，也不会把 node-local file 目录当作共享目录。跨节点分片/对象交换、S3 ObjectStore、WAL/Engine snapshot 注册和完整 Restore 执行仍未完成；当前任务 worker 不能被误认为已经完成了集群备份。
+当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、file 内容寻址对象、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server 已有最小本地 worker：领取当前 Node 的任务，封存 Pack 与 Root state Source，写入本节点的 file Repository Manifest 并回报 Root 完成状态。节点之间不交换对象字节；S3 ObjectStore、WAL/Engine snapshot 注册和完整集群 Restore 执行仍未完成。
 
