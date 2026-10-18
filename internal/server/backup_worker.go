@@ -16,6 +16,8 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/recovery"
 	"github.com/dubi-project/dubi/internal/platform/recovery/repository"
+	"github.com/dubi-project/dubi/internal/platform/rpc/nodeadminrpc"
+	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 )
 
 const (
@@ -27,8 +29,10 @@ const (
 // own Repository objects and Manifest; Root only coordinates the cluster job
 // completion. The worker never treats a node-local Repository as shared.
 type backupWorker struct {
-	runtime *node.Runtime
-	report  func(error)
+	runtime   *node.Runtime
+	client    *raftrpc.GroupClient
+	storeRoot string
+	report    func(error)
 }
 
 func (w *backupWorker) run(ctx context.Context) {
@@ -51,6 +55,7 @@ func (w *backupWorker) run(ctx context.Context) {
 }
 
 func (w *backupWorker) process(ctx context.Context) {
+	w.syncRepositoryKey(ctx)
 	jobs, err := w.runtime.Root.BackupJobs()
 	if err != nil {
 		w.reportError(fmt.Errorf("list Backup jobs: %w", err))
@@ -63,6 +68,40 @@ func (w *backupWorker) process(ctx context.Context) {
 		if err := w.processJob(ctx, job); err != nil {
 			w.reportError(fmt.Errorf("Backup job %s: %w", job.JobID, err))
 		}
+	}
+}
+
+// syncRepositoryKey distributes the existing Store-local key over the
+// authenticated NodeAdmin channel. A missing local key is left untouched so
+// a lost key cannot be silently replaced; an administrator can explicitly
+// rotate Repository credentials after that event.
+func (w *backupWorker) syncRepositoryKey(ctx context.Context) {
+	if w == nil || w.client == nil || w.storeRoot == "" {
+		return
+	}
+	key, err := repository.LoadRepositoryKey(w.storeRoot)
+	if err != nil {
+		return
+	}
+	if _, err := w.runtime.ReadRootIndex(ctx); err != nil {
+		return
+	}
+	view, err := w.runtime.Root.RootRoutingView(4096)
+	if err != nil {
+		return
+	}
+	for _, target := range view.Nodes {
+		if target.RaftID == w.runtime.Identity.RaftID {
+			continue
+		}
+		connection, err := w.client.NodeAdminConnection(target)
+		if err != nil {
+			continue
+		}
+		callContext, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_ = nodeadminrpc.TransferRepositoryKey(callContext, connection, w.runtime.Identity.ClusterID, w.runtime.Identity.RaftID, key)
+		cancel()
+		_ = connection.Close()
 	}
 }
 

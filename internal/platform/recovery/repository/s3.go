@@ -24,9 +24,9 @@ const s3ServiceName = "s3"
 // Repository credential envelope. They are intentionally separate from the
 // persisted Repository record.
 type S3Credentials struct {
-	AccessKey    string
-	SecretKey    string
-	SessionToken string
+	AccessKey    string `json:"access_key"`
+	SecretKey    string `json:"secret_key"`
+	SessionToken string `json:"session_token,omitempty"`
 }
 
 // SealS3Credentials returns a copy of value with its S3 credentials stored as

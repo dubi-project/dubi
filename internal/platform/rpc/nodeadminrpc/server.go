@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	methodRemoveNode        = "/dubi.internal.nodeadmin.v1.NodeAdmin/RemoveNode"
-	methodRemoveNodeByName  = "/dubi.internal.nodeadmin.v1.NodeAdmin/RemoveNodeByName"
-	methodRenameNode        = "/dubi.internal.nodeadmin.v1.NodeAdmin/RenameNode"
-	methodSignerWrappingKey = "/dubi.internal.nodeadmin.v1.NodeAdmin/SignerWrappingKey"
-	methodTransferSigner    = "/dubi.internal.nodeadmin.v1.NodeAdmin/TransferSigner"
+	methodRemoveNode            = "/dubi.internal.nodeadmin.v1.NodeAdmin/RemoveNode"
+	methodRemoveNodeByName      = "/dubi.internal.nodeadmin.v1.NodeAdmin/RemoveNodeByName"
+	methodRenameNode            = "/dubi.internal.nodeadmin.v1.NodeAdmin/RenameNode"
+	methodSignerWrappingKey     = "/dubi.internal.nodeadmin.v1.NodeAdmin/SignerWrappingKey"
+	methodTransferSigner        = "/dubi.internal.nodeadmin.v1.NodeAdmin/TransferSigner"
+	methodTransferRepositoryKey = "/dubi.internal.nodeadmin.v1.NodeAdmin/TransferRepositoryKey"
 )
 
 type RemoveFunc func(context.Context, uint64) error
@@ -40,17 +41,19 @@ type RemoveByNameRouter func(context.Context, string) (handled bool, target uint
 type RenameFunc func(context.Context, string) error
 type SignerWrappingKeyFunc func(context.Context) ([]byte, error)
 type TransferSignerFunc func(context.Context, uint64, uint64, []byte) error
+type TransferRepositoryKeyFunc func(context.Context, uint64, []byte) error
 
 type Server struct {
-	identity     identity.Identity
-	authorize    raftrpc.AuthorizePeer
-	remove       RemoveFunc
-	removeByName RemoveByNameFunc
-	routeRemove  RemoveRouter
-	routeByName  RemoveByNameRouter
-	rename       RenameFunc
-	wrappingKey  SignerWrappingKeyFunc
-	transfer     TransferSignerFunc
+	identity              identity.Identity
+	authorize             raftrpc.AuthorizePeer
+	remove                RemoveFunc
+	removeByName          RemoveByNameFunc
+	routeRemove           RemoveRouter
+	routeByName           RemoveByNameRouter
+	rename                RenameFunc
+	wrappingKey           SignerWrappingKeyFunc
+	transfer              TransferSignerFunc
+	transferRepositoryKey TransferRepositoryKeyFunc
 }
 
 func (s *Server) SetRenameFunc(rename RenameFunc) { s.rename = rename }
@@ -62,6 +65,10 @@ func (s *Server) SetRemoveRouter(router RemoveRouter) { s.routeRemove = router }
 func (s *Server) SetRemoveByNameRouter(router RemoveByNameRouter) { s.routeByName = router }
 
 func (s *Server) SetTransferSignerFunc(transfer TransferSignerFunc) { s.transfer = transfer }
+
+func (s *Server) SetTransferRepositoryKeyFunc(transfer TransferRepositoryKeyFunc) {
+	s.transferRepositoryKey = transfer
+}
 
 func (s *Server) SetSignerWrappingKeyFunc(key SignerWrappingKeyFunc) { s.wrappingKey = key }
 
@@ -255,6 +262,41 @@ func (s *Server) SignerWrappingKey(ctx context.Context, request *structpb.Struct
 	return structpb.NewStruct(map[string]any{"cluster_id": s.identity.ClusterID, "raft_id": strconv.FormatUint(s.identity.RaftID, 10), "key": base64.RawURLEncoding.EncodeToString(key)})
 }
 
+func (s *Server) TransferRepositoryKey(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	if s.transferRepositoryKey == nil {
+		return nil, status.Error(codes.Unimplemented, "Repository key transfer is unavailable")
+	}
+	if request == nil {
+		return nil, status.Error(codes.InvalidArgument, "Repository key transfer request is required")
+	}
+	clusterID, err := stringField(request, "cluster_id")
+	if err != nil || clusterID != s.identity.ClusterID {
+		return nil, status.Error(codes.PermissionDenied, "Repository key transfer belongs to another Cluster")
+	}
+	from, err := uintField(request, "from_raft_id")
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "from_raft_id is required")
+	}
+	encoded, err := stringField(request, "key")
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	key, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(key) != 32 {
+		return nil, status.Error(codes.InvalidArgument, "Repository key is invalid")
+	}
+	if err := s.authorizePeer(ctx, from); err != nil {
+		return nil, err
+	}
+	if err := s.transferRepositoryKey(ctx, from, key); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
+		return nil, status.Errorf(codes.FailedPrecondition, "Repository key transfer did not complete: %v", err)
+	}
+	return structpb.NewStruct(map[string]any{"cluster_id": s.identity.ClusterID, "completed": true})
+}
+
 func (s *Server) authorizeLocal(ctx context.Context, raftID uint64) error {
 	return s.authorizePeer(ctx, raftID)
 }
@@ -340,6 +382,18 @@ func TransferSigner(ctx context.Context, conn grpc.ClientConnInterface, clusterI
 	}
 	response := new(structpb.Struct)
 	return conn.Invoke(ctx, methodTransferSigner, request, response)
+}
+
+func TransferRepositoryKey(ctx context.Context, conn grpc.ClientConnInterface, clusterID string, from uint64, key []byte) error {
+	if len(key) != 32 {
+		return errors.New("Repository key transfer requires a 32-byte key")
+	}
+	request, err := structpb.NewStruct(map[string]any{"cluster_id": clusterID, "from_raft_id": strconv.FormatUint(from, 10), "key": base64.RawURLEncoding.EncodeToString(key)})
+	if err != nil {
+		return err
+	}
+	response := new(structpb.Struct)
+	return conn.Invoke(ctx, methodTransferRepositoryKey, request, response)
 }
 
 func SignerWrappingKey(ctx context.Context, conn grpc.ClientConnInterface, clusterID string, from uint64) ([]byte, error) {
@@ -429,6 +483,7 @@ var serviceDesc = grpc.ServiceDesc{
 		RenameNode(context.Context, *structpb.Struct) (*structpb.Struct, error)
 		SignerWrappingKey(context.Context, *structpb.Struct) (*structpb.Struct, error)
 		TransferSigner(context.Context, *structpb.Struct) (*structpb.Struct, error)
+		TransferRepositoryKey(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	})(nil),
 	Methods: []grpc.MethodDesc{{
 		MethodName: "RemoveNode",
@@ -505,5 +560,22 @@ var serviceDesc = grpc.ServiceDesc{
 			}
 			return interceptor(ctx, request, &grpc.UnaryServerInfo{Server: srv, FullMethod: methodTransferSigner}, invoke)
 		},
-	}},
+	}, {
+		MethodName: "TransferRepositoryKey",
+		Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+			in := new(structpb.Struct)
+			if err := dec(in); err != nil {
+				return nil, err
+			}
+			if interceptor == nil {
+				return srv.(*Server).TransferRepositoryKey(ctx, in)
+			}
+			info := &grpc.UnaryServerInfo{Server: srv, FullMethod: methodTransferRepositoryKey}
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				return srv.(*Server).TransferRepositoryKey(ctx, req.(*structpb.Struct))
+			}
+			return interceptor(ctx, in, info, handler)
+		},
+	},
+	},
 }

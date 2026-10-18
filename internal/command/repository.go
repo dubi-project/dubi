@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -56,6 +57,7 @@ func mutateRepository(ctx context.Context, operation string, args []string, stdo
 	endpoint := flags.String("endpoint", "", "optional S3-compatible HTTP(S) endpoint")
 	region := flags.String("region", "", "S3 region")
 	pathStyle := flags.Bool("path-style", false, "use S3 path-style requests")
+	credentialsFile := flags.String("credentials-file", "", "0600 JSON file with access_key, secret_key and optional session_token")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -70,7 +72,7 @@ func mutateRepository(ctx context.Context, operation string, args []string, stdo
 	}
 	*server = address
 	if flags.NArg() != 1 || *store == "" || identityenrollment.ValidateNodeAddress(*server) != nil {
-		return fmt.Errorf("usage: dubi repository %s [--store path] [--server host:port] [--request-id ID] [--type file|s3] [--path path] [--bucket bucket] [--prefix prefix] [--endpoint URL] [--region region] [--path-style] <name>", operation)
+		return fmt.Errorf("usage: dubi repository %s [--store path] [--server host:port] [--request-id ID] [--type file|s3] [--path path] [--bucket bucket] [--prefix prefix] [--endpoint URL] [--region region] [--path-style] [--credentials-file JSON] <name>", operation)
 	}
 	if err := ensureRequestID(requestID); err != nil {
 		return err
@@ -129,13 +131,32 @@ func mutateRepository(ctx context.Context, operation string, args []string, stdo
 			value.PathStyle = existing.GetPathStyle()
 		}
 	}
+	if *credentialsFile != "" {
+		if !value.IsS3() {
+			return errors.New("--credentials-file requires an S3 Repository")
+		}
+		key, keyErr := repository.LoadRepositoryKey(*store)
+		if keyErr != nil {
+			return fmt.Errorf("load local Repository key: %w", keyErr)
+		}
+		credentials, credentialErr := readS3CredentialsFile(*credentialsFile)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		value, err = repository.SealS3Credentials(value, key, 1, credentials)
+		if err != nil {
+			return fmt.Errorf("encrypt Repository credentials: %w", err)
+		}
+	}
 	if operation == "update" {
 		if err := value.Validate(); err != nil {
 			return fmt.Errorf("invalid Repository configuration: %w", err)
 		}
 	}
 	wire := &datawire.RepositoryConfig{Name: value.Name, Type: string(value.Type), Path: value.Path,
-		Bucket: value.Bucket, Prefix: value.Prefix, Endpoint: value.Endpoint, Region: value.Region, PathStyle: value.PathStyle}
+		Bucket: value.Bucket, Prefix: value.Prefix, Endpoint: value.Endpoint, Region: value.Region, PathStyle: value.PathStyle,
+		EncryptedCredentials: value.EncryptedCredentials, CredentialsNonce: value.CredentialsNonce,
+		CredentialsAlgorithm: value.CredentialsAlgorithm, CredentialsKeyVersion: value.CredentialsKeyVersion}
 	var response *datawire.RepositoryMutationResponse
 	if operation == "add" {
 		response, err = client.CreateRepository(call, &datawire.CreateRepositoryRequest{ClusterId: id.ClusterID, FromRaftId: id.RaftID, RequestId: *requestID, Repository: wire})
@@ -146,6 +167,31 @@ func mutateRepository(ctx context.Context, operation string, args []string, stdo
 		return err
 	}
 	return encodeRepositoryJSON(stdout, response)
+}
+
+func readS3CredentialsFile(path string) (repository.S3Credentials, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return repository.S3Credentials{}, fmt.Errorf("read S3 credentials file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() == 0 || info.Size() > 16<<10 {
+		return repository.S3Credentials{}, errors.New("S3 credentials file must be a private regular file up to 16 KiB")
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return repository.S3Credentials{}, fmt.Errorf("read S3 credentials file: %w", err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	var credentials repository.S3Credentials
+	if err := decoder.Decode(&credentials); err != nil {
+		return repository.S3Credentials{}, errors.New("invalid S3 credentials JSON")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return repository.S3Credentials{}, errors.New("invalid S3 credentials JSON")
+	}
+	return credentials, nil
 }
 
 func listRepositories(ctx context.Context, args []string, stdout, stderr io.Writer, wanted string) error {

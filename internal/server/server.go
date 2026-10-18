@@ -32,6 +32,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
 	"github.com/dubi-project/dubi/internal/platform/rpc/datawire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/enrollmentrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/enrollmentwire"
@@ -403,6 +404,18 @@ func Open(options Options) (*Server, error) {
 		}
 		return nil
 	})
+	nodeAdminServer.SetTransferRepositoryKeyFunc(func(ctx context.Context, from uint64, key []byte) error {
+		_ = from
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, found, err := runtime.Root.Node(runtime.Identity.RaftID); err != nil {
+			return err
+		} else if !found {
+			return errors.New("Repository key target is not registered in Root")
+		}
+		return repository.InstallRepositoryKey(options.StoreRoot, key)
+	})
 	nodeadminrpc.RegisterServer(grpcServer, nodeAdminServer)
 	rootJoinServer, err := rootjoinrpc.NewServer(runtime.Host, runtime.Root, runtime.Identity.ClusterID)
 	if err != nil {
@@ -498,7 +511,7 @@ func Open(options Options) (*Server, error) {
 		dataServer.geoRecords = geoRecordRepair
 	}
 	volumeMigration = &volumeMigrationWorker{runtime: runtime, report: options.ReportError, budget: dataServer.maintenance}
-	backup = &backupWorker{runtime: runtime, report: options.ReportError}
+	backup = &backupWorker{runtime: runtime, client: client, storeRoot: options.StoreRoot, report: options.ReportError}
 	var publicHTTP *http.Server
 	var publicTLS *tls.Config
 	ready := make(chan struct{})

@@ -53,3 +53,17 @@ func TestRepositoryKeyRejectsWeakPermissions(t *testing.T) {
 		t.Fatal("weak Repository key permissions were accepted")
 	}
 }
+
+func TestRepositoryKeyInstallIsIdempotentAndRejectsConflict(t *testing.T) {
+	store := t.TempDir()
+	key := bytes.Repeat([]byte{0x55}, repositoryKeyBytes)
+	if err := InstallRepositoryKey(store, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallRepositoryKey(store, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallRepositoryKey(store, bytes.Repeat([]byte{0x56}, repositoryKeyBytes)); err == nil {
+		t.Fatal("conflicting Repository key was accepted")
+	}
+}

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -75,6 +76,59 @@ func LoadRepositoryKey(store string) ([]byte, error) {
 		return nil, errors.New("invalid Repository key length")
 	}
 	return key, nil
+}
+
+// InstallRepositoryKey installs a key received over an authenticated internal
+// channel. An existing different key is rejected so a Node cannot silently
+// switch Repository credentials because of a stale or misrouted transfer.
+func InstallRepositoryKey(store string, key []byte) error {
+	if err := validateStorePath(store); err != nil {
+		return err
+	}
+	if len(key) != repositoryKeyBytes {
+		return errors.New("invalid Repository key length")
+	}
+	path := filepath.Join(store, RepositoryKeyFileName)
+	if existing, err := LoadRepositoryKey(store); err == nil {
+		if !bytes.Equal(existing, key) {
+			return errors.New("Repository key conflicts with the existing Store key")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(store, ".repository-key-")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(key); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(temporaryName, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			installed, readErr := LoadRepositoryKey(store)
+			if readErr != nil || !bytes.Equal(installed, key) {
+				return errors.New("Repository key conflicts with the existing Store key")
+			}
+			return nil
+		}
+		return err
+	}
+	return syncRepositoryDirectory(store)
 }
 
 func validateStorePath(store string) error {
