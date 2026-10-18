@@ -29,6 +29,84 @@ type S3Credentials struct {
 	SessionToken string
 }
 
+// SealS3Credentials returns a copy of value with its S3 credentials stored as
+// an authenticated encrypted envelope. The plaintext document never becomes
+// part of the Repository record or the Root command.
+func SealS3Credentials(value Repository, key []byte, keyVersion uint32, credentials S3Credentials) (Repository, error) {
+	if err := value.Validate(); err != nil {
+		return Repository{}, err
+	}
+	if !value.IsS3() {
+		return Repository{}, errors.New("S3 credentials require an S3 Repository")
+	}
+	if keyVersion == 0 {
+		return Repository{}, errors.New("S3 credential key version is required")
+	}
+	if err := validateS3Credentials(credentials); err != nil {
+		return Repository{}, err
+	}
+	document, err := json.Marshal(credentials)
+	if err != nil {
+		return Repository{}, err
+	}
+	ciphertext, nonce, algorithm, err := EncryptCredentials(key, document)
+	if err != nil {
+		return Repository{}, err
+	}
+	value.EncryptedCredentials = ciphertext
+	value.CredentialsNonce = nonce
+	value.CredentialsAlgorithm = CredentialAlgorithmName(algorithm)
+	value.CredentialsKeyVersion = keyVersion
+	return value, nil
+}
+
+// OpenS3Credentials decrypts the Repository credential envelope. The caller
+// owns the returned plaintext and must keep it out of logs and persistent
+// Root state.
+func OpenS3Credentials(value Repository, key []byte) (S3Credentials, error) {
+	if err := value.Validate(); err != nil {
+		return S3Credentials{}, err
+	}
+	if !value.IsS3() {
+		return S3Credentials{}, errors.New("S3 credentials require an S3 Repository")
+	}
+	if len(value.EncryptedCredentials) == 0 {
+		return S3Credentials{}, errors.New("S3 Repository has no credential envelope")
+	}
+	algorithm, err := CredentialAlgorithmID(value.CredentialsAlgorithm)
+	if err != nil {
+		return S3Credentials{}, err
+	}
+	document, err := DecryptCredentials(key, value.EncryptedCredentials, value.CredentialsNonce, algorithm)
+	if err != nil {
+		return S3Credentials{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.DisallowUnknownFields()
+	var credentials S3Credentials
+	if err := decoder.Decode(&credentials); err != nil {
+		return S3Credentials{}, errors.New("invalid S3 credential document")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return S3Credentials{}, errors.New("invalid S3 credential document")
+	}
+	if err := validateS3Credentials(credentials); err != nil {
+		return S3Credentials{}, err
+	}
+	return credentials, nil
+}
+
+func validateS3Credentials(value S3Credentials) error {
+	if value.AccessKey == "" && value.SecretKey == "" && value.SessionToken == "" {
+		return nil
+	}
+	if value.AccessKey == "" || value.SecretKey == "" || len(value.AccessKey) > 256 || len(value.SecretKey) > 1024 || len(value.SessionToken) > 16<<10 {
+		return errors.New("invalid S3 credentials")
+	}
+	return nil
+}
+
 type S3Store struct {
 	repository  Repository
 	credentials S3Credentials

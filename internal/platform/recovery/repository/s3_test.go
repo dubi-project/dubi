@@ -56,6 +56,39 @@ func TestS3StoreBackupAndRestore(t *testing.T) {
 	}
 }
 
+func TestS3CredentialEnvelopeRoundTrip(t *testing.T) {
+	config := Repository{Name: "primary", Type: TypeS3, Bucket: "dubi", Region: "test-1"}
+	key := bytes.Repeat([]byte{0x42}, 32)
+	expected := S3Credentials{AccessKey: "access", SecretKey: "secret", SessionToken: "session"}
+	sealed, err := SealS3Credentials(config, key, 3, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sealed.CredentialsAlgorithm != CredentialAlgorithmAES256GCMName || sealed.CredentialsKeyVersion != 3 || bytes.Contains(sealed.EncryptedCredentials, []byte("secret")) {
+		t.Fatalf("credentials were not sealed: %+v", sealed)
+	}
+	decoded, err := OpenS3Credentials(sealed, key)
+	if err != nil || decoded != expected {
+		t.Fatalf("credentials = %+v, err=%v", decoded, err)
+	}
+	if _, err := OpenS3Credentials(sealed, bytes.Repeat([]byte{0x43}, 32)); err == nil {
+		t.Fatal("wrong credential key was accepted")
+	}
+}
+
+func TestS3CredentialEnvelopeRejectsMalformedDocument(t *testing.T) {
+	config := Repository{Name: "primary", Type: TypeS3, Bucket: "dubi"}
+	key := bytes.Repeat([]byte{0x44}, 32)
+	sealed, err := SealS3Credentials(config, key, 1, S3Credentials{AccessKey: "access", SecretKey: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed.EncryptedCredentials = append(sealed.EncryptedCredentials, 0x01)
+	if _, err := OpenS3Credentials(sealed, key); err == nil {
+		t.Fatal("tampered credential envelope was accepted")
+	}
+}
+
 func TestS3StoreRejectsTamperedObjectOnManifestRead(t *testing.T) {
 	server, objects, _ := newFakeS3(t)
 	defer server.Close()
