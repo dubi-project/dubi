@@ -43,7 +43,7 @@ Engine 状态及快照格式为 v7，内联/外置值都由完整 Keyspace 键�
 
 当前 `meta/format=7` 标记仅在空状态库初始化。拒绝没有标记的非空旧状态、其他格式版本以及 v1/v2/v3/v4/v5/v6 快照：早期 Engine-local 键不能可靠判断 Tenant/Dataset，v3 没有区域成员位置栅栏，v4 不认识持久交接封口和写入门禁，v5 不认识权威记录引用，v6 不认识本地多数确认记录；不自动改名或猜测归属。没有执行任何现有数据迁移，迁移工具及生产升级路径尚未完成。无 Pool 的内部状态可将 v7 普通 KV 值恢复为内联值，但已有 Pack 引用的状态仍必须绑定原 Store。本地引用格式保持 v1，Pack 容器保持 `DUBIPK02`；物理混写不变。不能混用旧二进制或降级打开新目录；仍需 P11 的节点级协议/格式协商。
 
-正式 Node 的 Root 与 Engine Group 使用有界有序文件流、SHA-256 引用和流式网络导入，已验证 Root 目录及 80 MiB 数据状态的三节点追平和空索引重启恢复。独立无 artifact runtime 的旧 JSON 仍限制总编码 64 MiB；超过上限返回错误，不因生成失败截断日志。恢复中的 Pack 追加走逐条空间预约，但整个快照的内存、Pebble/WAL 和临时文件尚未统一纳入预算。这不是 Node Snapshot 或 Cluster Backup，也不代替通用资源登记。详见 [流式快照](streaming-snapshot.md)。
+正式 Node 的 Root 与 Engine Group 使用有界有序文件流、SHA-256 引用和流式网络导入，已验证 Root 目录及 80 MiB 数据状态的三节点追平和空索引重启恢复。独立无 artifact runtime 的旧 JSON 仍限制总编码 64 MiB；超过上限返回错误，不因生成失败截断日志。恢复中的 Pack 追加走逐条空间预约，但整个快照的内存、Pebble/WAL 和临时文件尚未统一纳入预算。该输出由 Raft Snapshot 使用，不是独立节点备份或 Cluster Backup，也不代替通用资源登记。详见 [流式快照](streaming-snapshot.md)。
 
 当前 Raft 日志仍携带完整命令，Result 也仍内联保存 Handler 返回值。把状态大值移到 Pack 不等于已经消除 WAL/Result 中的重复载荷，也不提供文件大对象直传、跨区域耐久目标或完整的容量治理。具体能力应返回有界结果；后续还需结果保留策略和统一资源预算。
 

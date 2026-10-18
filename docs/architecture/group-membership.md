@@ -1,8 +1,8 @@
 # 数据 Group 成员任务与位置栅栏
 
-数据 Group 的 PrepareJoining、AddLearner、PromoteLearner、RemoveMember 和 TransferLeadership 均绑定 **原始 Root 任务**；成员变更使用实际成员位置 CAS，转移还绑定 leader term。这是内部节点控制协议，不增加用户 ID、副本数或配置参数。区域自动严格增长由[交接协调器](region-handoff.md)消费这些任务；本协议不代表故障替补、Drain 或业务数据迁移已完成。
+数据 Group 的 PrepareJoining、AddLearner、PromoteLearner、RemoveMember 和 TransferLeadership 均绑定 **原始 Root 任务**；成员变更使用实际成员位置 CAS，转移还绑定 leader term。这是内部节点控制协议，不增加用户 ID、副本数或配置参数。区域自动严格增长由[交接协调器](region-handoff.md)消费这些任务；本协议不代表 Drain、Placement 或业务数据迁移已完成。
 
-已确认的区域 Group 进一步要求增长任务来自 `AuthorizeRegionGrowth` 的原子授权，绑定当前 pending 代际与旧 seal；普通 PlanGroupMembers 和直接 Publish 不得绕过这些门禁。另有显式 `Maintenance` 成员任务，只能移除现有成员、保留当前 voter 严格多数，不添加新成员；它用于管理员确认后的普通节点退出，不是替换任务。Root 处于联合配置等临时不合格状态时，成员任务暂停；完成提交使用新 Root 切点的请求 ID 重试，避免第一次持久拒绝污染后续恢复，已完成任务则不重复执行。详见[区域交接](region-handoff.md)。
+已确认的区域 Group 进一步要求增长任务来自 `AuthorizeRegionGrowth` 的原子授权，绑定当前 pending 代际与旧 seal；普通 PlanGroupMembers 和直接 Publish 不得绕过这些门禁。另有显式 `Maintenance` 成员任务，只能移除现有成员、保留当前 voter 严格多数，不添加新成员；它用于管理员确认后的普通节点退出。Root 处于联合配置等临时不合格状态时，成员任务暂停；完成提交使用新 Root 切点的请求 ID 重试，避免第一次持久拒绝污染后续恢复，已完成任务则不重复执行。详见[区域交接](region-handoff.md)。
 
 ## 两个独立检查
 
@@ -15,7 +15,7 @@ Root 读屏障后，服务端在同一 Root 状态锁内验证：
 - 被调用节点属于已发布成员或该任务的目标集合，避免新 leader 尚未发布时无法继续。
 - Add 目标在期望集合，Promote 目标期望为 voter；两者还必须是当前 Root 成员。Remove 目标来自原已发布集合且不在期望集合，允许清理已经退出 Root 的旧数据参与者。
 
-随后，Raft Group 在与提案相同的临界区里核对成员位置和完整 ConfState。`MembershipCut.Index` 是最近一次持久应用 ConfChange 的位置，不是整个状态机的 applied index：普通数据写入不会让它过期，但移除再加入、即使名单恢复原样，也会让旧位置永久失效。仍保留原有 leader、joint、磁盘准入、learner 活跃/追平和不能由底层 Raft 直接移除本地 leader/最后 voter 的限制；显式 `node remove` 对确认的单节点 Region 会先由 Root 退休该 Region Group，再完成身份移除和 Fence。
+随后，Raft Group 在与提案相同的临界区里核对成员位置和完整 ConfState。`MembershipCut.Index` 是最近一次持久应用 ConfChange 的位置，不是整个状态机的 applied index：普通数据写入不会让它过期，但移除再加入、即使名单恢复原样，也会让旧位置永久失效。仍保留原有 leader、joint、磁盘准入、learner 活跃/追平和不能由底层 Raft 直接移除本地 leader/最后 voter 的限制；显式 `node remove` 对确认的单节点 Region 会先由 Root 退休该 Region Group，再完成身份移除和 Fence。成员移除与新节点加入属于同一套正常生命周期，不定义额外的替换任务。
 
 这两层不是跨 Group 原子事务，也不是全局吊销栅栏。Root 检查有时间点边界；Group CAS 防止观察后已发生的成员变化以及 ABA。业务数据授权、维护/撤销的全局序列化仍须独立协议，不能仅凭该检查宣称所有并发管理操作可线性化。
 

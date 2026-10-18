@@ -51,7 +51,7 @@ authority 迁移不建立用户可见的替换流程，后台按以下持久步�
 
 ## 恢复与快照
 
-Node Snapshot 可以包含本机密封 signer envelope，但只能在原 Node 身份恢复时使用；从快照创建新 Node 必须重新经过 authority 传输，不能复制旧 NodeID/RaftID 的签发资格。Cluster Backup 保存 authority epoch、成员和 envelope 摘要，不保存可在任意目标直接解封的 CA 私钥。空集群恢复必须先恢复 CA 根和 authority 多数，再开放新 Node enrollment。
+新节点加入不依赖节点快照，也不能复制旧 NodeID/RaftID 的签发资格。新 Node 先按普通 enrollment 取得新身份并进入 Root，随后由当前 authority 传输对应的 signer envelope。Cluster Backup 保存 authority epoch、成员和 envelope 摘要，不保存可在任意目标直接解封的 CA 私钥。空集群恢复必须先恢复 CA 根和 authority 多数，再开放新 Node enrollment。
 
 ## 当前实现边界
 

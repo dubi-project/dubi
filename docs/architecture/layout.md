@@ -53,7 +53,7 @@ dubi/
 - `platform/node` 与 `platform/storage` 将生命周期意图和健康观察分开。Node/Store/Volume Drain 必须持久、可续跑；Lost 身份要先 Fence，旧盘重现不能自动恢复服务。
 - `platform/placement` 同时比较期望耐久性与实际已确认存放位置；Group 多数派、数据拷贝和 Region 故障策略分别检查，不把计划或暂存拷贝计为 Ready。DUBI 不将 Replica/ReplicaSet 作为底座术语或配置项。
 - `platform/resource` 对 Node/Store 设硬上限，对 Tenant/能力计量，统一前台准入和后台预算；Repair 有保底，备份、均衡、Compaction 和索引任务不能绕过限额。
-- `platform/recovery` 只管理 Raft 快照之外的整节点快照和整集群备份/恢复；登记全部持久资源，统一 Checkpoint、Repository、完整性校验、维护门禁、恢复预检及演练证据，不按 Tenant 或能力筛选，也不解析业务记录格式。Raft 快照由 `platform/raft` 管理。
+- `platform/recovery` 管理 Raft 快照之外的 Cluster Backup/Restore；登记全部持久资源，统一 Checkpoint、Repository、完整性校验、维护门禁、恢复预检及演练证据，不按 Tenant 或能力筛选，也不解析业务记录格式。新节点通过普通 Join、Raft Snapshot 追赶和 Placement/Repair 恢复，不需要 Node Snapshot。Raft 快照由 `platform/raft` 管理。
 - File、Log、Search 等能力自己的业务数据导入/导出留在 `engine/*`，不复用集群备份格式，也不能替代整集群恢复。
 - `platform/auth` 与 `platform/cluster` 以 Tenant 作为数据归属、权限和计量边界；同一 Tenant 的业务应用可共享 Dataset，键、路径或名称前缀由业务方自行约定。
 - `platform/storage/pack` 提供 Pack 的追加、校验、封存、恢复与 Compaction 生命周期。File Block 默认使用 Pack；各能力自己的记录编码、索引、保留及 GC 不进入通用 Pack 层。

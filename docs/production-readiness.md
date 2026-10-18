@@ -10,7 +10,7 @@
 - 默认 Store `/var/lib/dubi`，未显式指定卷才登记 `<store>/volume`；失卷不创建空替代卷。
 - 各 Engine/Tenant 可以混写同一个 Pack；不按能力分目录、分卷或分 Pack。
 - 多 Tenant 的授权和隔离在底座边界落实；Project 不作为集群资源。
-- 备份/恢复面向底座持久资源，模块业务导入/导出独立。Node Snapshot 恢复不复活旧 Raft 身份。
+- 备份/恢复面向底座持久资源，模块业务导入/导出独立。新节点通过普通 Join、Raft Snapshot 追赶和 Placement/Repair 恢复，不复制旧 Raft 身份。
 - 健康观察不能缩小持久多数门槛；多 Volume 不冒充独立 Node/Region。读写可用性、数据仍有拷贝和多数派确认分别验收。
 
 ## 实施与验收矩阵
@@ -27,8 +27,8 @@
 | P06 | 自动拓扑、稳定故障域多数、Placement/Repair | 部分实现：正式托管流程已接入自动 Root voter 选择、追赶/活跃门禁、ConfState CAS 与联合共识；区域自动初始建组/确认及后继严格增长交接已接通。增长经过全体旧成员 seal、Root 授权任务、全体新成员候选与精确激活；真实 CLI/mTLS 覆盖 3→4→5、封口中重启及完成后故障/冷启动。数据多数回执、小区域跨区确认和 Placement/Repair 未完成。Root 票数或成员增长不能替代数据耐久策略。见 [自动 Root 拓扑](architecture/root-topology.md)、[区域集合与建组](architecture/region-cohorts.md)、[增长交接](architecture/region-handoff.md)。 |
 | P07 | 持久资源登记、Checkpoint 与 GC 保护 | 部分实现：快照集合已自动登记到 Node/Raft/Store；Group 目录、Raft 日志及其内部身份相互登记，pending 恢复、active 丢失不重建，初始 formation 不变。尚无覆盖全部 Pack/状态库/临时资源的通用清单和 Checkpoint/GC 保护。见 [Group 存储边界](architecture/group-storage.md)。 |
 | P08 | Pack GC/Compaction、节点内均衡、卷安全移除 | 基础实现已完成：Store 按完整索引快照回收无引用 sealed Pack；`dubi volume compact --rewrite` 会校验后搬迁活记录并回收混合 Pack；Volume Drain 后的迁移游标持久化、断点续跑、在线/停机安全移除和维护预算已接通。跨节点长期容量均衡、快照保护和生产长时验收仍未完成。 |
-| P09 | Node Snapshot、Cluster Backup/Restore | 未完成；必须在独立目标上恢复、核验，并处理身份和密钥边界。 |
-| P10 | 维护门禁、Drain、自动替补、故障重建 | 基础维护门禁已接通：Drain/Remove 为显式操作，健康源卷必须完成记录迁移与 Pack 回收，丢盘移除会清理本地迁移任务但保留 Repair debt；迁移/压缩使用独立维护并发和字节预算，状态可通过 `status` 观察。跨 Root/多 Group 的长期自动收敛、容量/故障域生产验收仍未完成。见[成员任务与位置栅栏](architecture/group-membership.md)。 |
+| P09 | Cluster Backup/Restore | 未完成；必须在独立目标上封存、恢复和核验全部已登记持久资源，并处理格式、身份和密钥边界。节点重新加入不依赖节点快照。 |
+| P10 | 成员维护、Drain 与数据再平衡 | 基础维护门禁已接通：Drain/Remove 为显式操作，健康源卷必须完成记录迁移与 Pack 回收，丢盘移除会清理本地迁移任务但保留 Repair debt；迁移/压缩使用独立维护并发和字节预算，状态可通过 `status` 观察。跨 Root/多 Group 的长期自动收敛、容量/故障域生产验收仍未完成。见[成员任务与位置栅栏](architecture/group-membership.md)。 |
 | P11 | 协议/磁盘格式协商、滚动升级、回滚边界 | 未完成；当前不得混用旧二进制或降级打开新引用格式。 |
 | P12 | 状态诊断、指标、告警、审计、发布证据 | 未完成；控制面 Ready 不能代替卷可写或数据可恢复证明。 |
 | Q01 | 可重复的本地基础门禁 | 已提供 `bash scripts/foundation_gate.sh`：全量测试/竞态、vet、build、三轮崩溃与压力测试及短时 fuzz；保留源码指纹/脏状态和日志，跳过测试或源码中途变化判失败。通过也只标记本地开发证据，不签发生产资格。 |
