@@ -354,6 +354,12 @@ func (b *blockedReader) ReadIndex(ctx context.Context, _ string) (uint64, error)
 func TestNodeRenewalNetworkWorkBudgetAndCancellation(t *testing.T) {
 	backend := &blockedReader{entered: make(chan struct{}, maxConcurrentRequests)}
 	f := newFixture(t, func(RootReader) RootReader { return backend })
+	// Work-budget admission is exercised with a currently admitted Node. A
+	// pending Node is rejected by the local membership preflight before it needs
+	// a Root barrier, and is covered by TestNodeRenewalNetworkMembershipAndIdentity.
+	if err := f.host.AddLearner(raft.RootGroupID, f.node.RaftID); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, maxConcurrentRequests)

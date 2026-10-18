@@ -155,7 +155,15 @@ func (s *Server) JoinRoot(ctx context.Context, request *rootjoinwire.JoinRootReq
 	if err != nil || !bytes.Equal(canonical, request.RequestDocument) {
 		return nil, status.Error(codes.InvalidArgument, "Root join request is not canonical")
 	}
-	leaf, err := s.authorize(ctx, request.ClusterId, candidate.RaftID, true)
+	// Determine the local role before choosing the authorization barrier. A
+	// follower only redirects and must not propose a local read barrier; doing
+	// so would mutate Root state despite the request being a read-only redirect.
+	state, err := s.host.Status(raft.RootGroupID)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	leader := state.Role == etcdraft.StateLeader && state.LeaderID != 0 && state.LeaderID == state.RaftID
+	leaf, err := s.authorize(ctx, request.ClusterId, candidate.RaftID, leader)
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +171,7 @@ func (s *Server) JoinRoot(ctx context.Context, request *rootjoinwire.JoinRootReq
 	if err != nil || leaf.Subject.CommonName != candidate.NodeID || !bytes.Equal(key, leaf.RawSubjectPublicKeyInfo) {
 		return nil, status.Error(codes.PermissionDenied, "Node certificate does not match enrolled CSR")
 	}
-	state, err := s.host.Status(raft.RootGroupID)
-	if err != nil {
-		return nil, rpcError(err)
-	}
-	if state.Role != etcdraft.StateLeader || state.LeaderID == 0 || state.LeaderID != state.RaftID {
+	if !leader {
 		view, err := s.view()
 		if err != nil {
 			return nil, rpcError(err)
@@ -202,7 +206,7 @@ func (s *Server) DiscoverRoot(ctx context.Context, request *rootjoinwire.Discove
 		return nil, err
 	}
 	defer release()
-	if _, err := s.authorize(ctx, request.ClusterId, request.FromRaftId, false); err != nil {
+	if _, err := s.authorize(ctx, request.ClusterId, request.FromRaftId, true); err != nil {
 		return nil, err
 	}
 	view, err := s.view()

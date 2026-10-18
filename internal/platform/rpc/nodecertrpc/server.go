@@ -165,6 +165,19 @@ func (s *Server) peer(ctx context.Context, request *nodecertwire.RenewNodeReques
 }
 
 func (s *Server) confirmMembership(ctx context.Context, id identity.Identity) error {
+	// Reject identities that are clearly outside the current local Root
+	// membership before issuing a linearizable barrier. A rejected renewal is
+	// read-only; it must not append a Raft no-op merely to discover that the
+	// caller is a pending or already-removed Node.
+	for _, raftID := range []uint64{id.RaftID, s.local.RaftID} {
+		_, member, err := s.root.RootMember(raftID)
+		if err != nil {
+			return status.Error(codes.Unavailable, "Root membership unavailable")
+		}
+		if !member {
+			return status.Error(codes.PermissionDenied, "renewal requires current Node and issuer membership")
+		}
+	}
 	if _, err := s.readRootIndex(ctx); err != nil {
 		if ctx.Err() != nil {
 			return status.FromContextError(ctx.Err()).Err()

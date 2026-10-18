@@ -28,6 +28,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/roottopology"
+	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -912,6 +913,19 @@ func (server *Server) waitForRootLeader(ctx context.Context) error {
 		}
 		if status.LeaderID != 0 {
 			return nil
+		}
+		// A freshly initialized Node has a single local Root voter. Campaign it
+		// immediately instead of making startup wait for the cross-region Root
+		// election lease (currently 15 seconds). Multi-voter Roots still rely on
+		// normal Raft election timing so a joining Node never self-elects.
+		if server.Runtime.Identity.Origin == identity.OriginBootstrap {
+			membership, membershipErr := server.Runtime.Host.Membership(raft.RootGroupID)
+			if membershipErr == nil {
+				voters := membership.GetVoters()
+				if len(voters) == 1 && voters[0] == server.Runtime.Identity.RaftID && len(membership.GetVotersOutgoing()) == 0 {
+					_ = server.Runtime.Host.Campaign(raft.RootGroupID)
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():

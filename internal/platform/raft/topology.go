@@ -71,7 +71,7 @@ func (g *Group) ReconfigureVoters(expected *raftpb.ConfState, voters []uint64) e
 		for _, ids := range [][]uint64{conf.GetVoters(), voters} {
 			for _, id := range ids {
 				p, found := status.Progress[id]
-				if !found || !p.RecentActive || p.Match < status.GetCommit() {
+				if !found || !p.RecentActive || !g.topologyProgressCaughtUp(p.Match, status.GetCommit()) {
 					return fmt.Errorf("%w: voter %d is inactive or behind commit %d", ErrTopologyPending, id, status.GetCommit())
 				}
 			}
@@ -80,6 +80,27 @@ func (g *Group) ReconfigureVoters(expected *raftpb.ConfState, voters []uint64) e
 			Transition: raftpb.ConfChangeTransition_ConfChangeTransitionJointImplicit.Enum(), Changes: changes,
 		})
 	})
+}
+
+// topologyProgressCaughtUp permits a learner that is one entry behind only
+// when the trailing entry is the empty ReadIndex barrier emitted by the local
+// leader. The topology coordinator obtains its confirmed Root cut immediately
+// before this CAS; that barrier may not have reached a WAN learner yet, while
+// admitting the learner at the preceding committed cut is safe. Any actual
+// data or membership entry still requires an exact Match == commit.
+func (g *Group) topologyProgressCaughtUp(match, commit uint64) bool {
+	if match >= commit {
+		return true
+	}
+	if commit == 0 || match+1 != commit {
+		return false
+	}
+	entries, err := g.storage.Entries(commit, commit+1, 1<<20)
+	if err != nil || len(entries) != 1 {
+		return false
+	}
+	entry := entries[0]
+	return entry.GetType() == raftpb.EntryNormal && len(entry.GetData()) == 0
 }
 
 func (h *Host) ReconfigureVoters(groupID string, expected *raftpb.ConfState, voters []uint64) error {
