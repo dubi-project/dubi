@@ -326,24 +326,56 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 		}
 	case strings.HasPrefix(name, "data/range-placement/"):
 		var placement RangePlacement
-		if decodeStreamJSON(value, &placement) != nil || placement.Validate() != nil ||
-			!bytes.Equal(key, rangePlacementKey(placement.RangeID)) {
-			return bad()
+		if err := decodeStreamJSON(value, &placement); err != nil {
+			return fmt.Errorf("%w: decode placement: %v", bad(), err)
+		}
+		if err := placement.Validate(); err != nil {
+			return fmt.Errorf("%w: validate placement: %v", bad(), err)
+		}
+		if !bytes.Equal(key, rangePlacementKey(placement.RangeID)) {
+			return fmt.Errorf("%w: placement key does not match RangeID", bad())
+		}
+		rangePath, err := streamValue(view, rangeIDKey(placement.RangeID))
+		if err != nil {
+			return fmt.Errorf("%w: read Range reverse index: %v", bad(), err)
 		}
 		var descriptor Range
-		if streamJSON(view, rangeIDKey(placement.RangeID), &descriptor) != nil || descriptor.State != RangeStateActive ||
-			descriptor.Epoch != placement.RangeEpoch || descriptor.OwnerGroupID != placement.OwnerGroupID {
-			return bad()
+		if err := streamJSON(view, rangePath, &descriptor); err != nil {
+			return fmt.Errorf("%w: read Range descriptor: %v", bad(), err)
+		}
+		if descriptor.State != RangeStateActive {
+			return fmt.Errorf("%w: Range state is %q", bad(), descriptor.State)
+		}
+		if descriptor.Epoch != placement.RangeEpoch {
+			return fmt.Errorf("%w: Range epoch %d differs from placement epoch %d", bad(), descriptor.Epoch, placement.RangeEpoch)
+		}
+		if descriptor.OwnerGroupID != placement.OwnerGroupID {
+			return fmt.Errorf("%w: Range owner Group %q differs from placement owner %q", bad(), descriptor.OwnerGroupID, placement.OwnerGroupID)
 		}
 		for _, region := range placement.Regions {
 			var group Group
 			var cohort RegionCohort
 			var head RegionCohortHead
-			if streamJSON(view, groupKey(region.GroupID), &group) != nil || group.StateKind != GroupStateEngine ||
-				streamJSON(view, regionCohortKey(region.RegionID, region.Generation), &cohort) != nil || cohort.State != RegionCohortConfirmed ||
-				cohort.GroupID != region.GroupID || streamJSON(view, regionCohortHeadKey(region.RegionID), &head) != nil ||
-				head.CurrentGeneration != region.Generation {
-				return bad()
+			if err := streamJSON(view, groupKey(region.GroupID), &group); err != nil {
+				return fmt.Errorf("%w: read Region Group %q: %v", bad(), region.GroupID, err)
+			}
+			if group.StateKind != GroupStateEngine {
+				return fmt.Errorf("%w: Region Group %q has state kind %q", bad(), region.GroupID, group.StateKind)
+			}
+			if err := streamJSON(view, regionCohortKey(region.RegionID, region.Generation), &cohort); err != nil {
+				return fmt.Errorf("%w: read Region cohort %q generation %d: %v", bad(), region.RegionID, region.Generation, err)
+			}
+			if cohort.State != RegionCohortConfirmed {
+				return fmt.Errorf("%w: Region cohort %q generation %d state is %q", bad(), region.RegionID, region.Generation, cohort.State)
+			}
+			if cohort.GroupID != region.GroupID {
+				return fmt.Errorf("%w: Region cohort %q generation %d belongs to Group %q", bad(), region.RegionID, region.Generation, cohort.GroupID)
+			}
+			if err := streamJSON(view, regionCohortHeadKey(region.RegionID), &head); err != nil {
+				return fmt.Errorf("%w: read Region cohort head %q: %v", bad(), region.RegionID, err)
+			}
+			if head.CurrentGeneration != region.Generation {
+				return fmt.Errorf("%w: Region cohort head %q is generation %d, placement uses %d", bad(), region.RegionID, head.CurrentGeneration, region.Generation)
 			}
 		}
 	case strings.HasPrefix(name, "result/"):

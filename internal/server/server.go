@@ -44,6 +44,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/tlscredentials"
+	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 )
@@ -244,19 +245,32 @@ func Open(options Options) (*Server, error) {
 			targets = append(targets, target{id: id, local: local})
 		}
 		status, _ := runtime.Host.Status(raft.RootGroupID)
+		localLeader := status.Role == etcdraft.StateLeader && status.LeaderID == runtime.Identity.RaftID
 		if membership, membershipErr := runtime.Host.Membership(raft.RootGroupID); membershipErr == nil {
 			for _, voter := range membership.GetVoters() {
-				add(voter, voter == runtime.Identity.RaftID)
+				if voter == runtime.Identity.RaftID && !localLeader {
+					// A local follower cannot complete a quorum ReadIndex by
+					// itself. Do not create a pending local read that can only
+					// expire; use the observed leader below.
+					continue
+				}
+				add(voter, voter == runtime.Identity.RaftID && localLeader)
 			}
 		}
-		add(status.LeaderID, status.LeaderID == runtime.Identity.RaftID)
+		if status.LeaderID != runtime.Identity.RaftID {
+			add(status.LeaderID, false)
+		}
 		if cut, viewErr := runtime.Root.RootRoutingView(rootjoin.MaxViewPeers); viewErr == nil {
 			for _, voter := range cut.Membership.GetVoters() {
 				add(voter, voter == runtime.Identity.RaftID)
 			}
 		}
 		if len(targets) == 0 {
-			add(runtime.Identity.RaftID, true)
+			if localLeader {
+				add(runtime.Identity.RaftID, true)
+			} else {
+				return 0, raft.ErrNoLeader
+			}
 		}
 		probeCtx, cancel := context.WithCancel(ctx)
 		defer cancel()

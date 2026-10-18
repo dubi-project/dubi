@@ -102,12 +102,16 @@ type Group struct {
 	// current-term commit. It prevents concurrent readers from appending an
 	// unbounded stream of identical barrier entries.
 	readBarrierProposalTerm uint64
-	proposalGuard           func() error
-	snapshotting            bool
-	snapshotCancel          context.CancelFunc
-	snapshotWG              sync.WaitGroup
-	closeDone               chan struct{}
-	closeErr                error
+	// readBarrierIndex is the latest leader no-op awaiting application. Read
+	// requests arriving while it is in flight reuse that same barrier instead
+	// of appending another empty entry and growing the Root log themselves.
+	readBarrierIndex uint64
+	proposalGuard    func() error
+	snapshotting     bool
+	snapshotCancel   context.CancelFunc
+	snapshotWG       sync.WaitGroup
+	closeDone        chan struct{}
+	closeErr         error
 }
 
 type pendingRead struct {
@@ -392,6 +396,13 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 		return 0, ErrReadIndexBusy
 	}
 	status := g.raw.Status()
+	coalesceReadBarrier := g.groupID == RootGroupID
+	if coalesceReadBarrier && status.SoftState.RaftState != etcdraft.StateLeader {
+		// A barrier proposed by a previous leader is not a valid admission
+		// shortcut after leadership changes. The new leader will establish its
+		// own barrier when needed.
+		g.readBarrierIndex = 0
+	}
 	// Root's current-term commit already proves a single-voter read, so use
 	// etcd/raft's quorum ReadIndex path there instead of mutating Root with a
 	// no-op.  This keeps idempotent management retries read-only.  Regional
@@ -401,6 +412,15 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 	singleVoter := len(status.Config.Voters[0]) == 1 && len(status.Config.Voters[1]) == 0
 	avoidLeaderBarrier := singleVoter && (g.groupID == RootGroupID || g.snapshotting)
 	if status.SoftState.RaftState == etcdraft.StateLeader && !avoidLeaderBarrier {
+		if coalesceReadBarrier && g.readBarrierIndex != 0 {
+			barrierIndex := g.readBarrierIndex
+			if g.state.AppliedIndex() >= barrierIndex {
+				g.readBarrierIndex = 0
+			} else {
+				g.mu.Unlock()
+				return g.waitApplied(ctx, barrierIndex)
+			}
+		}
 		// A leader proves each read with a fresh empty entry. Waiting for that
 		// entry to become applied is equivalent to a quorum ReadIndex barrier,
 		// while avoiding a second asynchronous read-response path on WAN links.
@@ -418,6 +438,9 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 				return 0, processErr
 			}
 			barrierIndex, indexErr := g.storage.LastIndex()
+			if coalesceReadBarrier && indexErr == nil {
+				g.readBarrierIndex = barrierIndex
+			}
 			g.mu.Unlock()
 			if indexErr != nil {
 				return 0, indexErr
