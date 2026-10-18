@@ -90,13 +90,15 @@ S3 是共享目标，但每个 Node 仍只上传自己封口后的 Pack 和 Root
 - 新增或变化的对象才上传；
 - 未变化对象不重复写入；
 - 每个 Recovery Point 都有独立 Manifest，不依赖前一份差异链；
-- 所有对象完整校验、Manifest 封存后才标记为可恢复；
+- 所有对象完整校验、节点 Manifest 封存并发布集群级 Recovery Point 索引后才标记为可恢复；
 - 备份期间，GC/Compaction 不能删除被当前任务引用的对象；
 - 失败、取消、校验不完整的任务不能作为恢复源。
 
 Manifest 至少记录源 Cluster、Recovery Point 代际、持久资源清单、对象摘要、格式版本、节点和 Store 标识以及校验结果。节点本地 `file` Repository 的每个节点各自保存自己的 Manifest 和对象；Root 的 Backup Job 完成状态把这些本地结果绑定到同一个 Recovery Point。对象不需要在节点之间搬运。
 
 Root 为每个 Backup Job 在创建时分配不可变 `Epoch`（取创建日志位置），它是该 Recovery Point 在 Repository 内的唯一封存命名空间；领取租约、节点接管和完成状态变化不会改写这个 Epoch。
+
+所有节点 Worker 完成后会发布一个集群级 Recovery Point 索引。S3 索引位于共享 Prefix 下，发布前逐个读取并校验 `nodes/<NodeID>/` 下的 Manifest 和对象；file Repository 在每个节点本地保存同样的节点集合索引，Root 的完成状态负责确认其它节点的本地任务已经完成。
 
 ## 4. 任务与恢复
 
@@ -124,7 +126,7 @@ Placement / Repair / Rebalance
 恢复集群级可服务状态
 ```
 
-恢复不复制旧节点目录、旧 NodeID/RaftID、旧成员关系或旧 Pack 路径；恢复后的节点使用自己的身份。恢复完成前必须验证所有注册的底座持久资源可打开、对象摘要一致、Group 状态可服务。
+恢复不复制旧节点目录、旧 NodeID/RaftID、旧成员关系或旧 Pack 路径；恢复后的节点使用自己的身份。底座 `RestoreCluster` 会先读取 Recovery Point 索引，校验所有节点 Manifest、对象和目标映射，再开始任何目标写入；目标可以把旧节点 Artifact 安装到新的 Node/Store 身份。恢复完成前必须验证所有注册的底座持久资源可打开、对象摘要一致、Group 状态可服务。
 
 ## 5. 第一阶段实现边界
 
@@ -144,5 +146,5 @@ Placement / Repair / Rebalance
 - 直接在线写磁带；
 - 依赖外部 Secret Manager 或环境变量保存凭据。
 
-当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、节点命名空间、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server Worker 已支持 file/S3 Repository、Pack/Root/Engine Group Artifact，节点通过内部 NodeAdmin mTLS 同步 Repository 密钥，`--credentials-file` 可加密更新 S3 凭据。节点之间不交换对象字节；新的 Engine Group 快照登记仍只覆盖当前已打开 Group，完整集群 Restore 执行和新节点的资源安装流程仍未完成。
+当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、节点命名空间、节点 Manifest、集群级 Recovery Point 索引、完整性校验和原子封存；`internal/platform/recovery/{backup,restore}.go` 已实现不透明 Artifact 备份、单节点恢复和跨节点全量预检恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server Worker 已支持 file/S3 Repository、Pack/Root/Engine Group Artifact，节点通过内部 NodeAdmin mTLS 同步 Repository 密钥，`--credentials-file` 可加密更新 S3 凭据。节点之间不交换对象字节；新集群的 Root/Engine/Pack 实际安装、身份映射和运行时启动流程仍需完成。
 

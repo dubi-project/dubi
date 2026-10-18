@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/recovery/repository"
 )
@@ -188,5 +189,51 @@ func TestRestorePreflightsAllTargetsBeforeApplying(t *testing.T) {
 	}}})
 	if err == nil || applied != 0 {
 		t.Fatalf("restore applied before target preflight: err=%v applied=%d", err, applied)
+	}
+}
+
+func TestRestoreClusterPreflightsEveryNodeBeforeApplying(t *testing.T) {
+	configA := repository.Repository{Name: "local", Type: repository.TypeFile, Path: t.TempDir()}
+	configB := repository.Repository{Name: "local", Type: repository.TypeFile, Path: t.TempDir()}
+	storeA, err := repository.OpenFile(configA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeB, err := repository.OpenFile(configB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		store  *repository.FileStore
+		nodeID string
+		body   string
+	}{
+		{store: storeA, nodeID: "node-a", body: "a"},
+		{store: storeB, nodeID: "node-b", body: "b"},
+	} {
+		fixture := fixture
+		object, putErr := fixture.store.PutObject(context.Background(), strings.NewReader(fixture.body))
+		if putErr != nil {
+			t.Fatal(putErr)
+		}
+		manifest := repository.Manifest{Version: 1, Repository: "local", ClusterID: "cluster-a", Epoch: 14,
+			CreatedAt: time.Unix(14, 0).UTC(), Objects: []repository.ObjectRef{object},
+			Artifacts: []repository.Artifact{{Name: "state", Kind: "engine-state", NodeID: fixture.nodeID, Object: object}}}
+		if commitErr := fixture.store.CommitManifest(context.Background(), manifest); commitErr != nil {
+			t.Fatal(commitErr)
+		}
+	}
+	point := repository.RecoveryPoint{Version: 1, Repository: "local", ClusterID: "cluster-a", Epoch: 14,
+		CreatedAt: time.Unix(14, 0).UTC(), Nodes: []repository.RecoveryPointNode{{NodeID: "node-a"}, {NodeID: "node-b"}}}
+	opened := map[string]repository.ObjectStore{"node-a": storeA, "node-b": storeB}
+	var applied int
+	_, err = RestoreCluster(context.Background(), point, func(_ context.Context, nodeID string) (repository.ObjectStore, error) {
+		return opened[nodeID], nil
+	}, []ClusterTarget{{NodeID: "node-a", Name: "state", Apply: func(_ context.Context, _ io.Reader, _ int64) error {
+		applied++
+		return nil
+	}}})
+	if err == nil || applied != 0 {
+		t.Fatalf("cluster restore applied before complete target preflight: err=%v applied=%d", err, applied)
 	}
 }
