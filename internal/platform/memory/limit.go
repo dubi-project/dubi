@@ -15,7 +15,12 @@ import (
 
 const (
 	minimumLimit = 512 << 20
-	softFraction = 75
+	// Keep enough headroom for the kernel, TLS/network buffers and Pebble's
+	// native/file mappings. A 75% heap budget still lets a 2 GiB VPS reach
+	// the OOM boundary during Raft/Pebble recovery, so the default is capped
+	// at half of the host limit. Larger machines still get a proportionate
+	// budget; GOMEMLIMIT remains available for deliberate expert tuning.
+	softFraction = 50
 )
 
 // ConfigureFromCgroup installs a conservative Go heap limit when the host
