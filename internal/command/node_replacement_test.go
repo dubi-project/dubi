@@ -17,7 +17,7 @@ import (
 )
 
 // This is the operator path: remove one current member, then enroll a fresh
-// identity. No replacement workflow or special rejoin command is involved.
+// identity through the ordinary membership flow.
 func TestManagedRegionalGrowthAfterExplicitRemovalAndFreshJoin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -136,7 +136,7 @@ func TestManagedRegionalGrowthAfterExplicitRemovalAndFreshJoin(t *testing.T) {
 	}
 	stops[2]()
 	join()
-	poll("replacement region", func() bool {
+	poll("fresh-join region", func() bool {
 		for _, i := range []int{0, 1, 3} {
 			s := servers[i]
 			h, found, err := s.Runtime.Root.RegionCohortHead("default")

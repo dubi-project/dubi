@@ -242,7 +242,7 @@ printf 'removal gate: administrator removed the failed Node and fenced its ident
 issue_ticket "$lab_dir/n4.ticket"
 start_join n4 "$n4_store" "$n4_addr" "$lab_dir/n4.ticket" n4
 wait_status n4 "$n4_store" "$n4_addr"
-retry_command "name replacement Node" "$lab_dir/n4-name.json" "$lab_dir/n4-name.err" \
+retry_command "name fresh-join Node" "$lab_dir/n4-name.json" "$lab_dir/n4-name.err" \
 	"$binary" node rename --store "$n4_store" --server "$n4_addr" n4
 wait_name n4
 

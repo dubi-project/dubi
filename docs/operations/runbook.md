@@ -44,7 +44,7 @@ systemctl status dubi.service
 
 ## Region 故障
 
-1. 不执行自动 Region 删除或 Region rebuild。
+1. 不执行自动 Region 删除，也不启动专用 Region 重建流程。
 2. 先尝试恢复原 Region 的机器。
 3. 无法恢复时，逐个删除原 Node。
 4. 新 Node 继续使用原 Region 名称加入。
