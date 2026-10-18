@@ -117,9 +117,7 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 	if !found {
 		return errors.New("Backup Repository disappeared")
 	}
-	if !repositoryConfig.IsFile() {
-		// S3 remains an explicit backend configuration, but its object-store
-		// implementation is intentionally not claimed by this local worker yet.
+	if !repositoryConfig.IsFile() && !repositoryConfig.IsS3() {
 		return fmt.Errorf("Backup Repository type %q is not implemented by the local worker", repositoryConfig.Type)
 	}
 	if worker.State == rootstate.BackupWorkerCompleted || worker.State == rootstate.BackupWorkerFailed {
@@ -154,7 +152,20 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 		}
 		leaseEpoch = worker.LeaseEpoch
 	}
-	store, err := repository.OpenFile(repositoryConfig)
+	var store repository.ObjectStore
+	if repositoryConfig.IsFile() {
+		store, err = repository.OpenFile(repositoryConfig)
+	} else {
+		key, keyErr := repository.LoadRepositoryKey(w.storeRoot)
+		if keyErr != nil {
+			return fmt.Errorf("load Repository key for S3 backup: %w", keyErr)
+		}
+		credentials, credentialErr := repository.OpenS3Credentials(repositoryConfig, key)
+		if credentialErr != nil {
+			return fmt.Errorf("decrypt S3 Repository credentials: %w", credentialErr)
+		}
+		store, err = repository.OpenS3(repositoryConfig, credentials)
+	}
 	if err != nil {
 		return err
 	}
@@ -163,7 +174,7 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 		return err
 	}
 	defer release()
-	result, err := recovery.RunFileBackup(ctx, store, recovery.Plan{Repository: repositoryConfig,
+	result, err := recovery.RunBackup(ctx, store, recovery.Plan{Repository: repositoryConfig,
 		ClusterID: job.ClusterID, Epoch: job.Epoch}, sources)
 	if err != nil {
 		return err
