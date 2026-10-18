@@ -67,6 +67,23 @@ func TestFileStoreRejectsIncompleteOrMissingObjectManifest(t *testing.T) {
 	}
 }
 
+func TestFileStoreDistributedManifestAllowsRemoteObjects(t *testing.T) {
+	store, err := OpenFile(Repository{Name: "local", Type: TypeFile, Path: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := ObjectRef{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 0}
+	manifest := Manifest{Version: 1, Repository: "local", ClusterID: "cluster_test", Epoch: 2, CreatedAt: time.Unix(2, 0).UTC(), Distributed: true,
+		Objects: []ObjectRef{object}, Artifacts: []Artifact{{Name: "remote-pack", Kind: "pack", NodeID: "node_b", StoreID: "store_b", Object: object}}}
+	if err := store.CommitManifest(context.Background(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.ReadManifest(2)
+	if err != nil || !loaded.Distributed {
+		t.Fatalf("distributed manifest = %+v, %v", loaded, err)
+	}
+}
+
 func TestFileStoreManifestReadVerifiesObjectHash(t *testing.T) {
 	root := t.TempDir()
 	config := Repository{Name: "local", Type: TypeFile, Path: filepath.Join(root, "backup")}

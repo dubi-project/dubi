@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -94,10 +95,10 @@ func (s *FileStore) ListShards(jobID string) ([]Shard, error) {
 	}
 	result := make([]Shard, 0)
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".complete") {
 			continue
 		}
-		nodeID := entry.Name()
+		nodeID := strings.TrimSuffix(entry.Name(), ".complete")
 		if !validShardPart(nodeID) {
 			return nil, errors.New("invalid backup shard node directory")
 		}

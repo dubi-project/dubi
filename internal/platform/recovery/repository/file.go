@@ -46,13 +46,17 @@ type Artifact struct {
 // populate the opaque resource list; this package only persists and verifies
 // the manifest envelope.
 type Manifest struct {
-	Version    int         `json:"version"`
-	Repository string      `json:"repository"`
-	ClusterID  string      `json:"cluster_id"`
-	Epoch      uint64      `json:"epoch"`
-	CreatedAt  time.Time   `json:"created_at"`
-	Objects    []ObjectRef `json:"objects"`
-	Artifacts  []Artifact  `json:"artifacts,omitempty"`
+	Version    int       `json:"version"`
+	Repository string    `json:"repository"`
+	ClusterID  string    `json:"cluster_id"`
+	Epoch      uint64    `json:"epoch"`
+	CreatedAt  time.Time `json:"created_at"`
+	// Distributed permits a node-local Repository to persist the same final
+	// metadata while object bytes remain on other Nodes. A non-distributed
+	// Manifest always requires every object to be present in this store.
+	Distributed bool        `json:"distributed,omitempty"`
+	Objects     []ObjectRef `json:"objects"`
+	Artifacts   []Artifact  `json:"artifacts,omitempty"`
 }
 
 func (m Manifest) Validate() error {
@@ -81,6 +85,13 @@ func (m Manifest) Validate() error {
 		artifactNames[artifactKey] = struct{}{}
 		if size, found := seen[artifact.Object.ID]; !found || size != artifact.Object.Size {
 			return errors.New("Recovery Point artifact references an unknown object")
+		}
+	}
+	if m.Distributed {
+		for _, object := range m.Objects {
+			if len(m.ObjectLocations(object.ID)) == 0 {
+				return errors.New("distributed Recovery Point object has no origin")
+			}
 		}
 	}
 	return nil
@@ -249,7 +260,10 @@ func (s *FileStore) CommitManifest(ctx context.Context, manifest Manifest) error
 			return err
 		}
 		if !found {
-			return fmt.Errorf("Recovery Point object %s is missing", object.ID)
+			if !manifest.Distributed {
+				return fmt.Errorf("Recovery Point object %s is missing", object.ID)
+			}
+			continue
 		}
 	}
 	encoded, err := json.Marshal(manifest)
@@ -359,6 +373,9 @@ func (s *FileStore) ReadManifest(epoch uint64) (Manifest, error) {
 	for _, object := range manifest.Objects {
 		info, err := os.Stat(s.objectPath(object.ID))
 		if err != nil {
+			if manifest.Distributed && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return Manifest{}, err
 		}
 		if info.Size() != object.Size {
@@ -373,6 +390,43 @@ func (s *FileStore) ReadManifest(epoch uint64) (Manifest, error) {
 		}
 	}
 	return manifest, nil
+}
+
+// ObjectLocations derives the node/store origins advertised by artifact
+// metadata. It is intentionally a lookup helper, not a promise that any
+// remote origin is reachable; restore orchestration must authenticate and
+// verify the selected source before reading bytes.
+type ObjectLocation struct {
+	NodeID  string `json:"node_id,omitempty"`
+	StoreID string `json:"store_id,omitempty"`
+}
+
+func (m Manifest) ObjectLocations(objectID string) []ObjectLocation {
+	seen := make(map[string]struct{})
+	result := make([]ObjectLocation, 0)
+	for _, artifact := range m.Artifacts {
+		if artifact.Object.ID != objectID || artifact.NodeID == "" && artifact.StoreID == "" {
+			continue
+		}
+		location := ObjectLocation{NodeID: artifact.NodeID, StoreID: artifact.StoreID}
+		key := location.NodeID + "\x00" + location.StoreID
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, location)
+	}
+	slices.SortFunc(result, func(left, right ObjectLocation) int {
+		leftKey, rightKey := left.NodeID+"\x00"+left.StoreID, right.NodeID+"\x00"+right.StoreID
+		if leftKey < rightKey {
+			return -1
+		}
+		if leftKey > rightKey {
+			return 1
+		}
+		return 0
+	})
+	return result
 }
 
 // ListManifests returns only complete, individually verified Recovery Points

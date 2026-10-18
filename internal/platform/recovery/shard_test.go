@@ -40,8 +40,12 @@ func TestRunNodeBackupAndFinalizeShards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final.Objects != 1 || final.Artifacts != 2 {
+	if final.Objects != 1 || final.Artifacts != 2 || !final.Manifest.Distributed {
 		t.Fatalf("unexpected final result: %+v", final)
+	}
+	locations := final.Manifest.ObjectLocations(shard.Objects[0].ID)
+	if len(locations) != 2 || locations[0].NodeID != "node_a" || locations[1].NodeID != "node_b" {
+		t.Fatalf("object locations = %+v", locations)
 	}
 	loaded, err := store.ReadManifest(10)
 	if err != nil || len(loaded.Artifacts) != 2 {

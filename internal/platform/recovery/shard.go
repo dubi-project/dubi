@@ -145,7 +145,7 @@ func FinalizeShards(ctx context.Context, store repository.ObjectStore, plan Plan
 		return left < right
 	})
 	manifest := repository.Manifest{Version: 1, Repository: plan.Repository.Name, ClusterID: plan.ClusterID,
-		Epoch: plan.Epoch, CreatedAt: createdAt.UTC(), Objects: objectList, Artifacts: artifacts}
+		Epoch: plan.Epoch, CreatedAt: createdAt.UTC(), Distributed: len(shards) > 1, Objects: objectList, Artifacts: artifacts}
 	if err := store.CommitManifest(ctx, manifest); err != nil {
 		return Result{}, err
 	}

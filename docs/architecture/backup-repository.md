@@ -92,7 +92,7 @@ Access Key、Secret Key 等凭据作为 Repository 记录中的加密字段保�
 - 备份期间，GC/Compaction 不能删除被当前任务引用的对象；
 - 失败、取消、校验不完整的任务不能作为恢复源。
 
-Manifest 至少记录源 Cluster、Recovery Point 代际、持久资源清单、对象摘要、格式版本、节点本地对象位置和校验结果。节点本地 `file` Repository 还必须复制或重新生成集群级完成标记，避免把每个节点目录误认为独立备份。
+Manifest 至少记录源 Cluster、Recovery Point 代际、持久资源清单、对象摘要、格式版本、节点本地对象位置和校验结果。跨节点的最终 Manifest 标记为 `distributed`：每个节点可以保存同一份元数据，即使对象字节仍位于来源节点的本地 Repository；恢复器必须按 Artifact 的 Node/Store 来源做认证读取和哈希复验。节点本地 `file` Repository 还必须复制或重新生成集群级完成标记，避免把每个节点目录误认为独立备份。
 
 Root 为每个 Backup Job 在创建时分配不可变 `Epoch`（取创建日志位置），它是该 Recovery Point 在 Repository 内的唯一封存命名空间；领取租约、节点接管和完成状态变化不会改写这个 Epoch。
 
