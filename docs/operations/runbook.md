@@ -11,6 +11,20 @@ journalctl -u dubi --since '15 minutes ago'
 
 不要因为单次超时就删除 Node。先确认故障是否持续，以及 Root quorum 和区域多数是否仍然存在。
 
+## 持久化启动
+
+生产环境不要依赖 `systemd-run` 创建的 transient unit。使用仓库中的 [`deploy/systemd/dubi.service`](../../deploy/systemd/dubi.service) 和 [`dubi.env.example`](../../deploy/systemd/dubi.env.example)，将二进制安装到 `/usr/local/bin/dubi`，为本机填写 `/etc/dubi/dubi.env`，然后执行：
+
+```bash
+install -d -m 0750 /etc/dubi
+install -m 0644 deploy/systemd/dubi.service /etc/systemd/system/dubi.service
+systemctl daemon-reload
+systemctl enable --now dubi.service
+systemctl status dubi.service
+```
+
+`DUBI_API_LISTEN` 默认绑定回环地址。跨机器 Prometheus 采集时，改为私网地址并用防火墙限制来源；不要直接暴露公网。
+
 ## Node 故障
 
 1. 检查 `dubi status` 中 Node 是否不可达。

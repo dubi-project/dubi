@@ -1,0 +1,21 @@
+[Unit]
+Description=DUBI distributed storage node
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=HOME=/root
+EnvironmentFile=/etc/dubi/dubi.env
+ExecStart=/usr/local/bin/dubi server --store $DUBI_STORE --name $DUBI_NAME --region $DUBI_REGION --listen $DUBI_LISTEN --advertise $DUBI_ADVERTISE --api-listen $DUBI_API_LISTEN
+Restart=always
+RestartSec=2s
+TimeoutStopSec=30s
+KillMode=mixed
+LimitNOFILE=65536
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
