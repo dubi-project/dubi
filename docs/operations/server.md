@@ -16,6 +16,8 @@ Group/日志现在有独立持久登记，已登记目录或日志丢失时拒�
 
 当前 Store/Volume 元数据为 v2，首次 init 自动在既有 Store 清单中登记并建立不可变记录索引；启动和加入使用同一持久意图恢复，不增加参数。v1 开发目录明确拒绝打开，未提供自动迁移。已 active 的记录登记/索引丢失，重复 init 也不能重新创建空资源；应保留故障现场，不要删改身份文件来绕过检查。Pack 容器仍为 `DUBIPK02`，Engine 状态当前为 v7；见[不可变记录与资源生命周期](../architecture/immutable-records.md)。
 
+小规格 VPS：节点启动时会根据 cgroup 或物理内存设置 Go heap 软上限，所有 Pebble 实例共享受控 Cache，并限制文件句柄、MemTable 和 Compaction 并发，避免 Root/Raft 恢复阶段的瞬时内存峰值直接触发 OOM。低于 2GB 内存时仍建议配置一定 swap；swap 只能缓冲启动峰值，不能替代多数节点和独立故障域。
+
 ## 2. 准备加入已有集群
 
 一次性凭证、Root 授权记录、受限 mTLS 签发、持久回执、网络 Root learner 接纳、本地阶段/地址记录及实际快照追赶/重启已有实现与集成测试，详见[节点加入实施记录](../architecture/node-enrollment.md)。CLI 已接通创建/撤销凭证和一步加入运行；目前加入的是 Root learner，尚不代表自动晋升、跨区域持久性策略或生产资格完成。

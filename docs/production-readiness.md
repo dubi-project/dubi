@@ -20,7 +20,7 @@
 | F01 | 默认启动、自动身份、托管 TLS、卷登记 | 已有实现及本地测试；一次性远端 Join CLI/回执恢复已接通，灾难恢复的新身份通道仍未完成。 |
 | F02 | 混合 Pack、空间预约、状态机本地引用 | 已有单元、竞态、进程退出和真实单节点 Raft 测试；还缺统一预算和真实盘故障验收。 |
 | P01 | Store 磁盘背压、恢复迟滞、错误分类 | 已实现并有本地测试：覆盖新提案/转发提案、成员变更和快照生成，保留 ReadIndex 与复制/快照追赶；真实隔离盘填盘/恢复验收仍待完成。见 [磁盘压力保护](operations/disk-pressure.md)。 |
-| P02 | 有界内存、并发/IO 预算、控制面与后台隔离 | 部分实现：Raft 控制/日志/快照独立发送通道、跨 Peer 排队及活动字节预算、快照接收并发/字节准入；RPC 全入口、解码/状态机、连接数与 IO 调度仍未完成。见 [资源界限](operations/resource-limits.md)。 |
+| P02 | 有界内存、并发/IO 预算、控制面与后台隔离 | 进行中：Raft 控制/日志/快照独立发送通道、跨 Peer 排队及活动字节预算、快照接收并发/字节准入；Pebble 现在使用 Node 级共享 Cache、受控文件句柄/内存表/Compaction 参数，进程按 cgroup 或物理内存设置 Go heap 软上限，已在 2GB VPS 启动恢复中验证不再触发 OOM。RPC 全入口、解码/状态机、连接数与 IO 调度仍未完成。见 [资源界限](operations/resource-limits.md)。 |
 | P03 | 大状态流式 Raft 快照、持久接收与恢复 | 部分实现；正式 Node/Server 的 Root 与 Engine Group 已接通有界文件生成、Raft 小引用、mTLS 流式导入和有界恢复。真实 Pack 三节点测试覆盖离线后 80 MiB 数据与 Root 目录的压缩日志追平、两类空索引重启恢复；Root 另覆盖 72 MiB 合成结果及多阶段崩溃恢复。慢 WAN、协议升级和真实故障域资格未完成。见 [流式快照实施记录](architecture/streaming-snapshot.md)。 |
 | P04 | Tenant/Keyspace 隔离、授权、受限入口 | 部分实现：Transaction/ReadView 和本地引用按完整 Keyspace 隔离；当前 v7 状态/快照包含不可变记录权威引用、本地多数确认记录及成功 Result 关联核验，保持区域成员位置与持久交接写入门禁，旧格式明确拒绝，恢复前核对 Fence 与值归属。身份/权限策略、公开入口和迁移/升级验收仍未完成。 |
 | P05 | 远端 Join、一次性 admission、证书自动续期/轮换/吊销 | 部分实现：一次性 grant、固定 CA 凭证、mTLS 签发/撤销、持久回执、网络 Root learner 接纳、后台待办恢复、本地阶段/地址记录、CLI 一步加入及实际快照追赶/重启；普通叶证书本地/远端自动续期、双向热加载、连接平滑更新和会话到期关闭。Root 自动晋升见 P06；持续路由刷新、CA 轮换/吊销和签发器恢复尚未完成。见 [节点加入实施记录](architecture/node-enrollment.md)。 |
