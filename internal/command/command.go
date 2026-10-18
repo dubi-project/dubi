@@ -21,6 +21,7 @@ import (
 	identityenrollment "github.com/dubi-project/dubi/internal/platform/identity/enrollment"
 	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
 	"github.com/dubi-project/dubi/internal/platform/node"
+	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 	"github.com/dubi-project/dubi/internal/server"
 )
@@ -194,6 +195,11 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 	if flags.NArg() != 0 || strings.TrimSpace(*storeRoot) == "" {
 		return errors.New("usage: dubi init [--store <path>] [--volume <path> ...]")
 	}
+	_, identityErr := identity.Load(*storeRoot)
+	newBootstrap := errors.Is(identityErr, os.ErrNotExist)
+	if identityErr != nil && !newBootstrap {
+		return identityErr
+	}
 	value, err := identity.Bootstrap(*storeRoot)
 	if err != nil {
 		return err
@@ -214,6 +220,11 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 	// state; an empty or joined store can never silently create a new Root.
 	if err := node.InitializeRoot(*storeRoot, volumes...); err != nil {
 		return fmt.Errorf("initialize Root: %w", err)
+	}
+	if newBootstrap {
+		if _, err := repository.EnsureRepositoryKey(*storeRoot); err != nil {
+			return fmt.Errorf("initialize Repository key: %w", err)
+		}
 	}
 	if err := saveLocalContext(*storeRoot, value, "", "", ""); err != nil {
 		return fmt.Errorf("save local Node context after init: %w", err)
