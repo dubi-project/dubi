@@ -61,7 +61,7 @@ func TestRuntimeInstallsRootRestoreSnapshotThroughRaft(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if err := runtime.InstallRestoreSnapshot(context.Background(), "root", index, 1, rewritten, destinationConf); err != nil {
+	if err := runtime.InstallRestoreSnapshots(context.Background(), []RestoreGroupSnapshot{{GroupID: "root", Index: index, Term: 1, Data: rewritten, Conf: destinationConf}}); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.Root.AppliedIndex() != index || len(runtime.Root.ConfState().GetVoters()) != 1 || runtime.Root.ConfState().GetVoters()[0] != id.RaftID {
