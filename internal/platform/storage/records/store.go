@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -24,6 +25,22 @@ var ErrUnavailable = errors.New("immutable record Store is unavailable")
 var identityKey = []byte("meta/identity")
 
 const recordIndexVersion = protocol.RecordIndexFormatVersion
+
+// IndexSnapshotVersion identifies the portable immutable-record index image.
+// It contains descriptors and old physical locations; restore must provide a
+// location mapper after the corresponding Pack images have been imported.
+const IndexSnapshotVersion = 1
+
+type IndexSnapshot struct {
+	Version int                  `json:"version"`
+	Entries []IndexSnapshotEntry `json:"entries"`
+}
+
+type IndexSnapshotEntry struct {
+	ID         string        `json:"id"`
+	Descriptor Descriptor    `json:"descriptor"`
+	Location   pack.Location `json:"location"`
+}
 
 // CompactReport describes the conservative physical garbage-collection pass.
 // It removes only sealed Packs with no live index entry; Packs containing both
@@ -68,6 +85,126 @@ type Store struct {
 	failed                    error
 	commit                    func(*pebble.Batch) error // Test-only Sync uncertainty boundary.
 	binding                   *volume.ResourceBinding
+}
+
+// SnapshotIndex creates a deterministic, module-neutral image of the local
+// immutable-record index.  Pack bytes are intentionally not embedded here;
+// restore imports those sealed Packs separately and rewrites their scope.
+func (s *Store) SnapshotIndex(ctx context.Context) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("nil index snapshot context")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("record/"), UpperBound: []byte("record0")})
+	if err != nil {
+		return nil, classifyIndexRead(err)
+	}
+	snapshot := IndexSnapshot{Version: IndexSnapshotVersion, Entries: make([]IndexSnapshotEntry, 0)}
+	for ok := iter.SeekGE([]byte("record/")); ok; ok = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			_ = iter.Close()
+			return nil, err
+		}
+		if !bytes.HasPrefix(iter.Key(), []byte("record/")) {
+			break
+		}
+		id := strings.TrimPrefix(string(iter.Key()), "record/")
+		var e entry
+		if len(iter.Value()) > 16<<10 || strictJSON(iter.Value(), &e) != nil {
+			_ = iter.Close()
+			return nil, ErrCorrupt
+		}
+		if err := s.validateEntry(id, e); err != nil {
+			_ = iter.Close()
+			return nil, err
+		}
+		snapshot.Entries = append(snapshot.Entries, IndexSnapshotEntry{ID: id, Descriptor: e.Descriptor.clone(), Location: e.Location})
+	}
+	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
+		return nil, classifyIndexRead(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+// RestoreIndex installs a portable index image after Pack import.  The mapper
+// must rewrite StoreID/VolumeID while retaining PackID, offset and length.
+// Existing identical entries are accepted for retry; conflicting entries are
+// rejected before any batch is committed.
+func (s *Store) RestoreIndex(ctx context.Context, encoded []byte, mapLocation func(pack.Location) (pack.Location, error)) error {
+	if ctx == nil || mapLocation == nil {
+		return errors.New("index restore context and location mapper are required")
+	}
+	var image IndexSnapshot
+	if len(encoded) == 0 || len(encoded) > 1<<30 || strictJSON(encoded, &image) != nil || image.Version != IndexSnapshotVersion {
+		return ErrCorrupt
+	}
+	entries := make([]entry, 0, len(image.Entries))
+	for _, item := range image.Entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if item.ID == "" {
+			return ErrCorrupt
+		}
+		mapped, err := mapLocation(item.Location)
+		if err != nil {
+			return err
+		}
+		e := entry{Version: recordIndexVersion, Descriptor: item.Descriptor.clone(), Location: mapped}
+		if err := s.validateEntry(item.ID, e); err != nil {
+			return err
+		}
+		if id, err := e.Descriptor.ID(); err != nil || id != item.ID {
+			return ErrCorrupt
+		}
+		entries = append(entries, e)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return err
+	}
+	for index, item := range image.Entries {
+		if existing, found, err := s.lookup(item.ID); err != nil {
+			return err
+		} else if found && !reflect.DeepEqual(existing, entries[index]) {
+			return errors.New("immutable record index conflicts with restore image")
+		}
+	}
+	b := s.db.NewBatch()
+	defer b.Close()
+	for index, item := range image.Entries {
+		if _, found, err := s.lookup(item.ID); err != nil {
+			return err
+		} else if found {
+			continue
+		}
+		encodedEntry, err := json.Marshal(entries[index])
+		if err != nil {
+			return err
+		}
+		if err := b.Set(indexKey(item.ID), encodedEntry, nil); err != nil {
+			return err
+		}
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
+		s.failed = fmt.Errorf("immutable record restore index Sync uncertain; reopen required: %w", err)
+		return s.failed
+	}
+	for index, item := range image.Entries {
+		if _, _, err := s.read(item.ID, entries[index].Descriptor, entries[index]); err != nil {
+			return fmt.Errorf("verify restored immutable record %s: %w", item.ID, err)
+		}
+	}
+	return nil
 }
 
 // OpenNodeStore creates only under a durable pending parent intent, otherwise

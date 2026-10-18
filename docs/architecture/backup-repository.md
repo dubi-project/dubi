@@ -146,5 +146,5 @@ Placement / Repair / Rebalance
 - 直接在线写磁带；
 - 依赖外部 Secret Manager 或环境变量保存凭据。
 
-当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、节点命名空间、节点 Manifest、集群级 Recovery Point 索引、完整性校验和原子封存；`internal/platform/recovery/{backup,restore}.go` 已实现不透明 Artifact 备份、单节点恢复和跨节点全量预检恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server Worker 已支持 file/S3 Repository、Pack/Root/Engine Group Artifact，节点通过内部 NodeAdmin mTLS 同步 Repository 密钥，`--credentials-file` 可加密更新 S3 凭据。节点之间不交换对象字节；新集群的 Root/Engine/Pack 实际安装、身份映射和运行时启动流程仍需完成。
+当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、节点命名空间、节点 Manifest、集群级 Recovery Point 索引、完整性校验和原子封存；`internal/platform/recovery/{backup,restore}.go` 已实现不透明 Artifact 备份、单节点恢复和跨节点全量预检恢复规划器。Pack Pool 已提供 `SnapshotPacks` 和 `ImportSealed`：在本地封口切点导出 sealed Pack，恢复时逐条校验并改写 Store/Volume 身份、保持 PackID/偏移稳定后再发布目标 catalog；records Store 已提供 `SnapshotIndex`/`RestoreIndex`，记录索引在 Pack 导入后按显式位置映射恢复，Server Worker 也会封存该索引。节点之间不交换对象字节；新集群 Root/Engine/Pack/records 的完整编排、身份映射和运行时启动验收仍需完成。
 

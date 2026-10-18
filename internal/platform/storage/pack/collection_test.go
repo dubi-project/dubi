@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,6 +106,56 @@ func TestCollectionRolloverRestartAndScope(t *testing.T) {
 	if _, err := m.Read(bad); err == nil {
 		t.Fatal("unlisted Pack accepted")
 	}
+}
+
+func TestPoolImportSealedRewritesScopeAndPreservesLocations(t *testing.T) {
+	sourceRegistry, sourceVolume := setup(t)
+	sourcePool, err := OpenPool(sourceRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc, err := sourcePool.Append(context.Background(), Record{EngineID: "file", TenantID: "tenant", Key: []byte("key"), Payload: []byte("payload")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := sourcePool.SnapshotPacks(context.Background())
+	if err != nil || len(items) != 1 {
+		t.Fatal("snapshot", err, len(items))
+	}
+	defer items[0].Close()
+	image, err := items[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(image)
+	_ = image.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destinationRegistry, destinationVolume := setup(t)
+	destinationPool, err := OpenPool(destinationRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := destinationPool.ImportSealed(context.Background(), destinationVolume.ID, loc.PackID, bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatal("import", err)
+	}
+	if loc.StoreID == destinationPool.StoreID() || sourceVolume.ID == destinationVolume.ID {
+		t.Fatal("test did not create distinct restore identities")
+	}
+	restored := loc
+	restored.StoreID = destinationPool.StoreID()
+	restored.VolumeID = destinationVolume.ID
+	got, err := destinationPool.Read(restored)
+	if err != nil || string(got.Payload) != "payload" {
+		t.Fatalf("restored Pack read = %+v, %v", got, err)
+	}
+	if err := destinationPool.ImportSealed(context.Background(), destinationVolume.ID, loc.PackID, bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatal("idempotent Pack import failed", err)
+	}
+	_ = sourcePool.Close()
+	_ = destinationPool.Close()
 }
 
 func TestCollectionExplicitSealAndInvalidAppend(t *testing.T) {

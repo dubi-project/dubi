@@ -321,7 +321,7 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 			_ = packs[index].Close()
 		}
 	}
-	sources := make([]recovery.Source, 0, len(packs)+1)
+	sources := make([]recovery.Source, 0, len(packs)+3)
 	for _, item := range packs {
 		item := item
 		source := recovery.Source{Name: fmt.Sprintf("volume/%s/pack/%s", item.VolumeID, item.PackID), Kind: "pack",
@@ -335,6 +335,24 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 				return item.Open()
 			}}
 		sources = append(sources, source)
+	}
+	if w.runtime.Records != nil {
+		indexImage, snapshotErr := w.runtime.Records.SnapshotIndex(ctx)
+		if snapshotErr != nil {
+			release()
+			return nil, func() {}, fmt.Errorf("snapshot immutable record index: %w", snapshotErr)
+		}
+		indexImage = append([]byte(nil), indexImage...)
+		sources = append(sources, recovery.Source{Name: "records/index", Kind: "records-index",
+			NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_RECORD_INDEX_V1", Size: int64(len(indexImage)),
+			Open: func(openContext context.Context) (io.ReadCloser, error) {
+				if openContext != nil {
+					if err := openContext.Err(); err != nil {
+						return nil, err
+					}
+				}
+				return io.NopCloser(bytes.NewReader(indexImage)), nil
+			}})
 	}
 	if w.runtime.Root != nil {
 		image, index, _, err := w.runtime.Root.Snapshot()

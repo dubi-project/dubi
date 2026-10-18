@@ -192,6 +192,29 @@ func TestRecordImmutableVersionsAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestRecordIndexSnapshotRoundTrip(t *testing.T) {
+	s, p := testStore(t)
+	d := descriptor(t, "restore-key", "restore-payload")
+	put(t, s, d, "restore-payload")
+	image, err := s.SnapshotIndex(context.Background())
+	if err != nil {
+		t.Fatal("snapshot index", err)
+	}
+	if !bytes.Contains(image, []byte(`"version":1`)) {
+		t.Fatal("snapshot image has no version")
+	}
+	if err := s.RestoreIndex(context.Background(), image, func(location pack.Location) (pack.Location, error) {
+		location.StoreID = testStoreID
+		return location, nil
+	}); err != nil {
+		t.Fatal("restore index", err)
+	}
+	if payload, _, err := s.Read(context.Background(), d); err != nil || string(payload) != "restore-payload" {
+		t.Fatal("restored index read", err)
+	}
+	_ = p
+}
+
 func TestRecordRejectsInvalidPayloadBeforeAppend(t *testing.T) {
 	s, p := testStore(t)
 	d := descriptor(t, "key", "data")

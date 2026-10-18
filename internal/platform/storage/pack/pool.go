@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"sync"
@@ -235,6 +236,43 @@ func (p *Pool) SnapshotPacks(ctx context.Context) ([]SnapshotPack, error) {
 		return result[i].PackID < result[j].PackID
 	})
 	return result, nil
+}
+
+// ImportSealed installs a backup Pack into one explicitly selected Volume.
+// The caller supplies the destination Volume mapping; the Pool never guesses a
+// replacement Volume during restore.  A Collection is initialized lazily and
+// the import itself validates the complete sealed image before publication.
+func (p *Pool) ImportSealed(ctx context.Context, volumeID, packID string, source io.Reader, size int64) error {
+	if p == nil || p.registry == nil {
+		return errors.New("Pack pool is unavailable")
+	}
+	if ctx == nil {
+		return errors.New("nil import context")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return errors.New("Pack pool is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if volumeID == "" {
+		return errors.New("destination Volume is required")
+	}
+	collection := p.collections[volumeID]
+	var err error
+	if collection == nil {
+		collection, err = InitializeCollection(p.registry, volumeID, 0)
+		if err != nil {
+			return err
+		}
+		p.collections[volumeID] = collection
+	}
+	if err := collection.ImportSealed(ctx, packID, source, size); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Read follows the exact persisted VolumeID, never substitutes another copy.

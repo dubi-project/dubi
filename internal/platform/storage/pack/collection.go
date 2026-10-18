@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"io"
 	"os"
 	"reflect"
 	"slices"
@@ -24,6 +26,12 @@ const (
 )
 
 var ErrCollectionFull = errors.New("Pack collection limit reached; compaction/catalog scaling required")
+
+// MaxImportedPackSize is the largest sealed Pack image accepted by the
+// restore path.  It matches the largest target plus one maximum record; the
+// import is deliberately bounded before it can allocate memory or create a
+// destination file.
+const MaxImportedPackSize = MaxTargetSize + recordHeaderSize + MaxEngineSize + MaxTenantSize + MaxKeySize + MaxPayloadSize
 
 // CompactReport describes the conservative Pack maintenance pass. A Pack is
 // removed only when every physical record in it is unreachable from the
@@ -436,6 +444,148 @@ func (m *Collection) Scan(fn func(Location, Record) error) error {
 
 func (m *Collection) openSealed(id string) (*Pack, error) {
 	return open(m.registry, m.catalog.VolumeID, id, 0, openMode{managed: true, sealedRead: true})
+}
+
+// ImportSealed installs one immutable Pack image into this Collection.  The
+// source image is treated as untrusted backup input: its header and every
+// physical record are validated before publication.  The PackID and record
+// offsets are preserved, while StoreID/VolumeID and the target size are
+// rewritten to the destination Collection.  Files are published before the
+// catalog, so an interrupted import leaves only an unreferenced orphan.
+func (m *Collection) ImportSealed(ctx context.Context, packID string, source io.Reader, size int64) error {
+	if ctx == nil {
+		return errors.New("nil import context")
+	}
+	if source == nil || !idPattern.MatchString(packID) || size < headerSize || size > MaxImportedPackSize {
+		return errors.New("invalid sealed Pack import")
+	}
+	data, err := io.ReadAll(io.LimitReader(source, MaxImportedPackSize+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != size || int64(len(data)) > MaxImportedPackSize {
+		return errors.New("sealed Pack size differs from source metadata")
+	}
+	var old header
+	if err := decodeDocument(data[:headerSize], "DUBIPK02", &old); err != nil {
+		return err
+	}
+	if old.PackID != packID || old.TargetSize <= headerSize || old.TargetSize > MaxTargetSize {
+		return errors.Join(ErrCorrupt, errors.New("sealed Pack header does not match import"))
+	}
+	count, err := validateSealedPackBytes(data)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active != nil || m.catalog.Pending != "" {
+		return errors.New("Pack Collection must be sealed before import")
+	}
+	if slices.Contains(m.catalog.Packs, packID) {
+		published, openErr := m.openSealed(packID)
+		if openErr != nil {
+			return openErr
+		}
+		return published.Close()
+	}
+	if len(m.catalog.Packs) == maxCollectionPacks {
+		return ErrCollectionFull
+	}
+	if err := m.maintenanceAccess(func(dir *os.Root) error {
+		nextHeader := header{Scope: Scope{StoreID: m.catalog.StoreID, VolumeID: m.catalog.VolumeID, PackID: packID}, Version: protocol.PackContainerFormatVersion, TargetSize: m.catalog.TargetSize}
+		headerBytes, err := encodeDocument("DUBIPK02", headerSize, nextHeader)
+		if err != nil {
+			return err
+		}
+		name := packID + ".pack"
+		if _, err := dir.Lstat(name); err == nil {
+			return errors.New("destination Pack file already exists")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		tempID, err := randomID()
+		if err != nil {
+			return err
+		}
+		temp := ".import-" + packID + "-" + strings.TrimPrefix(tempID, "pack_")
+		file, err := dir.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		cleanup := func(cleanErr error) error {
+			return errors.Join(cleanErr, file.Close(), dir.Remove(temp))
+		}
+		if _, err := file.Write(headerBytes); err != nil {
+			return cleanup(err)
+		}
+		if _, err := file.Write(data[headerSize:]); err != nil {
+			return cleanup(err)
+		}
+		if err := errors.Join(file.Sync(), file.Close()); err != nil {
+			_ = dir.Remove(temp)
+			return err
+		}
+		if err := dir.Rename(temp, name); err != nil {
+			_ = dir.Remove(temp)
+			return err
+		}
+		state := checkpoint{PackID: packID, End: int64(len(data)), Count: count, Sealed: true}
+		stateBytes, err := encodeDocument("DUBIPC01", stateSize, state)
+		if err != nil {
+			_ = dir.Remove(name)
+			return err
+		}
+		if err := publishBytes(dir, packID+".state", ".import-state-", stateBytes, true); err != nil {
+			_ = dir.Remove(name)
+			return err
+		}
+		next := m.catalog
+		next.Packs = append(slices.Clone(next.Packs), packID)
+		if err := validateCatalog(next); err != nil {
+			return err
+		}
+		if err := writeDocument(dir, catalogName, "DUBICS02", next, false); err != nil {
+			return err
+		}
+		m.catalog = next
+		return syncDirectory(dir)
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSealedPackBytes(data []byte) (uint64, error) {
+	var count uint64
+	for offset := int64(headerSize); offset < int64(len(data)); {
+		if err := func() error {
+			if offset > int64(len(data))-recordHeaderSize {
+				return ErrCorrupt
+			}
+			engine, tenant, key, payload, checksum, err := decodeRecordHeader(data[offset : offset+recordHeaderSize])
+			if err != nil {
+				return err
+			}
+			length := int64(recordHeaderSize + engine + tenant + key + payload)
+			if length <= recordHeaderSize || offset+length > int64(len(data)) || !enginePattern.Match(data[offset+recordHeaderSize:offset+recordHeaderSize+int64(engine)]) || crc32.Checksum(data[offset+recordHeaderSize:offset+length], crcTable) != checksum {
+				return ErrCorrupt
+			}
+			return nil
+		}(); err != nil {
+			return 0, errors.Join(ErrCorrupt, err)
+		}
+		engine, tenant, key, payload, _, _ := decodeRecordHeader(data[offset : offset+recordHeaderSize])
+		offset += int64(recordHeaderSize + engine + tenant + key + payload)
+		count++
+	}
+	if int64(headerSize) > int64(len(data)) {
+		return 0, ErrCorrupt
+	}
+	return count, nil
 }
 
 // Seal seals the active Pack without creating an empty successor. The next
