@@ -4,6 +4,8 @@ package enrollmentrpc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -49,6 +51,10 @@ func NewServer(host enrollment.Host, root *rootstate.State, signer *nodepki.Sign
 	if err != nil {
 		return nil, err
 	}
+	// authorizeNode supplies the network management barrier. Direct manager
+	// callers retain their defensive pre-publish read, but the RPC path avoids
+	// an extra Root no-op on every fresh enrollment ticket.
+	grants.SetPrePublishRead(false)
 	authorizer, err := enrollment.NewGrantAuthorizer(host, root, local.ClusterID)
 	if err != nil {
 		return nil, err
@@ -102,7 +108,7 @@ func (s *Server) acquire(ctx context.Context, size int) (context.Context, func()
 	}
 }
 
-func (s *Server) authorizeNode(ctx context.Context, clusterID string, raftID uint64) error {
+func (s *Server) authorizeNode(ctx context.Context, clusterID string, raftID uint64, linearizable bool) error {
 	if clusterID != s.clusterID || raftID == 0 {
 		return status.Error(codes.PermissionDenied, "Node identity does not match Cluster")
 	}
@@ -122,8 +128,21 @@ func (s *Server) authorizeNode(ctx context.Context, clusterID string, raftID uin
 	if _, err := identity.VerifiedPeerCertificate(ctx, time.Now()); err != nil {
 		return status.Error(codes.PermissionDenied, "Node certificate chain is not currently valid")
 	}
-	if _, err := s.readRootIndex(ctx); err != nil {
-		return rpcError(err)
+	// Membership rejection is intentionally read-only.  Check the caller and
+	// local issuer against the currently applied Root state before asking Raft
+	// for a linearizable barrier; otherwise a pending/removed identity would
+	// append a read-index no-op even though the RPC is unauthorized.
+	for _, memberID := range []uint64{raftID, s.local.RaftID} {
+		if _, found, err := s.root.RootMember(memberID); err != nil {
+			return rpcError(err)
+		} else if !found {
+			return status.Error(codes.PermissionDenied, "Node is not a current Root member")
+		}
+	}
+	if linearizable {
+		if _, err := s.readRootIndex(ctx); err != nil {
+			return rpcError(err)
+		}
 	}
 	if _, err := identity.VerifiedPeerCertificate(ctx, time.Now()); err != nil {
 		return status.Error(codes.PermissionDenied, "Node certificate chain is not currently valid")
@@ -147,13 +166,40 @@ func (s *Server) CreateGrant(ctx context.Context, request *enrollmentwire.Create
 		return nil, err
 	}
 	defer release()
-	if err := s.authorizeNode(ctx, request.GetClusterId(), request.GetFromRaftId()); err != nil {
+	// Authenticate the caller without a barrier first. This keeps malformed
+	// management requests from learning anything about Root while preserving
+	// the bounded-work behavior for an authenticated Node request.
+	if err := s.authorizeNode(ctx, request.GetClusterId(), request.GetFromRaftId(), false); err != nil {
 		return nil, err
 	}
 	candidate := identityenrollment.GrantRequest{GrantID: request.GetGrantId(), SecretSHA256: request.GetSecretSha256(),
 		PublicKeyDER: request.GetPublicKeyDer(), ExpiresUnix: request.GetExpiresUnix()}
 	if err := candidate.Validate(time.Now().UTC()); err != nil {
+		if _, barrierErr := s.readRootIndex(ctx); barrierErr != nil {
+			return nil, rpcError(barrierErr)
+		}
 		return nil, status.Error(codes.InvalidArgument, "invalid public Join Grant request")
+	}
+	// An exact active retry is already immutable in Root. Avoid appending a
+	// second ReadIndex no-op for that idempotent path; conflicting requests and
+	// first creates still use a linearizable membership barrier below.
+	idempotent := false
+	current, found, err := s.root.JoinGrant(candidate.GrantID)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	if found {
+		digest := sha256.Sum256(candidate.PublicKeyDER)
+		idempotent = current.State == rootstate.JoinGrantActive &&
+			current.SecretSHA256 == candidate.SecretSHA256 &&
+			current.EnrollmentKeySHA256 == hex.EncodeToString(digest[:]) &&
+			current.IssuerRaftID == s.local.RaftID && current.ExpiresUnix == candidate.ExpiresUnix &&
+			current.CreatedUnix <= time.Now().UTC().Unix()
+	}
+	if !idempotent {
+		if err := s.authorizeNode(ctx, request.GetClusterId(), request.GetFromRaftId(), true); err != nil {
+			return nil, err
+		}
 	}
 	bundle, err := s.grants.Create(ctx, candidate)
 	if err != nil {
@@ -172,7 +218,7 @@ func (s *Server) RevokeGrant(ctx context.Context, request *enrollmentwire.Revoke
 		return nil, err
 	}
 	defer release()
-	if err := s.authorizeNode(ctx, request.GetClusterId(), request.GetFromRaftId()); err != nil {
+	if err := s.authorizeNode(ctx, request.GetClusterId(), request.GetFromRaftId(), true); err != nil {
 		return nil, err
 	}
 	if err := identity.ValidateJoinGrantID(request.GetGrantId()); err != nil {
@@ -193,9 +239,6 @@ func (s *Server) EnrollNode(ctx context.Context, request *enrollmentwire.EnrollN
 		return nil, err
 	}
 	defer release()
-	if err := s.authorizeSigner(ctx); err != nil {
-		return nil, err
-	}
 	if request.GetClusterId() != s.clusterID {
 		return nil, status.Error(codes.PermissionDenied, "enrollment belongs to another Cluster")
 	}
@@ -208,6 +251,12 @@ func (s *Server) EnrollNode(ctx context.Context, request *enrollmentwire.EnrollN
 	candidate, err := identityenrollment.DecodeRequest(request.GetRequestDocument())
 	if err != nil || candidate.ServerName != nodepki.DefaultServerName {
 		return nil, status.Error(codes.InvalidArgument, "invalid Node enrollment request")
+	}
+	// DecodeRequest validates the complete CSR and Node metadata, including a
+	// dialable unicast address. Reject malformed deployment input before the
+	// authority performs its Root read barrier or consumes the Join Grant.
+	if err := s.authorizeSigner(ctx); err != nil {
+		return nil, err
 	}
 	bundle, err := s.issuer.Issue(ctx, candidate, request.GetAdmissionProof(), time.Time{})
 	if err != nil {

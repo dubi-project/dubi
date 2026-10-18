@@ -163,7 +163,11 @@ func (s *Server) JoinRoot(ctx context.Context, request *rootjoinwire.JoinRootReq
 		return nil, rpcError(err)
 	}
 	leader := state.Role == etcdraft.StateLeader && state.LeaderID != 0 && state.LeaderID == state.RaftID
-	leaf, err := s.authorize(ctx, request.ClusterId, candidate.RaftID, leader)
+	// Authenticate and validate membership without a Raft barrier first.  The
+	// CSR public key is untrusted input and must be checked before a leader
+	// appends a read-index no-op; a certificate with a valid Node identity but
+	// the wrong key must remain entirely read-only.
+	leaf, err := s.authorize(ctx, request.ClusterId, candidate.RaftID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +181,10 @@ func (s *Server) JoinRoot(ctx context.Context, request *rootjoinwire.JoinRootReq
 			return nil, rpcError(err)
 		}
 		return &rootjoinwire.JoinRootResponse{View: view}, nil
+	}
+	// Reconfirm membership linearly only after all request-bound checks pass.
+	if _, err := s.authorize(ctx, request.ClusterId, candidate.RaftID, true); err != nil {
+		return nil, err
 	}
 	task, err := s.coordinator.Ensure(ctx, rootstate.RootJoinStart{GrantID: request.GrantId, Request: candidate})
 	if err != nil {

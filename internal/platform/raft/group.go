@@ -392,30 +392,35 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 		return 0, ErrReadIndexBusy
 	}
 	status := g.raw.Status()
-	if status.SoftState.RaftState == etcdraft.StateLeader {
+	// A single-voter Group already has a current-term commit after election;
+	// use the normal ReadIndex path so a read does not add a needless log entry
+	// (and so snapshot compaction can retain the exact post-capture suffix).
+	singleVoter := len(status.Config.Voters[0]) == 1 && len(status.Config.Voters[1]) == 0
+	if status.SoftState.RaftState == etcdraft.StateLeader && !singleVoter {
 		// A leader proves each read with a fresh empty entry. Waiting for that
 		// entry to become applied is equivalent to a quorum ReadIndex barrier,
 		// while avoiding a second asynchronous read-response path on WAN links.
-		if err := g.admitProposal(); err != nil {
+		// Under disk pressure, skip the extra local no-op and use etcd/raft's
+		// quorum ReadIndex path below so confirmed reads remain available without
+		// consuming the reserved recovery headroom.
+		if g.admitProposal() == nil {
+			if err := g.raw.Propose(nil); err != nil {
+				g.mu.Unlock()
+				return 0, fmt.Errorf("propose read barrier: %w", err)
+			}
+			messages, processErr := g.processLocked()
+			if processErr != nil {
+				g.mu.Unlock()
+				return 0, processErr
+			}
+			barrierIndex, indexErr := g.storage.LastIndex()
 			g.mu.Unlock()
-			return 0, err
+			if indexErr != nil {
+				return 0, indexErr
+			}
+			g.dispatch(messages)
+			return g.waitApplied(ctx, barrierIndex)
 		}
-		if err := g.raw.Propose(nil); err != nil {
-			g.mu.Unlock()
-			return 0, fmt.Errorf("propose read barrier: %w", err)
-		}
-		messages, processErr := g.processLocked()
-		if processErr != nil {
-			g.mu.Unlock()
-			return 0, processErr
-		}
-		barrierIndex, indexErr := g.storage.LastIndex()
-		g.mu.Unlock()
-		if indexErr != nil {
-			return 0, indexErr
-		}
-		g.dispatch(messages)
-		return g.waitApplied(ctx, barrierIndex)
 	}
 	// etcd/raft intentionally holds ReadIndex requests until the leader has
 	// committed an entry in its current term. Regional Groups can be idle for
@@ -435,15 +440,13 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 		if committedInTerm {
 			g.readBarrierProposalTerm = status.GetTerm()
 		} else if g.readBarrierProposalTerm != status.GetTerm() {
-			if err := g.admitProposal(); err != nil {
-				g.mu.Unlock()
-				return 0, err
+			if g.admitProposal() == nil {
+				if err := g.raw.Propose(nil); err != nil {
+					g.mu.Unlock()
+					return 0, fmt.Errorf("propose current-term read barrier: %w", err)
+				}
+				g.readBarrierProposalTerm = status.GetTerm()
 			}
-			if err := g.raw.Propose(nil); err != nil {
-				g.mu.Unlock()
-				return 0, fmt.Errorf("propose current-term read barrier: %w", err)
-			}
-			g.readBarrierProposalTerm = status.GetTerm()
 		}
 	}
 	g.pendingReads[key] = request

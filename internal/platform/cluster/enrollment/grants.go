@@ -31,7 +31,12 @@ type GrantManager struct {
 	local    identity.Identity
 	now      func() time.Time
 	readRoot func(context.Context) (uint64, error)
-	mu       sync.RWMutex
+	// prePublishRead protects direct GrantManager callers. The network RPC
+	// server already performs the authenticated linearizable barrier, so it
+	// disables this extra round to keep enrollment latency and formation races
+	// unchanged.
+	prePublishRead bool
+	mu             sync.RWMutex
 }
 
 func NewGrantManager(host Host, root *rootstate.State, signer *nodepki.Signer, local identity.Identity) (*GrantManager, error) {
@@ -46,7 +51,7 @@ func NewGrantManager(host Host, root *rootstate.State, signer *nodepki.Signer, l
 			return nil, err
 		}
 	}
-	return &GrantManager{host: host, root: root, signer: signer, local: local}, nil
+	return &GrantManager{host: host, root: root, signer: signer, local: local, prePublishRead: true}, nil
 }
 
 func (m *GrantManager) SetSigner(signer *nodepki.Signer) {
@@ -58,6 +63,15 @@ func (m *GrantManager) SetSigner(signer *nodepki.Signer) {
 func (m *GrantManager) SetRootReadIndex(read func(context.Context) (uint64, error)) {
 	m.mu.Lock()
 	m.readRoot = read
+	m.mu.Unlock()
+}
+
+// SetPrePublishRead controls the defensive pre-submit Root read used by direct
+// manager callers. Network RPC callers should disable it after their own
+// authorization barrier has completed.
+func (m *GrantManager) SetPrePublishRead(enabled bool) {
+	m.mu.Lock()
+	m.prePublishRead = enabled
 	m.mu.Unlock()
 }
 
@@ -147,6 +161,23 @@ func (m *GrantManager) Create(ctx context.Context, request identityenrollment.Gr
 	}
 	if found && !matches(current) {
 		return identityenrollment.GrantBundle{}, fmt.Errorf("%w: grant has different metadata or terminal state", ErrGrantRejected)
+	}
+	m.mu.RLock()
+	prePublishRead := m.prePublishRead
+	m.mu.RUnlock()
+	if !found && prePublishRead {
+		// Re-check the authority clock immediately before publishing. The RPC
+		// layer may already have performed its membership barrier, but a direct
+		// manager caller must not publish a grant whose validity window elapsed
+		// while that confirmation round was in flight.
+		if _, err := m.readRootIndex(ctx); err != nil {
+			return identityenrollment.GrantBundle{}, err
+		}
+		now = m.clock()
+		if err := request.Validate(now); err != nil {
+			return identityenrollment.GrantBundle{}, errors.Join(ErrGrantRejected, err)
+		}
+		grant.CreatedUnix = now.Unix()
 	}
 	// Sign before publishing to catch key/CA/window failures without leaving an
 	// unusable grant. This certificate is not returned until Root confirms it.

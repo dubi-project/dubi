@@ -82,25 +82,37 @@ func (g *Group) ReconfigureVoters(expected *raftpb.ConfState, voters []uint64) e
 	})
 }
 
-// topologyProgressCaughtUp permits a learner that is one entry behind only
-// when the trailing entry is the empty ReadIndex barrier emitted by the local
-// leader. The topology coordinator obtains its confirmed Root cut immediately
-// before this CAS; that barrier may not have reached a WAN learner yet, while
-// admitting the learner at the preceding committed cut is safe. Any actual
-// data or membership entry still requires an exact Match == commit.
+// topologyProgressCaughtUp permits a learner to lag by a bounded number of
+// entries only when every trailing entry is an empty ReadIndex barrier emitted
+// by the local leader. The topology coordinator obtains its confirmed Root cut
+// immediately before this CAS; those barriers may not have reached a WAN
+// learner yet, while admitting it at the preceding committed cut is safe. Any
+// actual data or membership entry still requires an exact Match == commit.
 func (g *Group) topologyProgressCaughtUp(match, commit uint64) bool {
 	if match >= commit {
 		return true
 	}
-	if commit == 0 || match+1 != commit {
+	maxBarrierLag := uint64(1)
+	if g.groupID == RootGroupID {
+		// Root carries continuous cross-region management/read barriers. A
+		// bounded barrier-only tail keeps its topology coordinator from waiting
+		// forever while a WAN learner catches up. Regional/data Groups retain the
+		// stricter one-entry rule so initial formation cannot race later growth.
+		maxBarrierLag = 256
+	}
+	if commit == 0 || commit-match > maxBarrierLag {
 		return false
 	}
-	entries, err := g.storage.Entries(commit, commit+1, 1<<20)
-	if err != nil || len(entries) != 1 {
+	entries, err := g.storage.Entries(match+1, commit+1, 4<<20)
+	if err != nil || len(entries) != int(commit-match) {
 		return false
 	}
-	entry := entries[0]
-	return entry.GetType() == raftpb.EntryNormal && len(entry.GetData()) == 0
+	for _, entry := range entries {
+		if entry.GetType() != raftpb.EntryNormal || len(entry.GetData()) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Host) ReconfigureVoters(groupID string, expected *raftpb.ConfState, voters []uint64) error {
