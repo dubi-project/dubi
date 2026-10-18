@@ -912,6 +912,31 @@ func (s *State) Groups() ([]Group, error) {
 	return groups, iterator.Error()
 }
 
+// Nodes returns the current Root Node catalog in deterministic key order.
+// Restore tooling uses this view to pair a backup's old identities with the
+// already bootstrapped identities of a new cluster.
+func (s *State) Nodes() ([]Node, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
+	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/node/"), UpperBound: []byte("data/node0")})
+	if err != nil {
+		return nil, err
+	}
+	defer iterator.Close()
+	result := make([]Node, 0)
+	for iterator.First(); iterator.Valid(); iterator.Next() {
+		var node Node
+		if err := decodeStreamJSON(iterator.Value(), &node); err != nil {
+			return nil, err
+		}
+		result = append(result, node)
+	}
+	return result, iterator.Error()
+}
+
 func (s *State) GroupChange(changeID string) (GroupChange, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

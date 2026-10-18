@@ -37,3 +37,19 @@ func TestRewriteSnapshotForRestoreMapsRootIdentities(t *testing.T) {
 		t.Fatalf("restored Group = %+v, found=%v, err=%v", group, found, err)
 	}
 }
+
+func TestBuildRestoreIdentityMapPairsNodesByRegion(t *testing.T) {
+	source := rootFileFixture(t)
+	image, _, _, err := source.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := []Node{{NodeID: "node_00000000000000000000000000000002", RaftID: 21, RegionID: "west", Address: "new:7443"}}
+	mapping, err := BuildRestoreIdentityMap(image, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapping.RaftIDs[11] != 21 || mapping.Nodes["node_00000000000000000000000000000001"].NodeID != destination[0].NodeID {
+		t.Fatalf("identity mapping = %+v", mapping)
+	}
+}

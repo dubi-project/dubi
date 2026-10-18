@@ -126,7 +126,7 @@ Placement / Repair / Rebalance
 恢复集群级可服务状态
 ```
 
-恢复不复制旧节点目录、旧 NodeID/RaftID、旧成员关系或旧 Pack 路径；恢复后的节点使用自己的身份。底座 `RestoreCluster` 会先读取 Recovery Point 索引，校验所有节点 Manifest、对象和目标映射，再开始任何目标写入；目标可以把旧节点 Artifact 安装到新的 Node/Store 身份。恢复完成前必须验证所有注册的底座持久资源可打开、对象摘要一致、Group 状态可服务。
+恢复不复制旧节点目录、旧 NodeID/RaftID、旧成员关系或旧 Pack 路径；恢复后的节点使用自己的身份。底座 `RestoreCluster` 会先读取 Recovery Point 索引，校验所有节点 Manifest、对象和目标映射，再开始任何目标写入；Root 快照可以按 Region 自动把旧 NodeID/RaftID 映射到新集群成员，Engine 快照只替换 Raft ConfState，最终通过 Node Runtime 的 Raft snapshot 安装入口写入。目标可以把旧节点 Artifact 安装到新的 Node/Store 身份。恢复完成前必须验证所有注册的底座持久资源可打开、对象摘要一致、Group 状态可服务。
 
 ## 5. 第一阶段实现边界
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,56 @@ import (
 type RestoreIdentityMap struct {
 	RaftIDs map[uint64]uint64
 	Nodes   map[string]Node
+}
+
+// BuildRestoreIdentityMap pairs old backup Nodes with the new cluster's
+// current Nodes by RegionID. A region must have the same number of Nodes on
+// both sides; pairing is deterministic by NodeID and never guesses across
+// regions.
+func BuildRestoreIdentityMap(encoded []byte, destination []Node) (RestoreIdentityMap, error) {
+	var image snapshotImage
+	if err := decodeStreamJSON(encoded, &image); err != nil {
+		return RestoreIdentityMap{}, fmt.Errorf("decode Root snapshot for identity mapping: %w", err)
+	}
+	old := make([]Node, 0)
+	for _, entry := range image.Entries {
+		if !strings.HasPrefix(string(entry.Key), "data/node/") {
+			continue
+		}
+		var node Node
+		if err := decodeStreamJSON(entry.Value, &node); err != nil {
+			return RestoreIdentityMap{}, err
+		}
+		old = append(old, node)
+	}
+	if len(old) == 0 || len(old) != len(destination) {
+		return RestoreIdentityMap{}, errors.New("Root restore requires the same number of old and new Nodes")
+	}
+	byRegionOld := make(map[string][]Node)
+	byRegionNew := make(map[string][]Node)
+	for _, node := range old {
+		byRegionOld[node.RegionID] = append(byRegionOld[node.RegionID], node)
+	}
+	for _, node := range destination {
+		byRegionNew[node.RegionID] = append(byRegionNew[node.RegionID], node)
+	}
+	if len(byRegionOld) != len(byRegionNew) {
+		return RestoreIdentityMap{}, errors.New("Root restore Region set differs from the backup")
+	}
+	mapping := RestoreIdentityMap{RaftIDs: make(map[uint64]uint64, len(old)), Nodes: make(map[string]Node, len(old))}
+	for region, oldNodes := range byRegionOld {
+		newNodes := byRegionNew[region]
+		if len(oldNodes) != len(newNodes) {
+			return RestoreIdentityMap{}, fmt.Errorf("Root restore Node count differs in Region %q", region)
+		}
+		sort.Slice(oldNodes, func(i, j int) bool { return oldNodes[i].NodeID < oldNodes[j].NodeID })
+		sort.Slice(newNodes, func(i, j int) bool { return newNodes[i].NodeID < newNodes[j].NodeID })
+		for index := range oldNodes {
+			mapping.RaftIDs[oldNodes[index].RaftID] = newNodes[index].RaftID
+			mapping.Nodes[oldNodes[index].NodeID] = newNodes[index]
+		}
+	}
+	return mapping, validateRestoreIdentityMap(mapping)
 }
 
 // RewriteSnapshotForRestore rewrites a Root snapshot's identity-bearing
