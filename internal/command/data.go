@@ -176,7 +176,12 @@ func connectDataNode(ctx context.Context, store, address string) (*grpc.ClientCo
 	if err != nil {
 		return nil, identity.Identity{}, err
 	}
-	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Root discovery includes a linearizable ReadIndex. On a low-cost,
+	// cross-region cluster the control-plane barrier can legitimately take
+	// longer than a single WAN RTT while followers apply the committed tail.
+	// Keep the probe bounded, but do not fail before the server's own
+	// 30-second request budget can complete.
+	probe, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var actual peer.Peer
 	response, err := rootjoinwire.NewRootJoinServiceClient(conn).DiscoverRoot(probe,
