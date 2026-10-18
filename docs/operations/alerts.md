@@ -14,6 +14,7 @@
 ### P1
 
 - Node 不可达超过 5 分钟。
+- Prometheus target 连续 2 分钟为 down。
 - `dubi_node_repair_debt` 持续增长超过 5 分钟。
 - Volume migration 长时间没有进度。
 - Root leader 频繁变化。

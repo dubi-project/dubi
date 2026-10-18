@@ -1,6 +1,15 @@
 groups:
   - name: dubi-foundation
     rules:
+      - alert: DubiNodeDown
+        expr: up{job=~"dubi.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: DUBI monitoring target is down
+          description: "Prometheus cannot scrape DUBI node {{ $labels.instance }}. Check the process, host and network before removing the Node."
+
       - alert: DubiNodeNotReady
         expr: dubi_node_ready == 0
         for: 5m

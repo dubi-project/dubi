@@ -28,11 +28,12 @@ systemctl status dubi.service
 ## Node 故障
 
 1. 检查 `dubi status` 中 Node 是否不可达。
-2. 尝试登录原机器，检查进程、磁盘和网络。
-3. 原机器可恢复：启动 Node，等待自动追赶，直到 repair debt 清零。
-4. 原机器不可恢复：人工执行 `dubi node remove --name <name>`。
-5. 新机器使用原 Region 名称执行 `dubi join`。
-6. 确认新 Node 已加入并完成再平衡。
+2. 如果告警来自 `DubiNodeDown`，先确认是监控链路断开还是节点进程确实停止。
+3. 尝试登录原机器，检查进程、磁盘和网络。
+4. 原机器可恢复：启动 Node，等待自动追赶，直到 repair debt 清零。
+5. 原机器不可恢复：人工执行 `dubi node remove --name <name>`。
+6. 新机器使用原 Region 名称执行 `dubi join`。
+7. 确认新 Node 已加入并完成再平衡。
 
 ## Volume 故障
 
