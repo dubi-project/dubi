@@ -235,6 +235,9 @@ func migrateStoppedVolume(ctx context.Context, registry *volume.Registry, volume
 	if selected.Health == "missing" || selected.Health == "invalid" {
 		// The operator has explicitly chosen to remove permanently lost media;
 		// clear only the local migration task, never the logical record debt.
+		if _, err := registry.BeginDrain(volumeID); err != nil {
+			return err
+		}
 		packs, openErr := pack.OpenPool(registry)
 		if openErr != nil {
 			return openErr

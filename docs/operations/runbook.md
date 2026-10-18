@@ -39,7 +39,7 @@ systemctl status dubi.service
 
 1. 使用 `dubi volume list` 判断 `healthy`、`missing` 或 `invalid`。
 2. 可读 Volume：先 `dubi volume drain <volume-id>`，等待迁移完成，再 `dubi volume remove <volume-id>`。
-3. 不可读 Volume：确认数据已由其他 Node/Region 持有后，再执行人工删除。
+3. 不可读 Volume：确认数据已由其他 Node/Region 持有后，直接执行人工 `dubi volume remove <volume-id>`；系统会把 `missing/invalid` 卷先登记为 draining，再完成删除，不要求故障介质仍可打开。
 4. 添加新 Volume，观察容量、迁移进度和 repair debt。
 
 ## Region 故障

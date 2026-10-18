@@ -528,6 +528,15 @@ func (s *dataService) RemoveVolume(ctx context.Context, request *datawire.Remove
 				continue
 			}
 			if item.Health == "missing" || item.Health == "invalid" {
+				// A failed or missing Volume may be removed only after the
+				// administrator has explicitly chosen it. Transition it through
+				// the same durable draining state as a readable Volume so the
+				// final RemoveDrained gate cannot observe an active Volume. Do
+				// this through the registry: opening a Pack collection would
+				// require the failed path to exist.
+				if _, err := s.runtime.Volumes.BeginDrain(item.ID); err != nil {
+					return nil, status.Errorf(codes.FailedPrecondition, "drain lost Volume before removal: %v", err)
+				}
 				if err := s.runtime.Records.AbandonVolumeMigration(item.ID); err != nil {
 					return nil, status.Errorf(codes.FailedPrecondition, "record lost Volume decision: %v", err)
 				}
