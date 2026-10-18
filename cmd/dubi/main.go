@@ -7,9 +7,11 @@ import (
 	"syscall"
 
 	"github.com/dubi-project/dubi/internal/command"
+	"github.com/dubi-project/dubi/internal/platform/memory"
 )
 
 func main() {
+	_, _ = memory.ConfigureFromCgroup()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	os.Exit(command.Run(ctx, os.Args[1:], os.Stdout, os.Stderr))
