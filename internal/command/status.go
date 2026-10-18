@@ -471,7 +471,11 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	defer conn.Close()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// DiscoverRoot performs a linearizable Root barrier so status never trusts
+	// a stale membership/certificate view. Across Regions that barrier may
+	// briefly span an election or WAN retry; match the Root RPC's bounded
+	// request window instead of failing healthy clusters after five seconds.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var actual peer.Peer
 	response, err := rootjoinwire.NewRootJoinServiceClient(conn).DiscoverRoot(ctx,
