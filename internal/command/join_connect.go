@@ -47,7 +47,7 @@ func openJoiningServerWithMux(ctx context.Context, args []string, stdin io.Reade
 	flags.SetOutput(stderr)
 	store := flags.String("store", "", "durable joining Node store")
 	listen := flags.String("listen", "", "internal RPC listen address")
-	apiListen := flags.String("api-listen", "", "optional Tenant HTTPS listen address (identity probe only)")
+	apiListen := flags.String("api-listen", "", "optional Tenant HTTPS and monitoring listen address")
 	advertise := flags.String("advertise", "", "published host:port; derive from route to issuer by default")
 	region := flags.String("region", "", "deployment region; reuse prepared request or default to default")
 	name := flags.String("name", "", "optional operator-facing Node name")

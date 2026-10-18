@@ -21,7 +21,7 @@ curl --cacert <cluster-ca.pem> https://127.0.0.1:7444/metrics
 
 跨机器采集时，`--api-listen` 只能绑定内网地址，并通过防火墙限制 Prometheus 来源。该端口不要直接暴露到公网；`/metrics` 包含节点、Root 和 Volume 状态。
 
-Prometheus 配置示例见 [`deploy/prometheus/prometheus.yml.example`](../../deploy/prometheus/prometheus.yml.example)，告警规则见 [`dubi.rules.yml`](../../deploy/prometheus/dubi.rules.yml)。示例使用集群 CA 校验证书，不应使用 `insecure_skip_verify`。
+生产 Prometheus 配置示例见 [`deploy/prometheus/prometheus.yml.example`](../../deploy/prometheus/prometheus.yml.example)，告警规则见 [`dubi.rules.yml`](../../deploy/prometheus/dubi.rules.yml)。开发机的 Docker 快速验证可参考 [`prometheus.dev.yml.example`](../../deploy/prometheus/prometheus.dev.yml.example)；它使用 `insecure_skip_verify`，只允许本地临时测试，生产环境必须使用集群 CA 校验证书。
 
 ## 主要指标
 
