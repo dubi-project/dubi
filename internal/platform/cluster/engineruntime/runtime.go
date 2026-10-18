@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
@@ -129,6 +130,50 @@ type Runtime struct {
 	// same Group concurrently before either one has registered it in states.
 	openMu sync.Mutex
 	states map[string]*enginestate.State
+}
+
+// StateSnapshot is an opaque, point-in-time image of one local Engine Group.
+// The recovery layer stores Data without interpreting its format; the Group
+// runtime remains responsible for producing and later consuming the image.
+type StateSnapshot struct {
+	GroupID string
+	Index   uint64
+	Data    []byte
+}
+
+// SnapshotStates captures every currently open Engine Group in deterministic
+// Group order. A backup must fail if an open Group cannot produce a coherent
+// image instead of silently publishing an incomplete Recovery Point.
+func (runtime *Runtime) SnapshotStates(ctx context.Context) ([]StateSnapshot, error) {
+	if runtime == nil {
+		return nil, errors.New("engine runtime is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runtime.mu.RLock()
+	groups := make([]string, 0, len(runtime.states))
+	for groupID := range runtime.states {
+		groups = append(groups, groupID)
+	}
+	slices.Sort(groups)
+	states := make([]*enginestate.State, len(groups))
+	for index, groupID := range groups {
+		states[index] = runtime.states[groupID]
+	}
+	runtime.mu.RUnlock()
+	result := make([]StateSnapshot, 0, len(groups))
+	for index, groupID := range groups {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		image, applied, _, err := states[index].Snapshot()
+		if err != nil {
+			return nil, fmt.Errorf("snapshot Engine Group %q: %w", groupID, err)
+		}
+		result = append(result, StateSnapshot{GroupID: groupID, Index: applied, Data: append([]byte(nil), image...)})
+	}
+	return result, nil
 }
 
 func NewRuntime(stateRoot string, mux *Mux) (*Runtime, error) {

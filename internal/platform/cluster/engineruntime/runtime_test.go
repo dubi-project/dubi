@@ -1,6 +1,7 @@
 package engineruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -241,6 +242,49 @@ func TestConcurrentNewStateSerializesDurableOpen(t *testing.T) {
 		if err := state.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestSnapshotStatesReturnsDeterministicOpaqueGroupImages(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register("record", &valueHandler{}); err != nil {
+		t.Fatal(err)
+	}
+	mux, err := registry.Seal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntime(t.TempDir(), mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := runtime.NewState(context.Background(), rootstate.Group{GroupID: "group-b", StateKind: rootstate.GroupStateEngine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.NewState(context.Background(), rootstate.Group{GroupID: "group-a", StateKind: rootstate.GroupStateEngine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	defer second.Close()
+	states, err := runtime.SnapshotStates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 2 || states[0].GroupID != "group-a" || states[1].GroupID != "group-b" {
+		t.Fatalf("snapshots were not sorted: %+v", states)
+	}
+	if len(states[0].Data) == 0 || len(states[1].Data) == 0 {
+		t.Fatal("empty Engine Group snapshot")
+	}
+	states[0].Data[0] ^= 0xff
+	again, err := runtime.SnapshotStates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(states[0].Data, again[0].Data) {
+		t.Fatal("snapshot data aliases runtime state")
 	}
 }
 

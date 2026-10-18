@@ -12,7 +12,7 @@ Cluster Backup/Restore 只处理底座统一持久化层和集群一致性，不
 - 模块自己的文件导入/导出仍由模块负责，不能替代整集群恢复；
 - 上层如果绕过底座写入未登记的持久文件，不能被标记为完整 Cluster Backup。
 
-底座不理解 Engine 内容，但仍必须协调统一的提交切点、Pack 封存、WAL/Checkpoint 和 GC/Compaction 保护，不能简单复制正在写入的文件。
+底座不理解 Engine 内容，但仍必须协调统一的提交切点、Pack 封存、WAL/Checkpoint 和 GC/Compaction 保护，不能简单复制正在写入的文件。当前 Worker 会把打开的 Engine Group 快照作为不透明 Artifact 一并封存；快照生成失败时整个 Recovery Point 失败。
 
 ## 2. Repository 资源
 
@@ -144,5 +144,5 @@ Placement / Repair / Rebalance
 - 直接在线写磁带；
 - 依赖外部 Secret Manager 或环境变量保存凭据。
 
-当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、节点命名空间、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server Worker 已支持 file/S3 Repository，节点通过内部 NodeAdmin mTLS 同步 Repository 密钥，`--credentials-file` 可加密更新 S3 凭据。节点之间不交换对象字节；WAL/Engine snapshot 注册和完整集群 Restore 执行仍未完成。
+当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、节点命名空间、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server Worker 已支持 file/S3 Repository、Pack/Root/Engine Group Artifact，节点通过内部 NodeAdmin mTLS 同步 Repository 密钥，`--credentials-file` 可加密更新 S3 凭据。节点之间不交换对象字节；新的 Engine Group 快照登记仍只覆盖当前已打开 Group，完整集群 Restore 执行和新节点的资源安装流程仍未完成。
 

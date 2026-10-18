@@ -253,6 +253,26 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 				return io.NopCloser(bytes.NewReader(rootImage)), nil
 			}})
 	}
+	if w.runtime.Engines != nil {
+		states, snapshotErr := w.runtime.Engines.SnapshotStates(ctx)
+		if snapshotErr != nil {
+			release()
+			return nil, func() {}, snapshotErr
+		}
+		for _, state := range states {
+			state := state
+			sources = append(sources, recovery.Source{Name: fmt.Sprintf("engine/group/%s/state", state.GroupID), Kind: "engine-state",
+				NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_ENGINE_STATE_V7", Size: int64(len(state.Data)),
+				Open: func(openContext context.Context) (io.ReadCloser, error) {
+					if openContext != nil {
+						if err := openContext.Err(); err != nil {
+							return nil, err
+						}
+					}
+					return io.NopCloser(bytes.NewReader(state.Data)), nil
+				}})
+		}
+	}
 	return sources, release, nil
 }
 
