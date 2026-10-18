@@ -126,6 +126,7 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 	var installedRoot []byte
 	rootInstalled := false
 	pendingEngines := make([]pendingEngineRestore, 0)
+	pendingRecords := make([]pendingRecordRestore, 0)
 	targetsForRecovery := make([]recovery.ClusterTarget, 0)
 	for _, source := range point.Nodes {
 		destination := identityMap.Nodes[source.NodeID]
@@ -144,8 +145,15 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 			targetsForRecovery = append(targetsForRecovery, recovery.ClusterTarget{NodeID: sourceID, Name: artifact.Name,
 				Apply: func(applyCtx context.Context, reader io.Reader, size int64) error {
 					switch artifact.Kind {
-					case "pack", "records-index":
+					case "pack":
 						return runtime.ImportRestoreArtifact(applyCtx, artifact.Name, artifact.Kind, reader, size, placements[sourceID])
+					case "records-index":
+						image, readErr := io.ReadAll(io.LimitReader(reader, size+1))
+						if readErr != nil || int64(len(image)) != size {
+							return errors.Join(readErr, errors.New("records index restore artifact size differs from Manifest"))
+						}
+						pendingRecords = append(pendingRecords, pendingRecordRestore{runtime: runtime, placement: placements[sourceID], data: image})
+						return nil
 					case "root-state":
 						image, readErr := io.ReadAll(io.LimitReader(reader, size+1))
 						if readErr != nil || int64(len(image)) != size {
@@ -193,6 +201,11 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 	if !rootInstalled {
 		return errors.New("Recovery Point has no Root state artifact")
 	}
+	for _, pending := range pendingRecords {
+		if err := pending.runtime.RestoreRecordIndex(ctx, pending.data, pending.placement.Location); err != nil {
+			return fmt.Errorf("restore immutable records index: %w", err)
+		}
+	}
 	for _, pending := range pendingEngines {
 		if err := installPendingEngine(ctx, pending); err != nil {
 			return err
@@ -206,6 +219,12 @@ type pendingEngineRestore struct {
 	name     string
 	data     []byte
 	identity rootstate.RestoreIdentityMap
+}
+
+type pendingRecordRestore struct {
+	runtime   *node.Runtime
+	placement node.RestorePlacement
+	data      []byte
 }
 
 func installPendingEngine(ctx context.Context, pending pendingEngineRestore) error {
