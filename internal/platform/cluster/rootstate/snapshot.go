@@ -107,7 +107,7 @@ func (s *State) Restore(index uint64, encoded []byte, conf *raftpb.ConfState) er
 		return fmt.Errorf("decode Root snapshot membership: %w", err)
 	}
 	if image.Version != FormatVersion || image.Applied != index || !proto.Equal(storedConf, conf) {
-		return errors.New("Root snapshot metadata does not match Raft")
+		return fmt.Errorf("Root snapshot metadata does not match Raft: version=%d applied=%d index=%d stored_conf=%v raft_conf=%v", image.Version, image.Applied, index, storedConf, conf)
 	}
 	view := make(inlineRootView, len(image.Entries))
 	for _, entry := range image.Entries {
