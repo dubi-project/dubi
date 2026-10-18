@@ -1048,6 +1048,13 @@ func normalizeServerTLS(config *tls.Config) *tls.Config {
 	if copy.MinVersion < tls.VersionTLS13 {
 		copy.MinVersion = tls.VersionTLS13
 	}
+	// Internal listeners serve gRPC over HTTP/2. The public HTTPS listener
+	// overrides this to http/1.1 after normalization, but keeping the internal
+	// default explicit is required for Go's TLS ALPN negotiation: without h2,
+	// CLI and NodeAdmin clients fail before reaching the RPC handler.
+	if len(copy.NextProtos) == 0 {
+		copy.NextProtos = []string{"h2"}
+	}
 	return copy
 }
 
