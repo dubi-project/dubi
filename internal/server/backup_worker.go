@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -56,7 +57,9 @@ func (w *backupWorker) run(ctx context.Context) {
 }
 
 func (w *backupWorker) process(ctx context.Context) {
-	w.syncRepositoryKey(ctx)
+	if err := w.syncRepositoryKey(ctx); err != nil {
+		w.reportError(fmt.Errorf("sync Repository key: %w", err))
+	}
 	jobs, err := w.runtime.Root.BackupJobs()
 	if err != nil {
 		w.reportError(fmt.Errorf("list Backup jobs: %w", err))
@@ -76,34 +79,44 @@ func (w *backupWorker) process(ctx context.Context) {
 // authenticated NodeAdmin channel. A missing local key is left untouched so
 // a lost key cannot be silently replaced; an administrator can explicitly
 // rotate Repository credentials after that event.
-func (w *backupWorker) syncRepositoryKey(ctx context.Context) {
+func (w *backupWorker) syncRepositoryKey(ctx context.Context) error {
 	if w == nil || w.client == nil || w.storeRoot == "" {
-		return
+		return nil
 	}
 	key, err := repository.LoadRepositoryKey(w.storeRoot)
 	if err != nil {
-		return
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
 	}
 	if _, err := w.runtime.ReadRootIndex(ctx); err != nil {
-		return
+		return err
 	}
 	view, err := w.runtime.Root.RootRoutingView(4096)
 	if err != nil {
-		return
+		return err
 	}
+	var transferErrors []error
 	for _, target := range view.Nodes {
 		if target.RaftID == w.runtime.Identity.RaftID {
 			continue
 		}
 		connection, err := w.client.NodeAdminConnection(target)
 		if err != nil {
+			transferErrors = append(transferErrors, fmt.Errorf("Node %s: %w", target.NodeID, err))
 			continue
 		}
 		callContext, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_ = nodeadminrpc.TransferRepositoryKey(callContext, connection, w.runtime.Identity.ClusterID, w.runtime.Identity.RaftID, key)
+		if transferErr := nodeadminrpc.TransferRepositoryKey(callContext, connection, w.runtime.Identity.ClusterID, w.runtime.Identity.RaftID, key); transferErr != nil {
+			transferErrors = append(transferErrors, fmt.Errorf("Node %s: %w", target.NodeID, transferErr))
+		}
 		cancel()
-		_ = connection.Close()
+		if closeErr := connection.Close(); closeErr != nil {
+			transferErrors = append(transferErrors, fmt.Errorf("close Node %s key connection: %w", target.NodeID, closeErr))
+		}
 	}
+	return errors.Join(transferErrors...)
 }
 
 func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) error {
@@ -173,6 +186,9 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 	}
 	if err != nil {
 		return err
+	}
+	if _, err := w.runtime.ReadRootIndex(ctx); err != nil {
+		return fmt.Errorf("confirm Root checkpoint before backup: %w", err)
 	}
 	sources, release, err := w.sources(ctx)
 	if err != nil {
