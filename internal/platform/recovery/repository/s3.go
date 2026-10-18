@@ -112,6 +112,10 @@ type S3Store struct {
 	credentials S3Credentials
 	client      *http.Client
 	endpoint    string
+	// namespace separates node-local manifests when several workers use the
+	// same S3 Repository. It is deliberately not part of the cluster
+	// Repository definition because it is derived from the current Node.
+	namespace string
 }
 
 var _ ObjectStore = (*S3Store)(nil)
@@ -120,6 +124,22 @@ var _ ObjectStore = (*S3Store)(nil)
 // the standard S3 REST API and AWS Signature Version 4 when credentials are
 // supplied. A custom Endpoint is useful for S3-compatible services and tests.
 func OpenS3(value Repository, credentials S3Credentials) (*S3Store, error) {
+	return openS3(value, credentials, "")
+}
+
+// OpenS3Node opens the node-local view of an S3 Repository. S3 is a shared
+// destination, but each backup worker owns its own artifacts and Manifest.
+// The node namespace keeps workers from trying to publish different
+// manifests under the same epoch. It does not transfer or replicate object
+// bytes between nodes.
+func OpenS3Node(value Repository, credentials S3Credentials, nodeID string) (*S3Store, error) {
+	if !validS3NodeNamespace(nodeID) {
+		return nil, errors.New("invalid S3 node namespace")
+	}
+	return openS3(value, credentials, "nodes/"+nodeID)
+}
+
+func openS3(value Repository, credentials S3Credentials, namespace string) (*S3Store, error) {
 	if err := value.Validate(); err != nil {
 		return nil, err
 	}
@@ -137,7 +157,7 @@ func OpenS3(value Repository, credentials S3Credentials) (*S3Store, error) {
 		}
 		endpoint = "https://s3." + region + ".amazonaws.com"
 	}
-	return &S3Store{repository: value, credentials: credentials, client: http.DefaultClient, endpoint: endpoint}, nil
+	return &S3Store{repository: value, credentials: credentials, client: http.DefaultClient, endpoint: endpoint, namespace: namespace}, nil
 }
 
 func (s *S3Store) PutObject(ctx context.Context, source io.Reader) (ObjectRef, error) {
@@ -453,12 +473,30 @@ func (s *S3Store) keyURL(key string) string {
 		base.Host = s.repository.Bucket + "." + base.Host
 	}
 	prefix := strings.Trim(s.repository.Prefix, "/")
+	if s.namespace != "" {
+		if prefix != "" {
+			prefix += "/"
+		}
+		prefix += s.namespace
+	}
 	if prefix != "" {
 		path += "/" + prefix
 	}
 	base.Path = path + "/" + key
 	base.RawPath = ""
 	return base.String()
+}
+
+func validS3NodeNamespace(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value || len(value) > 128 || strings.ContainsAny(value, "/\\\x00") {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func objectKey(id string) string {

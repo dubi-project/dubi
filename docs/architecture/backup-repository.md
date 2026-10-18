@@ -79,6 +79,8 @@ dubi repository add primary \
 
 Access Key、Secret Key 等凭据作为 Repository 记录中的加密字段保存，不能出现在命令行、Raft 日志、Manifest 或普通日志中。用户侧不暴露独立 Secret Store 概念；加密密钥生命周期属于 recovery 平台内部实现。
 
+S3 是共享目标，但每个 Node 仍只上传自己封口后的 Pack 和 Root Artifact。Worker 会在配置的 Prefix 下自动使用 `nodes/<NodeID>/` 命名空间，因此同一 Recovery Point 的不同节点不会争用同一个 Manifest；对象字节也不会在节点之间转发。恢复时按对应 Node 的命名空间读取其 Manifest，再交给新的节点身份执行恢复和数据修复。
+
 磁带不是第一版在线 Repository 后端。以后应先封存并校验 Recovery Point，再将不可变归档导出到磁带；恢复时先导回可读 Repository，再执行 DUBI Restore。
 
 ## 3. Recovery Point 与增量
@@ -142,5 +144,5 @@ Placement / Repair / Rebalance
 - 直接在线写磁带；
 - 依赖外部 Secret Manager 或环境变量保存凭据。
 
-当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server Worker 已支持 file/S3 Repository，节点通过内部 NodeAdmin mTLS 同步 Repository 密钥，`--credentials-file` 可加密更新 S3 凭据。节点之间不交换对象字节；WAL/Engine snapshot 注册和完整集群 Restore 执行仍未完成。
+当前代码状态：`internal/platform/recovery/repository` 已实现 Repository 校验、AES-256-GCM 凭据包原语、Store 本地密钥、file 内容寻址对象、S3-compatible 对象读写、节点命名空间、完整性校验和原子 Manifest；`internal/platform/recovery/{backup,restore}.go` 已实现面向 `ObjectStore` 的不透明 Artifact 备份/恢复规划器。Pack Pool 已提供 `SnapshotPacks`：在一个本地封口切点封存当前 Pack，并返回带 inode pin 的只读 Pack 文件清单，复制过程不需要解析 Pack 内容。Server Worker 已支持 file/S3 Repository，节点通过内部 NodeAdmin mTLS 同步 Repository 密钥，`--credentials-file` 可加密更新 S3 凭据。节点之间不交换对象字节；WAL/Engine snapshot 注册和完整集群 Restore 执行仍未完成。
 

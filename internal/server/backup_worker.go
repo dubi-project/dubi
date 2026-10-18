@@ -164,7 +164,7 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 		if credentialErr != nil {
 			return fmt.Errorf("decrypt S3 Repository credentials: %w", credentialErr)
 		}
-		store, err = repository.OpenS3(repositoryConfig, credentials)
+		store, err = repository.OpenS3Node(repositoryConfig, credentials, w.runtime.Identity.NodeID)
 	}
 	if err != nil {
 		return err

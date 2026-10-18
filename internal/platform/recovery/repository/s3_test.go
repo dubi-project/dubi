@@ -56,6 +56,52 @@ func TestS3StoreBackupAndRestore(t *testing.T) {
 	}
 }
 
+func TestS3NodeStoreSeparatesRecoveryPointsByNode(t *testing.T) {
+	server, objects, _ := newFakeS3(t)
+	defer server.Close()
+	config := Repository{Name: "primary", Type: TypeS3, Bucket: "dubi", Prefix: "cluster-a", Endpoint: server.URL, PathStyle: true}
+	first, err := OpenS3Node(config, S3Credentials{}, "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenS3Node(config, S3Credentials{}, "node-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("node-local")
+	firstObject, err := first.PutObject(context.Background(), bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondObject, err := second.PutObject(context.Background(), bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstObject != secondObject {
+		t.Fatalf("content identity changed across node stores: %v != %v", firstObject, secondObject)
+	}
+	manifest := func(name string) Manifest {
+		return Manifest{Version: 1, Repository: config.Name, ClusterID: "cluster-a", Epoch: 12,
+			CreatedAt: time.Unix(12, 0).UTC(), Objects: []ObjectRef{firstObject},
+			Artifacts: []Artifact{{Name: "pack/1", Kind: "pack", NodeID: name, Object: firstObject}}}
+	}
+	if err := first.CommitManifest(context.Background(), manifest("node-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.CommitManifest(context.Background(), manifest("node-b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.ReadManifest(12); err != nil {
+		t.Fatal("read node-a manifest:", err)
+	}
+	if _, err := second.ReadManifest(12); err != nil {
+		t.Fatal("read node-b manifest:", err)
+	}
+	if len(*objects) != 6 {
+		t.Fatalf("unexpected namespaced S3 objects: %d", len(*objects))
+	}
+}
+
 func TestS3CredentialEnvelopeRoundTrip(t *testing.T) {
 	config := Repository{Name: "primary", Type: TypeS3, Bucket: "dubi", Region: "test-1"}
 	key := bytes.Repeat([]byte{0x42}, 32)
