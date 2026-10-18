@@ -30,6 +30,19 @@ const regionalFormationInterval = 5 * time.Second
 // All nodes observe formation intents independently of Root leadership. One
 // in-flight round per node, bounded lifetime, joined before Store resources close.
 func (r *regionalFormation) run(ctx context.Context) {
+	// Give a freshly started Node's enrollment/topology work one scheduling
+	// round to settle before freezing an initial Region cohort.  This batches
+	// Nodes that are already joining during startup; later joins still use the
+	// durable growth workflow.  A one-Node cluster therefore remains fully
+	// automatic, with only the normal reconciliation interval of startup
+	// latency.
+	initial := time.NewTimer(regionalFormationInterval)
+	select {
+	case <-ctx.Done():
+		initial.Stop()
+		return
+	case <-initial.C:
+	}
 	for ctx.Err() == nil {
 		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := r.coordinator.Reconcile(attempt)

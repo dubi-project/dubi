@@ -97,6 +97,20 @@ func (c *Coordinator) plan(ctx context.Context) error {
 	if len(cut.Membership.GetVotersOutgoing()) != 0 || len(cut.Membership.GetLearnersNext()) != 0 || cut.Membership.GetAutoLeave() {
 		return nil
 	}
+	// An admitted enrollment learner has completed the join protocol but may
+	// still be replaying Root.  Do not freeze that transitional membership into
+	// an initial Region cohort; wait for Root topology to promote it.  Legacy
+	// learners have no durable enrollment task and remain eligible, preserving
+	// recovery of clusters created before the join workflow.
+	for _, learner := range cut.Membership.GetLearners() {
+		task, found, err := c.root.RootJoinForNode(learner)
+		if err != nil {
+			return err
+		}
+		if found && task.State == rootstate.RootJoinAdmitted {
+			return nil
+		}
+	}
 	regions := map[string][]uint64{}
 	for _, node := range cut.Nodes {
 		regions[node.RegionID] = append(regions[node.RegionID], node.RaftID)

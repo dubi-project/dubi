@@ -392,11 +392,15 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 		return 0, ErrReadIndexBusy
 	}
 	status := g.raw.Status()
-	// A single-voter Group already has a current-term commit after election;
-	// use the normal ReadIndex path so a read does not add a needless log entry
-	// (and so snapshot compaction can retain the exact post-capture suffix).
+	// Root's current-term commit already proves a single-voter read, so use
+	// etcd/raft's quorum ReadIndex path there instead of mutating Root with a
+	// no-op.  This keeps idempotent management retries read-only.  Regional
+	// Groups retain the normal leader barrier; while a regional snapshot is
+	// being built, also avoid adding a no-op after its captured cut so the
+	// post-capture suffix remains exact.
 	singleVoter := len(status.Config.Voters[0]) == 1 && len(status.Config.Voters[1]) == 0
-	if status.SoftState.RaftState == etcdraft.StateLeader && !singleVoter {
+	avoidLeaderBarrier := singleVoter && (g.groupID == RootGroupID || g.snapshotting)
+	if status.SoftState.RaftState == etcdraft.StateLeader && !avoidLeaderBarrier {
 		// A leader proves each read with a fresh empty entry. Waiting for that
 		// entry to become applied is equivalent to a quorum ReadIndex barrier,
 		// while avoiding a second asynchronous read-response path on WAN links.
@@ -427,7 +431,7 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 	// long periods, so a freshly elected leader otherwise makes every read
 	// (including repair/status observations) wait until its context expires.
 	// Commit one empty normal entry once per term to establish that barrier.
-	if !(len(status.Config.Voters[0]) == 1 && len(status.Config.Voters[1]) == 0) {
+	if !avoidLeaderBarrier {
 		committedInTerm := false
 		if commit := status.GetCommit(); commit != 0 {
 			term, termErr := g.storage.Term(commit)

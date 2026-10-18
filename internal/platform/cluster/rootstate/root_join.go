@@ -88,6 +88,44 @@ func (s *State) RootJoin(grantID string) (RootJoin, bool, error) {
 	return s.rootJoin(grantID)
 }
 
+// RootJoinForNode returns the durable enrollment task for a registered Node.
+// It lets control-plane planners distinguish an admitted enrollment learner
+// from a legacy learner that was present before the enrollment workflow.  The
+// distinction matters while forming a Region: an admitted learner may still
+// be catching up to Root and must not be captured in an initial cohort until
+// Root topology promotes it.
+func (s *State) RootJoinForNode(raftID uint64) (RootJoin, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return RootJoin{}, false, err
+	}
+	if raftID == 0 {
+		return RootJoin{}, false, errors.New("invalid Root join Node identity")
+	}
+	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/root-join/"), UpperBound: []byte("data/root-join0")})
+	if err != nil {
+		return RootJoin{}, false, err
+	}
+	defer iterator.Close()
+	for iterator.First(); iterator.Valid(); iterator.Next() {
+		var task RootJoin
+		if err := decodeStreamJSON(iterator.Value(), &task); err != nil {
+			return RootJoin{}, false, err
+		}
+		if err := task.Validate(); err != nil {
+			return RootJoin{}, false, err
+		}
+		if string(rootJoinKey(task.GrantID)) != string(iterator.Key()) {
+			return RootJoin{}, false, errors.New("Root join key differs from record")
+		}
+		if task.RaftID == raftID {
+			return task, true, nil
+		}
+	}
+	return RootJoin{}, false, iterator.Error()
+}
+
 func (s *State) rootJoin(grantID string) (RootJoin, bool, error) {
 	encoded, found, err := s.get(rootJoinKey(grantID))
 	if err != nil || !found {
