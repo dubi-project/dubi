@@ -268,6 +268,34 @@ func (s *S3Store) CommitManifest(ctx context.Context, manifest Manifest) error {
 	return s.putImmutable(ctx, key+".complete", []byte("complete\n"), "text/plain")
 }
 
+// CommitRecoveryPoint publishes the shared cluster index outside any
+// node-specific namespace. Node Manifests remain under nodes/<NodeID>/.
+func (s *S3Store) CommitRecoveryPoint(ctx context.Context, point RecoveryPoint) error {
+	if s == nil {
+		return errors.New("S3 object store is not ready")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := point.Validate(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(point)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > maxManifestBytes {
+		return errors.New("cluster Recovery Point is too large")
+	}
+	root := *s
+	root.namespace = ""
+	key := fmt.Sprintf("recovery-points/%020d.json", point.Epoch)
+	if err := root.putImmutable(ctx, key, encoded, "application/json"); err != nil {
+		return err
+	}
+	return root.putImmutable(ctx, key+".complete", []byte("complete\n"), "text/plain")
+}
+
 func (s *S3Store) ReadManifest(epoch uint64) (Manifest, error) {
 	if s == nil || epoch == 0 {
 		return Manifest{}, errors.New("invalid Recovery Point")
@@ -306,6 +334,41 @@ func (s *S3Store) ReadManifest(epoch uint64) (Manifest, error) {
 		}
 	}
 	return manifest, nil
+}
+
+func (s *S3Store) ReadRecoveryPoint(epoch uint64) (RecoveryPoint, error) {
+	if s == nil || epoch == 0 {
+		return RecoveryPoint{}, errors.New("invalid cluster Recovery Point")
+	}
+	root := *s
+	root.namespace = ""
+	key := fmt.Sprintf("recovery-points/%020d.json", epoch)
+	if _, err := root.do(context.Background(), http.MethodHead, root.objectURL(key+".complete"), nil, 0, nil); err != nil {
+		if isNotFound(err) {
+			return RecoveryPoint{}, errors.New("cluster Recovery Point is not complete")
+		}
+		return RecoveryPoint{}, err
+	}
+	response, err := root.do(context.Background(), http.MethodGet, root.objectURL(key), nil, 0, nil)
+	if err != nil {
+		return RecoveryPoint{}, err
+	}
+	encoded, readErr := io.ReadAll(io.LimitReader(response.Body, maxManifestBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		return RecoveryPoint{}, errors.Join(readErr, closeErr)
+	}
+	if len(encoded) > maxManifestBytes {
+		return RecoveryPoint{}, errors.New("cluster Recovery Point is too large")
+	}
+	var point RecoveryPoint
+	if err := json.Unmarshal(encoded, &point); err != nil {
+		return RecoveryPoint{}, err
+	}
+	if err := point.Validate(); err != nil {
+		return RecoveryPoint{}, err
+	}
+	return point, nil
 }
 
 func (s *S3Store) putImmutable(ctx context.Context, key string, payload []byte, contentType string) error {

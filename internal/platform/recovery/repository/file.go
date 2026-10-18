@@ -55,6 +55,39 @@ type Manifest struct {
 	Artifacts  []Artifact  `json:"artifacts,omitempty"`
 }
 
+// RecoveryPoint is the cluster-level index for one immutable backup. The
+// node Manifests remain independent because file Repositories are node-local;
+// this index records the set that Root declared complete.
+type RecoveryPoint struct {
+	Version    int                 `json:"version"`
+	Repository string              `json:"repository"`
+	ClusterID  string              `json:"cluster_id"`
+	Epoch      uint64              `json:"epoch"`
+	CreatedAt  time.Time           `json:"created_at"`
+	Nodes      []RecoveryPointNode `json:"nodes"`
+}
+
+type RecoveryPointNode struct {
+	NodeID string `json:"node_id"`
+}
+
+func (value RecoveryPoint) Validate() error {
+	if value.Version != 1 || ValidateName(value.Repository) != nil || value.ClusterID == "" || value.Epoch == 0 || value.CreatedAt.IsZero() || len(value.Nodes) == 0 {
+		return errors.New("invalid cluster Recovery Point")
+	}
+	seen := make(map[string]struct{}, len(value.Nodes))
+	for _, node := range value.Nodes {
+		if node.NodeID == "" || strings.TrimSpace(node.NodeID) != node.NodeID || len(node.NodeID) > 128 || strings.ContainsAny(node.NodeID, "\r\n\x00") {
+			return errors.New("invalid cluster Recovery Point node")
+		}
+		if _, found := seen[node.NodeID]; found {
+			return errors.New("duplicate cluster Recovery Point node")
+		}
+		seen[node.NodeID] = struct{}{}
+	}
+	return nil
+}
+
 func (m Manifest) Validate() error {
 	if m.Version != 1 || ValidateName(m.Repository) != nil || m.ClusterID == "" || m.Epoch == 0 || m.CreatedAt.IsZero() {
 		return errors.New("invalid Recovery Point Manifest")
@@ -331,6 +364,76 @@ func (s *FileStore) CommitManifest(ctx context.Context, manifest Manifest) error
 	return syncDirectory(filepath.Dir(marker.Name()))
 }
 
+// CommitRecoveryPoint atomically publishes the cluster-level index after all
+// node-local Manifests have completed. It is idempotent for identical content.
+func (s *FileStore) CommitRecoveryPoint(ctx context.Context, point RecoveryPoint) error {
+	if s == nil || s.root == "" {
+		return errors.New("Repository object store is not ready")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := point.Validate(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(point)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > maxManifestBytes {
+		return errors.New("cluster Recovery Point is too large")
+	}
+	base := filepath.Join(s.root, manifestsDirectory, fmt.Sprintf("%020d.recovery", point.Epoch))
+	manifestPath, markerPath := base+".json", base+".complete"
+	if existing, readErr := os.ReadFile(manifestPath); readErr == nil {
+		if !bytes.Equal(existing, encoded) {
+			return errors.New("cluster Recovery Point conflicts with existing content")
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	} else {
+		temporary, createErr := os.CreateTemp(filepath.Join(s.root, manifestsDirectory), ".recovery-")
+		if createErr != nil {
+			return createErr
+		}
+		temporaryName := temporary.Name()
+		defer os.Remove(temporaryName)
+		if _, writeErr := temporary.Write(encoded); writeErr != nil {
+			_ = temporary.Close()
+			return writeErr
+		}
+		if syncErr := temporary.Sync(); syncErr != nil {
+			_ = temporary.Close()
+			return syncErr
+		}
+		if closeErr := temporary.Close(); closeErr != nil {
+			return closeErr
+		}
+		if linkErr := os.Link(temporaryName, manifestPath); linkErr != nil && !errors.Is(linkErr, os.ErrExist) {
+			return linkErr
+		}
+	}
+	if err := syncDirectory(filepath.Dir(manifestPath)); err != nil {
+		return err
+	}
+	marker, err := os.OpenFile(markerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	if _, err := marker.WriteString("complete\n"); err != nil {
+		_ = marker.Close()
+		return err
+	}
+	if err := marker.Sync(); err != nil {
+		_ = marker.Close()
+		return err
+	}
+	return errors.Join(marker.Close(), syncDirectory(filepath.Dir(markerPath)))
+}
+
 func (s *FileStore) ReadManifest(epoch uint64) (Manifest, error) {
 	if s == nil || s.root == "" || epoch == 0 {
 		return Manifest{}, errors.New("invalid Recovery Point")
@@ -373,6 +476,31 @@ func (s *FileStore) ReadManifest(epoch uint64) (Manifest, error) {
 		}
 	}
 	return manifest, nil
+}
+
+func (s *FileStore) ReadRecoveryPoint(epoch uint64) (RecoveryPoint, error) {
+	if s == nil || s.root == "" || epoch == 0 {
+		return RecoveryPoint{}, errors.New("invalid cluster Recovery Point")
+	}
+	base := filepath.Join(s.root, manifestsDirectory, fmt.Sprintf("%020d.recovery", epoch))
+	if _, err := os.Stat(base + ".complete"); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RecoveryPoint{}, errors.New("cluster Recovery Point is not complete")
+		}
+		return RecoveryPoint{}, err
+	}
+	encoded, err := os.ReadFile(base + ".json")
+	if err != nil {
+		return RecoveryPoint{}, err
+	}
+	var point RecoveryPoint
+	if err := json.Unmarshal(encoded, &point); err != nil {
+		return RecoveryPoint{}, err
+	}
+	if err := point.Validate(); err != nil {
+		return RecoveryPoint{}, err
+	}
+	return point, nil
 }
 
 // ListManifests returns only complete, individually verified Recovery Points

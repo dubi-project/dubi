@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -87,5 +88,29 @@ func TestFileStoreManifestReadVerifiesObjectHash(t *testing.T) {
 	}
 	if _, err := store.ReadManifest(manifest.Epoch); err == nil {
 		t.Fatal("tampered object was accepted")
+	}
+}
+
+func TestFileStoreRecoveryPointIndexIsImmutable(t *testing.T) {
+	config := Repository{Name: "local", Type: TypeFile, Path: t.TempDir()}
+	store, err := OpenFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	point := RecoveryPoint{Version: 1, Repository: config.Name, ClusterID: "cluster-a", Epoch: 8,
+		CreatedAt: time.Unix(8, 0).UTC(), Nodes: []RecoveryPointNode{{NodeID: "node-a"}, {NodeID: "node-b"}}}
+	if err := store.CommitRecoveryPoint(context.Background(), point); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.ReadRecoveryPoint(point.Epoch)
+	if err != nil || !reflect.DeepEqual(loaded, point) {
+		t.Fatalf("recovery point = %+v, err=%v", loaded, err)
+	}
+	if err := store.CommitRecoveryPoint(context.Background(), point); err != nil {
+		t.Fatal("identical recovery point retry failed:", err)
+	}
+	point.Nodes[0].NodeID = "node-c"
+	if err := store.CommitRecoveryPoint(context.Background(), point); err == nil {
+		t.Fatal("conflicting recovery point was accepted")
 	}
 }

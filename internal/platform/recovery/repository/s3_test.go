@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -99,6 +100,25 @@ func TestS3NodeStoreSeparatesRecoveryPointsByNode(t *testing.T) {
 	}
 	if len(*objects) != 6 {
 		t.Fatalf("unexpected namespaced S3 objects: %d", len(*objects))
+	}
+}
+
+func TestS3RecoveryPointIndexUsesSharedNamespace(t *testing.T) {
+	server, _, _ := newFakeS3(t)
+	defer server.Close()
+	config := Repository{Name: "primary", Type: TypeS3, Bucket: "dubi", Prefix: "cluster-a", Endpoint: server.URL, PathStyle: true}
+	store, err := OpenS3Node(config, S3Credentials{}, "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	point := RecoveryPoint{Version: 1, Repository: config.Name, ClusterID: "cluster-a", Epoch: 13,
+		CreatedAt: time.Unix(13, 0).UTC(), Nodes: []RecoveryPointNode{{NodeID: "node-a"}, {NodeID: "node-b"}}}
+	if err := store.CommitRecoveryPoint(context.Background(), point); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.ReadRecoveryPoint(point.Epoch)
+	if err != nil || !reflect.DeepEqual(loaded, point) {
+		t.Fatalf("recovery point = %+v, err=%v", loaded, err)
 	}
 }
 

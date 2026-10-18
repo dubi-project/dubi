@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -206,9 +207,89 @@ func (w *backupWorker) finalizeIfComplete(ctx context.Context, job rootstate.Bac
 			return nil
 		}
 	}
+	if err := w.publishRecoveryPoint(ctx, latest); err != nil {
+		return err
+	}
 	finalizeID := backupRequestID("finalize", job.JobID, w.runtime.Identity.RaftID, job.Epoch)
 	return w.submit(ctx, finalizeID, rootstate.Command{Version: rootstate.FormatVersion, RequestID: finalizeID,
 		Type: rootstate.FinalizeBackupJob, BackupJobReference: &rootstate.BackupJobReference{JobID: job.JobID}})
+}
+
+func (w *backupWorker) publishRecoveryPoint(ctx context.Context, job rootstate.BackupJob) error {
+	configured, found, err := w.runtime.Root.Repository(job.Repository)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("Backup Repository disappeared before Recovery Point publication")
+	}
+	nodes := make([]repository.RecoveryPointNode, 0, len(job.Workers))
+	for _, worker := range job.Workers {
+		nodes = append(nodes, repository.RecoveryPointNode{NodeID: worker.NodeID})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	point := repository.RecoveryPoint{Version: 1, Repository: configured.Name, ClusterID: job.ClusterID,
+		Epoch: job.Epoch, CreatedAt: time.Now().UTC(), Nodes: nodes}
+	if configured.IsFile() {
+		store, openErr := repository.OpenFile(configured)
+		if openErr != nil {
+			return openErr
+		}
+		if commitErr := store.CommitRecoveryPoint(ctx, point); commitErr != nil {
+			if existing, readErr := store.ReadRecoveryPoint(job.Epoch); readErr == nil && recoveryPointMatches(existing, point) {
+				return nil
+			}
+			return commitErr
+		}
+		return nil
+	}
+	key := repository.S3Credentials{}
+	if len(configured.EncryptedCredentials) != 0 {
+		localKey, keyErr := repository.LoadRepositoryKey(w.storeRoot)
+		if keyErr != nil {
+			return fmt.Errorf("load Repository key for Recovery Point publication: %w", keyErr)
+		}
+		key, err = repository.OpenS3Credentials(configured, localKey)
+		if err != nil {
+			return fmt.Errorf("decrypt S3 Repository credentials for Recovery Point publication: %w", err)
+		}
+	}
+	rootStore, err := repository.OpenS3(configured, key)
+	if err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		nodeStore, openErr := repository.OpenS3Node(configured, key, node.NodeID)
+		if openErr != nil {
+			return openErr
+		}
+		manifest, readErr := nodeStore.ReadManifest(job.Epoch)
+		if readErr != nil {
+			return fmt.Errorf("verify S3 Manifest for Node %s: %w", node.NodeID, readErr)
+		}
+		if manifest.Repository != job.Repository || manifest.ClusterID != job.ClusterID || manifest.Epoch != job.Epoch {
+			return fmt.Errorf("S3 Manifest for Node %s does not match the Recovery Point", node.NodeID)
+		}
+	}
+	if commitErr := rootStore.CommitRecoveryPoint(ctx, point); commitErr != nil {
+		if existing, readErr := rootStore.ReadRecoveryPoint(job.Epoch); readErr == nil && recoveryPointMatches(existing, point) {
+			return nil
+		}
+		return commitErr
+	}
+	return nil
+}
+
+func recoveryPointMatches(left, right repository.RecoveryPoint) bool {
+	if left.Version != right.Version || left.Repository != right.Repository || left.ClusterID != right.ClusterID || left.Epoch != right.Epoch || len(left.Nodes) != len(right.Nodes) {
+		return false
+	}
+	for index := range left.Nodes {
+		if left.Nodes[index].NodeID != right.Nodes[index].NodeID {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), error) {
