@@ -247,7 +247,7 @@ func stableRegionalObservation(conf *raftpb.ConfState, target uint64) bool {
 	// after an explicit maintenance removal. This is an observation-only
 	// recovery window; Root growth still fixes the old three-Node denominator
 	// and will not confirm a replacement until the new cohort is complete.
-	if len(conf.GetVoters()) < 2 || len(conf.GetVoters())+len(conf.GetLearners()) > rootstate.MaxRegionCohortNodes || len(conf.GetVotersOutgoing()) != 0 || len(conf.GetLearnersNext()) != 0 || conf.GetAutoLeave() {
+	if len(conf.GetVoters()) == 0 || len(conf.GetVoters())+len(conf.GetLearners()) > rootstate.MaxRegionCohortNodes || len(conf.GetVotersOutgoing()) != 0 || len(conf.GetLearnersNext()) != 0 || conf.GetAutoLeave() {
 		return false
 	}
 	seen := map[uint64]bool{}

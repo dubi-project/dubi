@@ -285,6 +285,12 @@ func TestRegionObservationRejectsMalformedOrMisboundResponses(t *testing.T) {
 	if observation, err := decodeRegionObservation("cluster", 1, "data-1", good); err != nil || observation.View.Found {
 		t.Fatal(observation, err)
 	}
+	// A one-Node Region is valid when its durability policy is satisfied by
+	// other Regions; the local observation must not require two local voters.
+	good.ConfState, _ = proto.Marshal(&raftpb.ConfState{Voters: []uint64{1}})
+	if _, err := decodeRegionObservation("cluster", 1, "data-1", good); err != nil {
+		t.Fatal("single-voter Region observation rejected", err)
+	}
 }
 
 type regionObserveProxy struct {
