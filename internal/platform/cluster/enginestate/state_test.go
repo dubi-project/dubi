@@ -89,6 +89,29 @@ func TestBootstrapMembershipPersistsWithoutAdvancingEngine(t *testing.T) {
 	}
 }
 
+func TestBootstrapMembershipRepairsLegacyAppliedState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cap-state")
+	state, err := Open(root, "data-1", &testHandler{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := uint64(1); index <= 7; index++ {
+		if err := state.Advance(index); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := state.BootstrapMembership(&raftpb.ConfState{Voters: []uint64{11}}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := state.RegionFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.MembershipIndex != 7 || state.AppliedIndex() != 7 {
+		t.Fatalf("legacy Engine bootstrap membership = index %d, applied %d", view.MembershipIndex, state.AppliedIndex())
+	}
+}
+
 func TestEngineStateAtomicallyFencesAndAppliesMutation(t *testing.T) {
 	root := t.TempDir()
 	id, err := identity.Bootstrap(root)

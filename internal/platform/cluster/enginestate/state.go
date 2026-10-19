@@ -334,8 +334,17 @@ func (s *State) BootstrapMembership(conf *raftpb.ConfState) error {
 	if err := s.usable(); err != nil {
 		return err
 	}
-	if s.applied != 0 || conf == nil || len(conf.GetVoters()) == 0 || len(s.conf.GetVoters()) != 0 || len(s.conf.GetLearners()) != 0 {
+	if conf == nil || len(conf.GetVoters()) == 0 || len(s.conf.GetVoters()) != 0 || len(s.conf.GetLearners()) != 0 {
 		return errors.New("invalid Engine bootstrap membership")
+	}
+	// Storage Bootstrap creates the initial ConfState without a ConfChange
+	// entry.  Fresh state has no applied entries, while a state created by an
+	// older binary may already contain a replayed log but still have an empty
+	// application membership envelope.  In both cases the durable cut is the
+	// first valid position at or before the current applied index.
+	var membershipIndex uint64 = 1
+	if s.applied > 0 {
+		membershipIndex = s.applied
 	}
 	encoded, err := proto.Marshal(conf)
 	if err != nil {
@@ -347,6 +356,7 @@ func (s *State) BootstrapMembership(conf *raftpb.ConfState) error {
 		return err
 	}
 	var position [8]byte
+	binary.BigEndian.PutUint64(position[:], membershipIndex)
 	if err := batch.Set(membershipIndexKey, position[:], nil); err != nil {
 		return err
 	}
