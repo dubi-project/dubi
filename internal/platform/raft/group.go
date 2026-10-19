@@ -27,6 +27,16 @@ type StateMachine interface {
 	Close() error
 }
 
+// bootstrapMembershipState persists the initial ConfState that is created by
+// Raft storage Bootstrap. Bootstrap does not emit a ConfChange entry, so a
+// fresh one-node or forming regional Group otherwise leaves the application
+// state with an empty membership envelope and cannot publish its first fence.
+// It is optional so existing StateMachine implementations keep the same core
+// contract; the built-in Root and Engine states implement it.
+type bootstrapMembershipState interface {
+	BootstrapMembership(*raftpb.ConfState) error
+}
+
 // CommandValidator rejects malformed application commands before a leader
 // proposes them. Apply must still validate committed bytes deterministically;
 // this hook prevents an invalid client command from poisoning a whole Group.
@@ -239,6 +249,12 @@ func openGroup(options GroupOptions, hook func(string) error) (*Group, error) {
 		}
 		if err := raw.Bootstrap(peers); err != nil {
 			return closeOnError(err)
+		}
+		if bootstrap, ok := options.State.(bootstrapMembershipState); ok {
+			conf := &raftpb.ConfState{Voters: append([]uint64(nil), initialPeers...)}
+			if err := bootstrap.BootstrapMembership(conf); err != nil {
+				return closeOnError(err)
+			}
 		}
 	}
 	if err := group.process(); err != nil {

@@ -63,6 +63,32 @@ func encodeTestMutation(t *testing.T, value testMutation) []byte {
 	return encoded
 }
 
+func TestBootstrapMembershipPersistsWithoutAdvancingEngine(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cap-state")
+	state, err := Open(root, "data-1", &testHandler{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := &raftpb.ConfState{Voters: []uint64{11}}
+	if err := state.BootstrapMembership(conf); err != nil {
+		t.Fatal(err)
+	}
+	if state.AppliedIndex() != 0 || len(state.ConfState().GetVoters()) != 1 || state.ConfState().GetVoters()[0] != 11 {
+		t.Fatalf("bootstrap Engine membership = index %d, conf %v", state.AppliedIndex(), state.ConfState())
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(root, "data-1", &testHandler{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.AppliedIndex() != 0 || len(reopened.ConfState().GetVoters()) != 1 || reopened.ConfState().GetVoters()[0] != 11 {
+		t.Fatalf("reopened Engine bootstrap membership = index %d, conf %v", reopened.AppliedIndex(), reopened.ConfState())
+	}
+}
+
 func TestEngineStateAtomicallyFencesAndAppliesMutation(t *testing.T) {
 	root := t.TempDir()
 	id, err := identity.Bootstrap(root)

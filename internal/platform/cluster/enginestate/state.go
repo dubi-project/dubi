@@ -325,6 +325,38 @@ func (s *State) ApplyMembership(index uint64, conf *raftpb.ConfState) error {
 	return nil
 }
 
+// BootstrapMembership records the ConfState created by Raft storage Bootstrap
+// without advancing the Engine application log. This is required for a fresh
+// one-node regional Group to publish its initial Fence.
+func (s *State) BootstrapMembership(conf *raftpb.ConfState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return err
+	}
+	if s.applied != 0 || conf == nil || len(conf.GetVoters()) == 0 || len(s.conf.GetVoters()) != 0 || len(s.conf.GetLearners()) != 0 {
+		return errors.New("invalid Engine bootstrap membership")
+	}
+	encoded, err := proto.Marshal(conf)
+	if err != nil {
+		return err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set(confKey, encoded, nil); err != nil {
+		return err
+	}
+	var position [8]byte
+	if err := batch.Set(membershipIndexKey, position[:], nil); err != nil {
+		return err
+	}
+	if err := s.commitBatch(batch); err != nil {
+		return err
+	}
+	s.conf = proto.Clone(conf).(*raftpb.ConfState)
+	return nil
+}
+
 func (s *State) Result(requestID string) (Result, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
