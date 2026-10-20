@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"go.etcd.io/raft/v3/raftpb"
@@ -39,7 +40,8 @@ func budgetTransport(t *testing.T) *Transport {
 	// Deliberately leave workers stopped so queue assertions do not depend on
 	// network timing. The lane test below separately starts real workers.
 	for _, id := range []uint64{2, 3} {
-		transport.peers[id] = &peerSender{control: make(chan outbound, 1), queue: make(chan outbound, 1), snapshots: make(chan outbound, 1)}
+		transport.peers[id] = &peerSender{rootControl: make(chan outbound, 1), control: make(chan outbound, 1),
+			queue: make(chan outbound, 1), snapshots: make(chan outbound, 1)}
 	}
 	t.Cleanup(func() {
 		if err := transport.Close(); err != nil {
@@ -73,6 +75,21 @@ func TestTransportReadIndexUsesReservedControlLane(t *testing.T) {
 				t.Fatal("read barrier did not reserve control bytes")
 			}
 		})
+	}
+}
+
+func TestTransportRootAppendUsesDedicatedControlLane(t *testing.T) {
+	transport := budgetTransport(t)
+	if err := transport.Send("regional", logMessage(2)); err != nil {
+		t.Fatal(err)
+	}
+	rootAppend := logMessage(2)
+	if err := transport.Send(raft.RootGroupID, rootAppend); err != nil {
+		t.Fatal("Root barrier append was blocked by the regional data lane", err)
+	}
+	peer := transport.peers[2]
+	if len(peer.queue) != 1 || len(peer.rootControl) != 1 {
+		t.Fatalf("regional queue=%d Root control queue=%d", len(peer.queue), len(peer.rootControl))
 	}
 }
 

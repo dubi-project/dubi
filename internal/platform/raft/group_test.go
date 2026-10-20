@@ -313,6 +313,7 @@ type queuedTransport struct {
 	groups  map[uint64]*Group
 	queue   []queuedMessage
 	blocked map[uint64]bool
+	groupID string
 }
 
 func (q *queuedTransport) Send(groupID string, message *raftpb.Message) error {
@@ -338,7 +339,11 @@ func (q *queuedTransport) deliver(t *testing.T) {
 		q.queue = q.queue[1:]
 		target := q.groups[item.message.GetTo()]
 		q.mu.Unlock()
-		if target == nil || item.groupID != "regional" {
+		groupID := q.groupID
+		if groupID == "" {
+			groupID = "regional"
+		}
+		if target == nil || item.groupID != groupID {
 			t.Fatalf("misrouted Raft message: %+v", item)
 		}
 		if err := target.Step(item.message); err != nil && !errors.Is(err, etcdraft.ErrStepPeerNotFound) {
@@ -407,12 +412,12 @@ func TestThreeNodeGroupElectsAndReplicatesOpaqueCommand(t *testing.T) {
 }
 
 func TestGroupReadIndexRequiresQuorumAndAppliedState(t *testing.T) {
-	transport := &queuedTransport{groups: make(map[uint64]*Group), blocked: make(map[uint64]bool)}
+	transport := &queuedTransport{groups: make(map[uint64]*Group), blocked: make(map[uint64]bool), groupID: RootGroupID}
 	states := make(map[uint64]*testState)
 	for _, id := range []uint64{41, 42, 43} {
 		root := t.TempDir()
 		state := openTestState(t, root)
-		group, err := OpenGroup(GroupOptions{StoreRoot: root, GroupID: "regional", RaftID: id,
+		group, err := OpenGroup(GroupOptions{StoreRoot: root, GroupID: RootGroupID, RaftID: id,
 			BootstrapPeers: []uint64{41, 42, 43}, State: state, Transport: transport})
 		if err != nil {
 			t.Fatal(err)
@@ -456,6 +461,39 @@ freshReadComplete:
 		t.Fatal(err)
 	}
 	transport.deliver(t)
+	beforeRead, err := leader.storage.LastIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootReadCtx, rootReadCancel := context.WithTimeout(context.Background(), time.Second)
+	rootReadDone := make(chan error, 1)
+	var rootReadIndex uint64
+	go func() {
+		index, readErr := leader.ReadIndex(rootReadCtx)
+		rootReadIndex = index
+		rootReadDone <- readErr
+	}()
+	for {
+		transport.deliver(t)
+		select {
+		case err = <-rootReadDone:
+			rootReadCancel()
+			if err != nil {
+				t.Fatalf("Root quorum read barrier = %v", err)
+			}
+			goto rootReadComplete
+		case <-rootReadCtx.Done():
+			t.Fatalf("Root quorum ReadIndex = %v", rootReadCtx.Err())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+rootReadComplete:
+	transport.deliver(t)
+	afterRead, err := leader.storage.LastIndex()
+	if err != nil || afterRead != beforeRead || rootReadIndex < beforeRead {
+		t.Fatalf("Root read should confirm current committed cut without appending a no-op: before=%d read=%d after=%d err=%v", beforeRead, rootReadIndex, afterRead, err)
+	}
 	transport.blocked[42] = true
 	transport.blocked[43] = true
 	isolated, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -478,6 +516,11 @@ freshReadComplete:
 			done <- result{index: index, err: err}
 		}()
 		for {
+			for _, node := range transport.groups {
+				if err := node.Tick(); err != nil {
+					t.Fatal(err)
+				}
+			}
 			transport.deliver(t)
 			select {
 			case value := <-done:
@@ -489,11 +532,9 @@ freshReadComplete:
 			}
 		}
 	}
-	for _, id := range []uint64{41, 42} {
-		value := read(transport.groups[id])
-		if value.err != nil || value.index == 0 || value.index > states[id].AppliedIndex() {
-			t.Fatalf("Node %d ReadIndex = %+v, applied = %d", id, value, states[id].AppliedIndex())
-		}
+	value := read(leader)
+	if value.err != nil || value.index == 0 || value.index > states[41].AppliedIndex() {
+		t.Fatalf("Root leader ReadIndex = %+v, applied = %d", value, states[41].AppliedIndex())
 	}
 	transport.blocked[42] = true
 	transport.blocked[43] = true

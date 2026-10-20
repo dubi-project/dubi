@@ -236,14 +236,17 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 		}
 	}
 	queue := peer.queue
-	if control {
+	if groupID == raft.RootGroupID && !isSnapshot {
+		// Root proposals also carry entries (including the empty leader
+		// barrier used for linearizable reads). Keep every Root message on the
+		// dedicated lane so a bulk regional MsgApp queue cannot delay a Root
+		// commit acknowledgement.
+		queue = peer.rootControl
+	} else if control {
 		// Root is the cluster-wide control plane. Keep its heartbeats,
 		// elections and read barriers independent from regional Group control
 		// traffic so a busy data cohort cannot make Root appear unavailable.
 		queue = peer.control
-		if groupID == raft.RootGroupID && peer.rootControl != nil {
-			queue = peer.rootControl
-		}
 	}
 	select {
 	case queue <- request:

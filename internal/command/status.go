@@ -404,9 +404,13 @@ func confirmRootQuorum(ctx context.Context, id identity.Identity, clientTLS *tls
 					if dialErr != nil {
 						probeErr = dialErr
 					} else {
-						_, probeErr = raftwire.NewGroupServiceClient(conn).ReadIndex(attempt,
+						var response *raftwire.GroupReadIndexResponse
+						response, probeErr = raftwire.NewGroupServiceClient(conn).ReadIndex(attempt,
 							&raftwire.GroupReadIndexRequest{ClusterId: id.ClusterID, GroupId: raft.RootGroupID,
 								FromRaftId: id.RaftID, ToRaftId: id.RaftID})
+						if probeErr == nil {
+							probeErr = validateRootReadCut(response)
+						}
 						_ = conn.Close()
 					}
 				}
@@ -429,6 +433,13 @@ func confirmRootQuorum(ctx context.Context, id identity.Identity, clientTLS *tls
 		failures = append(failures, fmt.Errorf("voter %d: %w", item.target, item.err))
 	}
 	return false, errors.Join(failures...)
+}
+
+func validateRootReadCut(response *raftwire.GroupReadIndexResponse) error {
+	if response == nil || response.GetConfirmedIndex() == 0 {
+		return errors.New("Root voter returned no quorum-confirmed read cut")
+	}
+	return nil
 }
 
 func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) error {

@@ -120,6 +120,19 @@ func (runtime *Runtime) ReadRootIndex(ctx context.Context) (uint64, error) {
 	return index, nil
 }
 
+// ReadIndex is the Node-wide read barrier used by data-plane components.
+// Root reads go through the authenticated voter fallback because most data
+// Nodes are Root learners; data Group reads remain local to their Group.
+func (runtime *Runtime) ReadIndex(ctx context.Context, groupID string) (uint64, error) {
+	if runtime == nil || runtime.Host == nil || runtime.Root == nil {
+		return 0, errors.New("Node runtime is incomplete")
+	}
+	if groupID == raft.RootGroupID {
+		return runtime.ReadRootIndex(ctx)
+	}
+	return runtime.Host.ReadIndex(ctx, groupID)
+}
+
 func (runtime *Runtime) confirmRoot(ctx context.Context) error {
 	return confirmStartupRoot(ctx, func(attempt context.Context) error {
 		_, err := runtime.ReadRootIndex(attempt)
@@ -546,7 +559,7 @@ func (runtime *Runtime) RegisterInternalRPC(registrar grpc.ServiceRegistrar,
 		return err
 	}
 	regionServer.SetRootReadIndex(runtime.ReadRootIndex)
-	holdingServer, err := raftrpc.NewRecordHoldingServer(runtime.Identity, runtime.Host, runtime.Root, runtime.Records, authorize)
+	holdingServer, err := raftrpc.NewRecordHoldingServer(runtime.Identity, runtime, runtime.Root, runtime.Records, authorize)
 	if err != nil {
 		return err
 	}
@@ -554,7 +567,7 @@ func (runtime *Runtime) RegisterInternalRPC(registrar grpc.ServiceRegistrar,
 	if err != nil {
 		return err
 	}
-	transferServer, err := raftrpc.NewRecordTransferServer(runtime.Identity, runtime.Host, runtime.Root, runtime.Records, authorize)
+	transferServer, err := raftrpc.NewRecordTransferServer(runtime.Identity, runtime, runtime.Root, runtime.Records, authorize)
 	if err != nil {
 		return err
 	}

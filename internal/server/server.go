@@ -49,6 +49,9 @@ import (
 	"google.golang.org/grpc"
 )
 
+const rootReadAttemptTimeout = 8 * time.Second
+const rootReadRetryCount = 3
+
 type Options struct {
 	StoreRoot          string
 	Listener           net.Listener
@@ -227,15 +230,15 @@ func Open(options Options) (*Server, error) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		// Root barriers are control-plane operations and may cross regions. Run
-		// the local path and every currently known voter concurrently: a stale
-		// local leader hint or one slow WAN stream must not consume the whole
-		// operation deadline before a healthy voter can prove the same quorum.
+		// Prefer the currently observed leader. Fanning each Root read out to
+		// every voter makes each request generate several competing Raft
+		// ReadIndex rounds; on a cluster with many learner Nodes this can
+		// overload the cross-Region control Group and destabilize elections.
 		type target struct {
 			id    uint64
 			local bool
 		}
-		targets := make([]target, 0, 4)
+		targets := make([]target, 0, 3)
 		seen := make(map[uint64]bool)
 		add := func(id uint64, local bool) {
 			if id == 0 || seen[id] {
@@ -244,71 +247,97 @@ func Open(options Options) (*Server, error) {
 			seen[id] = true
 			targets = append(targets, target{id: id, local: local})
 		}
-		status, _ := runtime.Host.Status(raft.RootGroupID)
-		localLeader := status.Role == etcdraft.StateLeader && status.LeaderID == runtime.Identity.RaftID
-		if membership, membershipErr := runtime.Host.Membership(raft.RootGroupID); membershipErr == nil {
-			for _, voter := range membership.GetVoters() {
-				if voter == runtime.Identity.RaftID && !localLeader {
-					// A local follower cannot complete a quorum ReadIndex by
-					// itself. Do not create a pending local read that can only
-					// expire; use the observed leader below.
-					continue
+		var failures []error
+		for pass := 0; pass < rootReadRetryCount; pass++ {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			status, _ := runtime.Host.Status(raft.RootGroupID)
+			localLeader := status.Role == etcdraft.StateLeader && status.LeaderID == runtime.Identity.RaftID
+			membership, membershipErr := runtime.Host.Membership(raft.RootGroupID)
+			if membershipErr != nil {
+				return 0, membershipErr
+			}
+			voters := append(append([]uint64(nil), membership.GetVoters()...), membership.GetVotersOutgoing()...)
+			isVoter := func(id uint64) bool {
+				for _, voter := range voters {
+					if voter == id {
+						return true
+					}
 				}
-				add(voter, voter == runtime.Identity.RaftID && localLeader)
+				return false
 			}
-		}
-		if status.LeaderID != runtime.Identity.RaftID {
-			add(status.LeaderID, false)
-		}
-		if cut, viewErr := runtime.Root.RootRoutingView(rootjoin.MaxViewPeers); viewErr == nil {
-			for _, voter := range cut.Membership.GetVoters() {
-				add(voter, voter == runtime.Identity.RaftID)
-			}
-		}
-		if len(targets) == 0 {
+			targets = targets[:0]
+			seen = make(map[uint64]bool)
 			if localLeader {
 				add(runtime.Identity.RaftID, true)
-			} else {
+			}
+			// Prefer the leader hint learned from authenticated Group responses.
+			// A learner's local Raft SoftState can lag a WAN election; refreshing
+			// this order on each bounded pass lets follower replies redirect the
+			// next pass to the new leader without trusting non-voters.
+			for _, candidate := range client.GroupCandidates(raft.RootGroupID) {
+				if candidate != runtime.Identity.RaftID && isVoter(candidate) {
+					add(candidate, false)
+				}
+			}
+			if isVoter(status.LeaderID) && status.LeaderID != runtime.Identity.RaftID {
+				add(status.LeaderID, false)
+			}
+			for _, voter := range voters {
+				if voter == runtime.Identity.RaftID {
+					if localLeader {
+						add(voter, true)
+					}
+					continue
+				}
+				add(voter, false)
+			}
+			if len(targets) == 0 {
 				return 0, raft.ErrNoLeader
 			}
-		}
-		probeCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		results := make(chan struct {
-			index uint64
-			err   error
-		}, len(targets))
-		for _, item := range targets {
-			go func(item target) {
+			for _, item := range targets {
+				attempt, cancel := context.WithTimeout(ctx, rootReadAttemptTimeout)
 				var index uint64
-				var err error
+				var readErr error
 				if item.local {
-					index, err = runtime.Host.ReadIndex(probeCtx, raft.RootGroupID)
+					index, readErr = runtime.Host.ReadIndex(attempt, raft.RootGroupID)
 				} else {
-					index, err = client.ReadIndex(probeCtx, item.id, raft.RootGroupID)
+					index, readErr = client.ReadIndex(attempt, item.id, raft.RootGroupID)
 				}
-				results <- struct {
-					index uint64
-					err   error
-				}{index: index, err: err}
-			}(item)
-		}
-		var lastErr error
-		for range targets {
-			select {
-			case result := <-results:
-				if result.err == nil {
-					return result.index, nil
+				if readErr == nil && index == 0 {
+					readErr = errors.New("Root voter returned an empty read cut")
 				}
-				lastErr = result.err
-			case <-ctx.Done():
-				return 0, ctx.Err()
+				if readErr == nil {
+					ticker := time.NewTicker(10 * time.Millisecond)
+					for runtime.Root.AppliedIndex() < index && attempt.Err() == nil {
+						<-ticker.C
+					}
+					ticker.Stop()
+					if runtime.Root.AppliedIndex() < index {
+						readErr = attempt.Err()
+					}
+				}
+				cancel()
+				if readErr == nil {
+					return index, nil
+				}
+				failures = append(failures, fmt.Errorf("Root voter %d: %w", item.id, readErr))
+				if ctx.Err() != nil {
+					return 0, ctx.Err()
+				}
+			}
+			if pass+1 < rootReadRetryCount {
+				timer := time.NewTimer(100 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return 0, ctx.Err()
+				case <-timer.C:
+				}
 			}
 		}
-		if lastErr == nil {
-			lastErr = raft.ErrNoLeader
-		}
-		return 0, lastErr
+		return 0, errors.Join(failures...)
 	})
 	localData, err := enginedata.New(runtime, client)
 	if err != nil {
@@ -440,7 +469,7 @@ func Open(options Options) (*Server, error) {
 	rootjoinwire.RegisterRootJoinServiceServer(grpcServer, rootJoinServer)
 	dataServer := newDataService(runtime, client, rootDirectory)
 	datawire.RegisterDataServiceServer(grpcServer, dataServer)
-	routedData, err := raftrpc.NewEngineDataServer(runtime.Identity, runtime.Host, runtime.Root,
+	routedData, err := raftrpc.NewEngineDataServer(runtime.Identity, runtime, runtime.Root,
 		runtime.Records, options.AuthorizePeer, localData, options.MaxMessageSize)
 	if err != nil {
 		grpcServer.Stop()

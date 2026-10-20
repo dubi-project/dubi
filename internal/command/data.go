@@ -111,7 +111,7 @@ func runRecord(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	defer conn.Close()
 	client := datawire.NewDataServiceClient(conn)
-	call, cancel := context.WithTimeout(ctx, 30*time.Second)
+	call, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	if operation == "put" {
 		_, _ = fmt.Fprintf(stderr, "dubi: request-id %s\n", *requestID)

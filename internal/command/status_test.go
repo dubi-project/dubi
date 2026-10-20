@@ -12,8 +12,18 @@ import (
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
+	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 )
+
+func TestRootStatusRequiresConfirmedIndexNotOnlyLeaderHint(t *testing.T) {
+	if err := validateRootReadCut(&raftwire.GroupReadIndexResponse{LeaderRaftId: 42}); err == nil {
+		t.Fatal("Root leader hint without a confirmed read cut was accepted")
+	}
+	if err := validateRootReadCut(&raftwire.GroupReadIndexResponse{LeaderRaftId: 42, ConfirmedIndex: 99}); err != nil {
+		t.Fatal("confirmed Root read cut was rejected", err)
+	}
+}
 
 func TestStatusQueriesLiveRootWithManagedNodeIdentity(t *testing.T) {
 	type statusResult struct {

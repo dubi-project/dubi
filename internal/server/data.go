@@ -756,7 +756,7 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 	}
 	select {
 	case s.slots <- struct{}{}:
-		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		budgetRelease := func() {}
 		if s.requestBudget != nil {
 			var err error
@@ -979,7 +979,7 @@ func (s *dataService) target(ctx context.Context, tenant, dataset string, key []
 	if space.Validate() != nil || len(key) == 0 || len(key) > 4096 {
 		return router.Target{}, status.Error(codes.InvalidArgument, "invalid Record identity or key")
 	}
-	resolver, err := router.New(s.runtime.Host, s.runtime.Root)
+	resolver, err := router.New(s.runtime, s.runtime.Root)
 	if err != nil {
 		return router.Target{}, status.Errorf(codes.Internal, "prepare route: %v", err)
 	}

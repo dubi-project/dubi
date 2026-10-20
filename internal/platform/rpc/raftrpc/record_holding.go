@@ -23,7 +23,12 @@ import (
 
 const recordDescriptorBytes = 16 << 10
 const recordHoldingMessageBytes = recordDescriptorBytes + 4096
-const recordHoldingTimeout = 10 * time.Second
+
+// A holding proof brackets disk verification with two quorum-confirmed Root
+// reads. On a low-cost multi-Region cluster each Root cut can take several
+// seconds, so a 10s end-to-end cap falsely marked healthy holders unavailable
+// and prevented physical majorities from being confirmed.
+const recordHoldingTimeout = 60 * time.Second
 const recordHoldingConcurrency = 2
 
 type RecordHoldingVerifier interface {

@@ -24,8 +24,8 @@ var ErrOwnerNotLocal = errors.New("current Range Owner is not hosted on this Nod
 
 const routeAttemptTimeout = 8 * time.Second
 const routeRetryDelay = 100 * time.Millisecond
-const readAttemptTimeout = 10 * time.Second
-const writeAttemptTimeout = 30 * time.Second
+const readAttemptTimeout = 60 * time.Second
+const writeAttemptTimeout = 90 * time.Second
 
 // Publication encodes a engine mutation which must publish exactly the
 // supplied immutable descriptor with Transaction.SetRecordReference. The
@@ -122,7 +122,8 @@ func (service *Service) write(ctx context.Context, request WriteRequest, allowRe
 		if !allowRemote {
 			return result, ErrOwnerNotLocal
 		}
-		return service.forwardWrite(ctx, call)
+		result, err := service.forwardWrite(ctx, call)
+		return result, err
 	}
 	writeCtx := ctx
 	writeCancel := func() {}
@@ -231,7 +232,7 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Engine
 	if !found || owner == nil {
 		return result, ErrOwnerNotLocal
 	}
-	writer := recordwrite.Writer{Barrier: service.runtime.Host, Root: service.runtime.Root,
+	writer := recordwrite.Writer{Barrier: service.runtime, Root: service.runtime.Root,
 		Owner: owner, LocalID: service.runtime.Identity.RaftID, LocalNodeID: service.runtime.Identity.NodeID,
 		Store: service.runtime.Records, Sender: service.client, Observer: service.client,
 		Submit: func(call context.Context, groupID string, command []byte) error {
@@ -279,7 +280,7 @@ func (service *Service) geoPlan(ctx context.Context, target router.Target) (*pla
 	if !ready || !progress.Eligible || progress.Pending != nil || len(progress.Current.Nodes) >= 3 {
 		return nil, nil
 	}
-	_, plan, err := placement.ReadRangeGeoPlan(ctx, service.runtime.Host, service.runtime.Root, target.RangeID, 16, 256)
+	_, plan, err := placement.ReadRangeGeoPlan(ctx, service.runtime, service.runtime.Root, target.RangeID, 16, 256)
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +423,7 @@ func (service *Service) ExecuteRead(ctx context.Context, target router.Target, k
 	if !found || owner == nil {
 		return raftrpc.EngineDataReadResult{}, ErrOwnerNotLocal
 	}
-	reader := recordwrite.Reader{Barrier: service.runtime.Host, Root: service.runtime.Root,
+	reader := recordwrite.Reader{Barrier: service.runtime, Root: service.runtime.Root,
 		Owner: owner, LocalID: service.runtime.Identity.RaftID, LocalNodeID: service.runtime.Identity.NodeID,
 		Store: service.runtime.Records, Observer: service.client, Fetcher: service.client}
 	got, err := reader.ReadLocal(ctx, target, key)
@@ -439,8 +440,7 @@ func (service *Service) ExecuteRead(ctx context.Context, target router.Target, k
 }
 
 func (service *Service) resolveTarget(ctx context.Context, keyspace rootstate.Keyspace, key []byte) (router.Target, error) {
-	barrier := rootRouteBarrier{local: service.runtime.Host, root: service.runtime.Root,
-		client: service.client, self: service.runtime.Identity.RaftID}
+	barrier := rootRouteBarrier{local: service.runtime}
 	routes, err := router.New(barrier, service.runtime.Root)
 	if err != nil {
 		return router.Target{}, err
@@ -489,7 +489,7 @@ func (service *Service) currentPublication(ctx context.Context, owner *enginesta
 		return false
 	}
 	current := false
-	_, err = owner.ReadRouted(ctx, service.runtime.Host, target, func(view enginestate.ReadView) error {
+	_, err = owner.ReadRouted(ctx, service.runtime, target, func(view enginestate.ReadView) error {
 		ref, found, err := view.RecordReference(descriptor.Key)
 		if err != nil || !found {
 			return err

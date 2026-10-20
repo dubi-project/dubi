@@ -10,6 +10,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
+	etcdraft "go.etcd.io/raft/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -80,13 +81,40 @@ func (server *GroupServer) ReadIndex(
 		request.GetFromRaftId(), request.GetToRaftId()); err != nil {
 		return nil, err
 	}
+	// A Root barrier must be established by the current leader: Root leaders
+	// append and commit a coalesced barrier entry, while a follower's forwarded
+	// ReadIndex can remain pending until a current-term entry is committed. Do
+	// not route again from this handler (that can form cycles between followers)
+	// and do not ask a follower to hold a pending ReadIndex. The caller already
+	// has the voter list and will try another voter when this target is stale.
+	var groupStatus raft.GroupStatus
+	if request.GetGroupId() == raft.RootGroupID {
+		var statusErr error
+		groupStatus, statusErr = server.backend.Status(request.GetGroupId())
+		if statusErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "read Root Group status: %v", statusErr)
+		}
+		if groupStatus.Role != etcdraft.StateLeader || groupStatus.LeaderID != server.raftID {
+			if groupStatus.LeaderID != 0 {
+				// This is only a transient routing hint. The client still needs a
+				// non-zero quorum-confirmed index before it can accept the read.
+				return &raftwire.GroupReadIndexResponse{LeaderRaftId: groupStatus.LeaderID}, nil
+			}
+			return nil, status.Error(codes.Unavailable, "Root Group has no known leader")
+		}
+	}
+	// A Group RPC is already addressed to a concrete member of this Raft
+	// Group. Ask that local Raft instance for its barrier; do not invoke the
+	// Node-level voter router here, where it could recursively fan out again.
 	index, err := server.backend.ReadIndex(ctx, request.GetGroupId())
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "confirm Group read: %v", err)
 	}
-	groupStatus, err := server.backend.Status(request.GetGroupId())
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "read Group status: %v", err)
+	if request.GetGroupId() != raft.RootGroupID {
+		groupStatus, err = server.backend.Status(request.GetGroupId())
+		if err != nil {
+			return nil, status.Errorf(codes.Unavailable, "read Group status: %v", err)
+		}
 	}
 	return &raftwire.GroupReadIndexResponse{ConfirmedIndex: index, LeaderRaftId: groupStatus.LeaderID}, nil
 }
@@ -175,10 +203,10 @@ func (client *GroupClient) ReadIndex(ctx context.Context, target uint64, groupID
 	if err != nil {
 		return 0, err
 	}
+	client.observeLeader(groupID, response.GetLeaderRaftId())
 	if response.GetConfirmedIndex() == 0 {
 		return 0, errors.New("Group read response has no confirmed index")
 	}
-	client.observeLeader(groupID, response.GetLeaderRaftId())
 	return response.GetConfirmedIndex(), nil
 }
 
