@@ -11,6 +11,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/raft/logstore"
 	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/tracker"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -936,18 +937,36 @@ func (g *Group) processLocked() ([]*raftpb.Message, error) {
 			}
 		}
 		g.completeReadsLocked()
+		var rootProgress map[uint64]tracker.Progress
+		if g.groupID == RootGroupID {
+			rootProgress = g.raw.Status().Progress
+		}
 		for _, message := range ready.Messages {
 			if message.GetTo() == g.id {
 				if err := g.raw.Step(message); err != nil && !errors.Is(err, etcdraft.ErrStepLocalMsg) {
 					return nil, g.failLocked(err)
 				}
 			} else {
+				// ReadIndex heartbeats only need acknowledgements from voting
+				// members. Root has many non-voting Nodes; broadcasting every
+				// linearizable read to all of them saturates the per-peer control
+				// queues and delays the voter quorum itself.
+				if isRootReadHeartbeatToLearner(g.groupID, message, rootProgress) {
+					continue
+				}
 				outbound = append(outbound, proto.Clone(message).(*raftpb.Message))
 			}
 		}
 		g.raw.Advance(ready)
 	}
 	return outbound, nil
+}
+
+func isRootReadHeartbeatToLearner(groupID string, message *raftpb.Message, progress map[uint64]tracker.Progress) bool {
+	if groupID != RootGroupID || message == nil || message.GetType() != raftpb.MessageType_MsgHeartbeat || len(message.GetContext()) == 0 {
+		return false
+	}
+	return progress[message.GetTo()].IsLearner
 }
 
 func (g *Group) completeReadsLocked() {

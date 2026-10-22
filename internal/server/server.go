@@ -563,7 +563,7 @@ func Open(options Options) (*Server, error) {
 		if liveRepair != nil {
 			repairSnapshot = liveRepair.snapshot
 		}
-		publicHTTP = newPublicHTTPServerWithMonitoring(auth.Verifier{Barrier: runtime.Host, Catalog: runtime.Root}, runtime, ready, repairSnapshot)
+		publicHTTP = newPublicHTTPServerWithMonitoring(auth.Verifier{Barrier: runtime, Catalog: runtime.Root}, runtime, ready, repairSnapshot)
 		publicTLS = normalizeServerTLS(options.ServerTLS)
 		publicTLS.ClientAuth = tls.NoClientCert
 		publicTLS.ClientCAs = nil

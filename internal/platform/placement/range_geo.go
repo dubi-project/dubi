@@ -28,6 +28,19 @@ func ReadRangeGeoPlan(ctx context.Context, barrier ReadBarrier, root RangePlacem
 	if index == 0 {
 		return rootstate.RangePlacement{}, GeoPlan{}, errors.New("Root read barrier returned no confirmed index")
 	}
+	return ReadRangeGeoPlanAtCut(index, root, rangeID, maxRegions, maxNodes)
+}
+
+// ReadRangeGeoPlanAtCut derives a plan from Root state known to have applied
+// at least one previously confirmed Root read cut. It lets bounded scans reuse
+// one linearizable barrier across several records without weakening the
+// applied-state check.
+func ReadRangeGeoPlanAtCut(index uint64, root RangePlacementReader,
+	rangeID string, maxRegions, maxNodes int,
+) (rootstate.RangePlacement, GeoPlan, error) {
+	if index == 0 || root == nil || rootstate.ValidateRangeID(rangeID) != nil {
+		return rootstate.RangePlacement{}, GeoPlan{}, errors.New("Range geo placement requires a confirmed Root cut and valid Range")
+	}
 	placement, view, err := root.RangeRegionPlacementView(rangeID, maxRegions, maxNodes)
 	if err != nil {
 		return rootstate.RangePlacement{}, GeoPlan{}, err

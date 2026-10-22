@@ -423,7 +423,7 @@ func (service *Service) ExecuteRead(ctx context.Context, target router.Target, k
 	if !found || owner == nil {
 		return raftrpc.EngineDataReadResult{}, ErrOwnerNotLocal
 	}
-	reader := recordwrite.Reader{Barrier: service.runtime, Root: service.runtime.Root,
+	reader := recordwrite.Reader{Barrier: engineReadBarrier{runtime: service.runtime, client: service.client}, Root: service.runtime.Root,
 		Owner: owner, LocalID: service.runtime.Identity.RaftID, LocalNodeID: service.runtime.Identity.NodeID,
 		Store: service.runtime.Records, Observer: service.client, Fetcher: service.client}
 	got, err := reader.ReadLocal(ctx, target, key)

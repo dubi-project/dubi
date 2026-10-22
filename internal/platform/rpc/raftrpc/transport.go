@@ -58,6 +58,7 @@ type outbound struct {
 	index     uint64
 	release   func()
 	reference *snapshot.Reference
+	rootRead  bool
 }
 
 type peerLane struct {
@@ -68,6 +69,8 @@ type peerLane struct {
 
 type peerSender struct {
 	mu              sync.Mutex
+	rootReadMu      sync.Mutex
+	rootRead        chan outbound
 	rootControl     chan outbound
 	control         chan outbound
 	queue           chan outbound
@@ -216,15 +219,27 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 	}
 	peer := t.peers[message.GetTo()]
 	if peer == nil {
-		peer = &peerSender{rootControl: make(chan outbound, controlQueueSize), control: make(chan outbound, controlQueueSize), queue: make(chan outbound, t.options.QueueSize), snapshots: make(chan outbound, 1)}
+		peer = &peerSender{rootRead: make(chan outbound, 1), rootControl: make(chan outbound, controlQueueSize), control: make(chan outbound, controlQueueSize), queue: make(chan outbound, t.options.QueueSize), snapshots: make(chan outbound, 1)}
 		t.peers[message.GetTo()] = peer
-		t.workers.Add(4)
+		t.workers.Add(5)
+		go t.runPeerMode(message.GetTo(), peer, peer.rootRead, true, true)
 		go t.runPeerMode(message.GetTo(), peer, peer.rootControl, true, true)
 		go t.runPeer(message.GetTo(), peer, peer.control, true)
 		go t.runPeer(message.GetTo(), peer, peer.queue, false)
 		go t.runSnapshots(message.GetTo(), peer)
 	}
 	request := outbound{groupID: groupID, to: message.GetTo(), data: data, release: release, reference: reference}
+	if groupID == raft.RootGroupID && len(message.GetContext()) != 0 &&
+		(message.GetType() == raftpb.MessageType_MsgHeartbeat || message.GetType() == raftpb.MessageType_MsgHeartbeatResp) {
+		request.rootRead = true
+	}
+	if request.rootRead {
+		if !enqueueLatestRootRead(peer, request) {
+			return errors.New("Root read-heartbeat queue could not accept message")
+		}
+		queued = true
+		return nil
+	}
 	if isSnapshot {
 		request.index = message.GetSnapshot().GetMetadata().GetIndex()
 		select {
@@ -254,6 +269,32 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 		return nil
 	default:
 		return fmt.Errorf("Raft peer %d queue is full", message.GetTo())
+	}
+}
+
+// enqueueLatestRootRead replaces only an unsent Root safe-read heartbeat. A
+// newer context acknowledges every older pending read, so retaining stale
+// queued contexts merely makes quorum barriers wait behind redundant traffic.
+func enqueueLatestRootRead(peer *peerSender, request outbound) bool {
+	peer.rootReadMu.Lock()
+	defer peer.rootReadMu.Unlock()
+	select {
+	case peer.rootRead <- request:
+		return true
+	default:
+	}
+	select {
+	case pending := <-peer.rootRead:
+		if pending.release != nil {
+			pending.release()
+		}
+	default:
+	}
+	select {
+	case peer.rootRead <- request:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -424,7 +465,7 @@ func (t *Transport) Close() error {
 	var failures []error
 	for _, peer := range t.peers {
 		// No worker or Send can own queued requests after the barrier above.
-		for _, queue := range []chan outbound{peer.rootControl, peer.control, peer.queue, peer.snapshots} {
+		for _, queue := range []chan outbound{peer.rootRead, peer.rootControl, peer.control, peer.queue, peer.snapshots} {
 			for len(queue) > 0 {
 				request := <-queue
 				request.release()

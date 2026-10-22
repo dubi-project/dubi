@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,24 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestEnqueueLatestRootReadCoalescesOnlyUnsentHeartbeat(t *testing.T) {
+	peer := &peerSender{rootRead: make(chan outbound, 1)}
+	var released atomic.Int32
+	if !enqueueLatestRootRead(peer, outbound{data: []byte("old"), release: func() { released.Add(1) }}) {
+		t.Fatal("first Root read heartbeat was not queued")
+	}
+	if !enqueueLatestRootRead(peer, outbound{data: []byte("new"), release: func() { released.Add(10) }}) {
+		t.Fatal("replacement Root read heartbeat was not queued")
+	}
+	if released.Load() != 1 {
+		t.Fatalf("replaced message release weight = %d, want 1", released.Load())
+	}
+	got := <-peer.rootRead
+	if string(got.data) != "new" {
+		t.Fatalf("queued Root read message = %q, want latest message", got.data)
+	}
+}
 
 type memoryState struct {
 	mu       sync.Mutex

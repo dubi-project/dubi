@@ -13,6 +13,7 @@ import (
 
 	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/tracker"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -553,6 +554,34 @@ rootReadComplete:
 		}
 	case <-stopping.Done():
 		t.Fatal("pending ReadIndex did not terminate when Group closed")
+	}
+}
+
+func TestRootReadIndexHeartbeatSkipsLearnersOnly(t *testing.T) {
+	readHeartbeat := &raftpb.Message{Type: raftpb.MessageType_MsgHeartbeat.Enum(), To: proto.Uint64(7), Context: []byte("read-cut")}
+	ordinaryHeartbeat := proto.Clone(readHeartbeat).(*raftpb.Message)
+	ordinaryHeartbeat.Context = nil
+	progress := map[uint64]tracker.Progress{7: {IsLearner: true}, 8: {IsLearner: false}}
+	tests := []struct {
+		name    string
+		groupID string
+		message *raftpb.Message
+		to      uint64
+		want    bool
+	}{
+		{name: "Root learner", groupID: RootGroupID, message: readHeartbeat, to: 7, want: true},
+		{name: "Root voter", groupID: RootGroupID, message: readHeartbeat, to: 8},
+		{name: "ordinary Root heartbeat", groupID: RootGroupID, message: ordinaryHeartbeat, to: 7},
+		{name: "regional heartbeat", groupID: "region-test", message: readHeartbeat, to: 7},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			message := proto.Clone(test.message).(*raftpb.Message)
+			message.To = proto.Uint64(test.to)
+			if got := isRootReadHeartbeatToLearner(test.groupID, message, progress); got != test.want {
+				t.Fatalf("skip learner read heartbeat = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

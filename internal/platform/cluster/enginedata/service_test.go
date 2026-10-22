@@ -3,6 +3,7 @@ package enginedata
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
+	etcdraft "go.etcd.io/raft/v3"
 )
 
 func TestIncompleteEngineDataEntryFailsClosed(t *testing.T) {
@@ -24,6 +26,64 @@ func TestIncompleteEngineDataEntryFailsClosed(t *testing.T) {
 	}
 	if result, err := incomplete.ReadLocal(context.Background(), space, []byte("key")); err == nil || len(result.Body) != 0 {
 		t.Fatal("incomplete entry accepted a read", result, err)
+	}
+}
+
+type ownerReadBarrierLocalFake struct {
+	index   uint64
+	err     error
+	status  raft.GroupStatus
+	blocked bool
+}
+
+func (fake ownerReadBarrierLocalFake) ReadIndex(ctx context.Context, _ string) (uint64, error) {
+	if fake.blocked {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return fake.index, fake.err
+}
+
+func (fake ownerReadBarrierLocalFake) Status(string) (raft.GroupStatus, error) {
+	return fake.status, nil
+}
+
+type ownerReadBarrierClientFake struct {
+	candidates []uint64
+	indices    map[uint64]uint64
+	errors     map[uint64]error
+	calls      []uint64
+}
+
+func (fake *ownerReadBarrierClientFake) GroupCandidates(string) []uint64 {
+	return append([]uint64(nil), fake.candidates...)
+}
+
+func (fake *ownerReadBarrierClientFake) ReadIndex(_ context.Context, target uint64, _ string) (uint64, error) {
+	fake.calls = append(fake.calls, target)
+	return fake.indices[target], fake.errors[target]
+}
+
+func TestReadOwnerGroupIndexUsesLocalBarrierFirst(t *testing.T) {
+	client := &ownerReadBarrierClientFake{candidates: []uint64{11, 12}}
+	index, err := readOwnerGroupIndex(context.Background(), ownerReadBarrierLocalFake{index: 7,
+		status: raft.GroupStatus{RaftID: 10, LeaderID: 10, Role: etcdraft.StateLeader}}, client, 10, "region-a")
+	if err != nil || index != 7 || len(client.calls) != 0 {
+		t.Fatalf("local Owner read = %d, calls=%v, err=%v", index, client.calls, err)
+	}
+}
+
+func TestReadOwnerGroupIndexFallsBackAfterStalledLocalRead(t *testing.T) {
+	client := &ownerReadBarrierClientFake{candidates: []uint64{11, 12, 13},
+		indices: map[uint64]uint64{12: 19}}
+	local := ownerReadBarrierLocalFake{blocked: true, status: raft.GroupStatus{LeaderID: 12}}
+	started := time.Now()
+	index, err := readOwnerGroupIndex(context.Background(), local, client, 10, "region-a")
+	if err != nil || index != 19 || !reflect.DeepEqual(client.calls, []uint64{12}) {
+		t.Fatalf("remote Owner read = %d, calls=%v, err=%v", index, client.calls, err)
+	}
+	if elapsed := time.Since(started); elapsed >= ownerLocalReadIndexTimeout+ownerRemoteReadIndexTimeout {
+		t.Fatalf("fallback waited for the whole user read budget: %s", elapsed)
 	}
 }
 

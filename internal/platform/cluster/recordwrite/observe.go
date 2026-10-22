@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -75,12 +76,7 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 	}
 	result := PublishedObservation{Plan: plan, Reference: reference}
 	var failures []error
-	remainingRemote := 0
-	for _, node := range plan.Nodes() {
-		if node.RaftID != localID {
-			remainingRemote++
-		}
-	}
+	var remoteNodes []rootstate.Node
 	for _, node := range plan.Nodes() {
 		if err := ctx.Err(); err != nil {
 			return PublishedObservation{}, err
@@ -104,23 +100,8 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 			}
 			holding = placement.Holding{RaftID: localID, NodeID: localNodeID, StoreID: verified.StoreID, RecordID: verified.RecordID}
 		} else {
-			attempt, cancel := observationAttemptContext(ctx, remainingRemote)
-			remainingRemote--
-			observed, err := observer.ObserveRecordHolding(attempt, node.RaftID, descriptor)
-			cancel()
-			if err != nil {
-				if unavailableHolding(err) {
-					failures = append(failures, fmt.Errorf("Node %d: %w", node.RaftID, err))
-					continue
-				}
-				return PublishedObservation{}, fmt.Errorf("observe immutable record on Node %d: %w", node.RaftID, err)
-			}
-			id, err := observed.Holding.Descriptor.ID()
-			if err != nil || id != recordID || observed.RootConfirmedIndex == 0 {
-				return PublishedObservation{}, errors.New("remote Node observed a different immutable descriptor or no Root confirmation")
-			}
-			holding = placement.Holding{RaftID: observed.RaftID, NodeID: observed.NodeID,
-				StoreID: observed.Holding.StoreID, RecordID: observed.Holding.RecordID}
+			remoteNodes = append(remoteNodes, node)
+			continue
 		}
 		result.Holdings = append(result.Holdings, holding)
 		count, err := plan.Count(recordID, result.Holdings)
@@ -131,9 +112,75 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 			break
 		}
 	}
+	if len(result.Holdings) < plan.Required && len(remoteNodes) != 0 {
+		// A three-Node Region needs only one remote holding when the local
+		// Store is healthy. Serially dividing a 60s read deadline among both
+		// remote Nodes gave the first candidate only 20s; if that was the sole
+		// other healthy holder, we could falsely report a missing majority.
+		// Probe the unchanged confirmed cohort concurrently and stop as soon as
+		// its physical majority is established. Each RPC remains bounded by the
+		// caller's context and the server's holding-proof timeout.
+		attemptCtx, cancel := context.WithCancel(ctx)
+		type holdingResult struct {
+			node    rootstate.Node
+			observe raftrpc.HoldingObservation
+			err     error
+		}
+		results := make(chan holdingResult, len(remoteNodes))
+		for _, node := range remoteNodes {
+			node := node
+			go func() {
+				observed, err := observer.ObserveRecordHolding(attemptCtx, node.RaftID, descriptor)
+				results <- holdingResult{node: node, observe: observed, err: err}
+			}()
+		}
+		remaining := len(remoteNodes)
+		for remaining > 0 && len(result.Holdings) < plan.Required {
+			select {
+			case <-ctx.Done():
+				cancel()
+				return PublishedObservation{}, errors.Join(append(append([]error{errors.New("published record lacks a verified stable local majority")}, failures...), ctx.Err())...)
+			case item := <-results:
+				remaining--
+				if item.err != nil {
+					if unavailableHolding(item.err) {
+						failures = append(failures, fmt.Errorf("Node %d: %w", item.node.RaftID, item.err))
+						continue
+					}
+					cancel()
+					return PublishedObservation{}, fmt.Errorf("observe immutable record on Node %d: %w", item.node.RaftID, item.err)
+				}
+				id, err := item.observe.Holding.Descriptor.ID()
+				if err != nil || id != recordID || item.observe.RootConfirmedIndex == 0 {
+					cancel()
+					return PublishedObservation{}, errors.New("remote Node observed a different immutable descriptor or no Root confirmation")
+				}
+				result.Holdings = append(result.Holdings, placement.Holding{RaftID: item.observe.RaftID,
+					NodeID: item.observe.NodeID, StoreID: item.observe.Holding.StoreID, RecordID: item.observe.Holding.RecordID})
+				count, err := plan.Count(recordID, result.Holdings)
+				if err != nil {
+					cancel()
+					return PublishedObservation{}, fmt.Errorf("validate published physical holdings: %w", err)
+				}
+				if count >= plan.Required {
+					break
+				}
+			}
+		}
+		cancel()
+	}
 	if len(result.Holdings) < plan.Required {
 		return PublishedObservation{}, errors.Join(append([]error{errors.New("published record lacks a verified stable local majority")}, failures...)...)
 	}
+	slices.SortFunc(result.Holdings, func(a, b placement.Holding) int {
+		if a.RaftID < b.RaftID {
+			return -1
+		}
+		if a.RaftID > b.RaftID {
+			return 1
+		}
+		return 0
+	})
 	latest, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
 	if err != nil {
 		return PublishedObservation{}, err

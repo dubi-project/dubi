@@ -53,7 +53,21 @@ type liveRepairCursor struct {
 // pass at the Root cut.
 type repairReadBarrier struct {
 	runtime *node.Runtime
+	client  repairGroupReadClient
 }
+
+type repairGroupReadClient interface {
+	GroupCandidates(groupID string) []uint64
+	ReadIndex(ctx context.Context, target uint64, groupID string) (uint64, error)
+}
+
+type repairLocalGroupReader interface {
+	ReadIndex(ctx context.Context, groupID string) (uint64, error)
+	Status(groupID string) (raft.GroupStatus, error)
+}
+
+const repairGroupReadAttemptTimeout = 8 * time.Second
+const repairLocalGroupReadAttemptTimeout = 2 * time.Second
 
 func (barrier repairReadBarrier) ReadIndex(ctx context.Context, groupID string) (uint64, error) {
 	if groupID == raft.RootGroupID {
@@ -72,7 +86,82 @@ func (barrier repairReadBarrier) ReadIndex(ctx context.Context, groupID string) 
 		}
 		return index, nil
 	}
-	return barrier.runtime.Host.ReadIndex(ctx, groupID)
+	return readRepairOwnerIndex(ctx, barrier.runtime.Host, barrier.client,
+		barrier.runtime.Identity.RaftID, groupID)
+}
+
+// A local Owner member may have a stale or temporarily empty leader hint while
+// another confirmed member can still provide the Group ReadIndex. Keep local
+// reads as the fast path, then try the current leader hint and remaining
+// confirmed Group members. Callers still verify that their local state has
+// applied the returned cut before using it.
+func readRepairOwnerIndex(ctx context.Context, local repairLocalGroupReader, client repairGroupReadClient,
+	localID uint64, groupID string,
+) (uint64, error) {
+	// A local member can have a stale leader view that keeps ReadIndex waiting
+	// for its own quorum until the whole repair page expires. Bound that fast
+	// path separately so a healthy confirmed peer can still provide the cut.
+	localCtx, cancelLocal := context.WithTimeout(ctx, repairLocalGroupReadAttemptTimeout)
+	index, localErr := local.ReadIndex(localCtx, groupID)
+	cancelLocal()
+	if localErr == nil && index != 0 {
+		return index, nil
+	}
+	if localErr == nil {
+		localErr = errors.New("local Owner Group returned an empty read cut")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, errors.Join(localErr, err)
+	}
+	if client == nil {
+		return 0, localErr
+	}
+	status, statusErr := local.Status(groupID)
+	candidates := client.GroupCandidates(groupID)
+	if len(candidates) == 0 {
+		return 0, errors.Join(localErr, statusErr, errors.New("Owner Group has no confirmed read candidates"))
+	}
+	ordered := make([]uint64, 0, len(candidates))
+	if statusErr == nil && status.LeaderID != 0 && status.LeaderID != localID {
+		for _, candidate := range candidates {
+			if candidate == status.LeaderID {
+				ordered = append(ordered, candidate)
+				break
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate == localID {
+			continue
+		}
+		alreadyAdded := false
+		for _, existing := range ordered {
+			if existing == candidate {
+				alreadyAdded = true
+				break
+			}
+		}
+		if !alreadyAdded {
+			ordered = append(ordered, candidate)
+		}
+	}
+	failures := []error{localErr}
+	for _, candidate := range ordered {
+		if err := ctx.Err(); err != nil {
+			return 0, errors.Join(append(failures, err)...)
+		}
+		attempt, cancel := context.WithTimeout(ctx, repairGroupReadAttemptTimeout)
+		remoteIndex, err := client.ReadIndex(attempt, candidate, groupID)
+		cancel()
+		if err == nil && remoteIndex != 0 {
+			return remoteIndex, nil
+		}
+		if err == nil {
+			err = errors.New("Owner Group member returned an empty read cut")
+		}
+		failures = append(failures, fmt.Errorf("Owner Group member %d: %w", candidate, err))
+	}
+	return 0, errors.Join(failures...)
 }
 
 func (cursor *liveRepairCursor) addFailures(failures []error) {
@@ -263,7 +352,7 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 			}
 		}
 	}
-	readBarrier := repairReadBarrier{runtime: worker.runtime}
+	readBarrier := repairReadBarrier{runtime: worker.runtime, client: worker.client}
 	page, err := recordrepair.RepairCurrentLocalPage(ctx, readBarrier, worker.runtime.Root,
 		owner, groupID, worker.runtime.Identity.RaftID, worker.runtime.Identity.NodeID,
 		worker.runtime.Records, worker.client, previous.cursor, liveRepairPageLimit)

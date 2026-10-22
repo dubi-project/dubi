@@ -3,7 +3,9 @@ package recordwrite
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -34,18 +36,33 @@ func (h *referenceHandler) Apply(tx *enginestate.Transaction, target router.Targ
 }
 
 type testObserver struct {
+	mu     sync.Mutex
 	root   *testRoot
 	errors map[uint64]error
 	calls  []uint64
+	delays map[uint64]time.Duration
 	before func()
 	badID  bool
 }
 
-func (o *testObserver) ObserveRecordHolding(_ context.Context, id uint64, d records.Descriptor) (raftrpc.HoldingObservation, error) {
+func (o *testObserver) ObserveRecordHolding(ctx context.Context, id uint64, d records.Descriptor) (raftrpc.HoldingObservation, error) {
+	o.mu.Lock()
 	o.calls = append(o.calls, id)
-	if o.before != nil {
-		o.before()
-		o.before = nil
+	before := o.before
+	o.before = nil
+	delay := o.delays[id]
+	o.mu.Unlock()
+	if before != nil {
+		before()
+	}
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return raftrpc.HoldingObservation{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	if err := o.errors[id]; err != nil {
 		return raftrpc.HoldingObservation{}, err
@@ -63,6 +80,12 @@ func (o *testObserver) ObserveRecordHolding(_ context.Context, id uint64, d reco
 			RootConfirmedIndex: 5, Holding: holding}, nil
 	}
 	return raftrpc.HoldingObservation{}, errors.New("unknown Node")
+}
+
+func (o *testObserver) callCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.calls)
 }
 
 func publishedFixture(t *testing.T) (*testRoot, router.Target, records.Descriptor, *enginestate.State, *referenceHandler) {
@@ -93,8 +116,8 @@ func TestObservePublishedLocalRechecksPublicationAndStablePhysicalMajority(t *te
 		want     int
 		fail     bool
 	}{
-		{name: "local and first remote", want: 1},
-		{name: "missing first remote falls back", failures: map[uint64]error{2: status.Error(codes.NotFound, "missing")}, want: 2},
+		{name: "local and first remote", want: 2},
+		{name: "missing remote still forms majority", failures: map[uint64]error{2: status.Error(codes.NotFound, "missing")}, want: 2},
 		{name: "offline majority fails", failures: map[uint64]error{2: status.Error(codes.Unavailable, "offline"), 3: status.Error(codes.Unavailable, "offline")}, want: 2, fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +126,7 @@ func TestObservePublishedLocalRechecksPublicationAndStablePhysicalMajority(t *te
 			store := &testStore{held: true}
 			got, err := ObservePublishedLocal(context.Background(), publishedBarrier{ownerIndex: 2}, root, owner,
 				1, root.members[0].NodeID, store, observer, target, descriptor, "published", 2)
-			if (err != nil) != tc.fail || len(observer.calls) != tc.want {
+			if (err != nil) != tc.fail || (tc.fail && observer.callCount() != tc.want) {
 				t.Fatal(got, err, observer.calls)
 			}
 			if tc.fail {
@@ -116,6 +139,23 @@ func TestObservePublishedLocalRechecksPublicationAndStablePhysicalMajority(t *te
 				t.Fatal("publication, physical majority or final Root check missing", got, root.reads)
 			}
 		})
+	}
+}
+
+func TestObservePublishedLocalUsesHealthyRemoteWithoutSerialTimeoutBudget(t *testing.T) {
+	root, target, descriptor, owner, _ := publishedFixture(t)
+	observer := &testObserver{root: root, delays: map[uint64]time.Duration{2: time.Second}}
+	started := time.Now()
+	got, err := ObservePublishedLocal(context.Background(), publishedBarrier{ownerIndex: 2}, root, owner,
+		1, root.members[0].NodeID, &testStore{held: true}, observer, target, descriptor, "published", 2)
+	if err != nil {
+		t.Fatal(got, err)
+	}
+	if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
+		t.Fatalf("healthy remote was blocked behind a slow cohort Node: %s", elapsed)
+	}
+	if got.Reference.Index != 2 || len(got.Holdings) != 2 || got.Holdings[0].RaftID != 1 || got.Holdings[1].RaftID != 3 {
+		t.Fatal("parallel holding observation did not confirm a stable local majority", got, observer.callCount())
 	}
 }
 
@@ -171,7 +211,7 @@ func TestObservePublishedLocalRejectsWrongPublicationAndObservation(t *testing.T
 		}
 		observer := &testObserver{root: root}
 		if got, err := ObservePublishedLocal(context.Background(), publishedBarrier{ownerIndex: 2}, root, owner,
-			1, root.members[0].NodeID, &testStore{held: true}, observer, target, descriptor, request, index); err == nil || got.Reference.Index != 0 || len(observer.calls) != 0 {
+			1, root.members[0].NodeID, &testStore{held: true}, observer, target, descriptor, request, index); err == nil || got.Reference.Index != 0 || observer.callCount() != 0 {
 			t.Fatal("wrong publication reached physical observation", got, err)
 		}
 	}
@@ -194,7 +234,7 @@ func TestObservePublishedLocalRequiresCallerInConfirmedCohort(t *testing.T) {
 		observer := &testObserver{root: root}
 		got, err := ObservePublishedLocal(context.Background(), publishedBarrier{ownerIndex: 2}, root, owner,
 			caller.id, caller.name, &testStore{held: true}, observer, target, descriptor, "published", 2)
-		if err == nil || got.Reference.Index != 0 || len(observer.calls) != 0 {
+		if err == nil || got.Reference.Index != 0 || observer.callCount() != 0 {
 			t.Fatalf("caller %+v bypassed confirmed cohort membership: %+v, %v", caller, got, err)
 		}
 	}
