@@ -31,6 +31,11 @@ const recordHoldingMessageBytes = recordDescriptorBytes + 4096
 const recordHoldingTimeout = 60 * time.Second
 const recordHoldingConcurrency = 2
 
+// Record observations can arrive in parallel from every Node's bounded
+// background repair scan. Keep disk/Root work capped at two, but leave enough
+// short-lived queue capacity for the cluster-wide repair wave to drain.
+const recordHoldingWaiters = 8
+
 type RecordHoldingVerifier interface {
 	Verify(context.Context, records.Descriptor) (records.Holding, error)
 }
@@ -43,6 +48,7 @@ type RecordHoldingServer struct {
 	store     RecordHoldingVerifier
 	authorize AuthorizePeer
 	slots     chan struct{}
+	waiters   chan struct{}
 	timeout   time.Duration // Shortened only in tests; no deployment setting.
 }
 
@@ -50,7 +56,8 @@ func NewRecordHoldingServer(local identity.Identity, host regionReadBarrier, roo
 	if _, err := identity.NodeIdentityURI(local); err != nil || host == nil || root == nil || store == nil || authorize == nil {
 		return nil, errors.New("record observation requires bound Node identity, Root, Host, Store and peer authorization")
 	}
-	return &RecordHoldingServer{local: local, host: host, root: root, store: store, authorize: authorize, slots: make(chan struct{}, recordHoldingConcurrency), timeout: recordHoldingTimeout}, nil
+	return &RecordHoldingServer{local: local, host: host, root: root, store: store, authorize: authorize,
+		slots: make(chan struct{}, recordHoldingConcurrency), waiters: make(chan struct{}, recordHoldingWaiters), timeout: recordHoldingTimeout}, nil
 }
 
 func decodeHoldingDescriptor(encoded []byte) (records.Descriptor, error) {
@@ -83,14 +90,13 @@ func (s *RecordHoldingServer) Observe(ctx context.Context, req *raftwire.Observe
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	default:
-		return nil, status.Error(codes.ResourceExhausted, "record observation is busy")
-	}
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	releaseSlot, err := acquireQueuedSlot(ctx, s.slots, s.waiters, transferQueueTimeout, "record observation is busy")
+	if err != nil {
+		return nil, err
+	}
+	defer releaseSlot()
 	before, _, err := s.qualify(ctx, req.FromRaftId)
 	if err != nil {
 		return nil, err

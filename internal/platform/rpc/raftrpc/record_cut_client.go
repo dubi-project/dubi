@@ -17,7 +17,6 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -38,14 +37,14 @@ func (c *GroupClient) FetchRecordCut(ctx context.Context, source rootstate.Node,
 		source.RegionID != seal.Intent.Previous.Fence.RegionID {
 		return zero, errors.New("record cut source, destination or seal is invalid")
 	}
-	select {
-	case c.recordSlots <- struct{}{}:
-		defer func() { <-c.recordSlots }()
-	default:
-		return zero, status.Error(codes.ResourceExhausted, "record transfers are busy")
-	}
 	ctx, cancel := context.WithTimeout(ctx, recordCutTimeout)
 	defer cancel()
+	releaseSlot, err := acquireQueuedSlot(ctx, c.recordSlots, c.recordWaiters, transferQueueTimeout,
+		"record transfers are busy")
+	if err != nil {
+		return zero, err
+	}
+	defer releaseSlot()
 	conn, err := c.recordConnection(source)
 	if err != nil {
 		return zero, err
@@ -122,17 +121,18 @@ func recordCutPeer(ctx context.Context, transportPeer *peer.Peer, cluster string
 func (c *GroupClient) receiveRecordCut(ctx context.Context, stream raftwire.RecordCutService_GetClient, timeout time.Duration) (*raftwire.GetRecordCutResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	select {
-	case c.recordReaders <- struct{}{}:
-	default:
-		return nil, status.Error(codes.ResourceExhausted, "record cut receive workers are busy")
+	releaseSlot, err := acquireQueuedSlot(ctx, c.recordReaders, c.readWaiters, transferQueueTimeout,
+		"record cut receive workers are busy")
+	if err != nil {
+		return nil, err
 	}
+	// Keep the worker slot until the actual stream Recv returns.
 	type result struct {
 		frame *raftwire.GetRecordCutResponse
 		err   error
 	}
 	done := make(chan result, 1)
-	go func() { frame, err := stream.Recv(); <-c.recordReaders; done <- result{frame, err} }()
+	go func() { frame, err := stream.Recv(); releaseSlot(); done <- result{frame, err} }()
 	select {
 	case <-ctx.Done():
 		return nil, status.FromContextError(ctx.Err()).Err()

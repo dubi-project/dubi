@@ -260,12 +260,14 @@ func (c *GroupClient) PutRecord(ctx context.Context, target rootstate.Node, d re
 	if d.Size != uint64(len(payload)) {
 		return HoldingObservation{}, errors.New("record transfer payload size mismatch")
 	}
-	select {
-	case c.recordSlots <- struct{}{}:
-		defer func() { <-c.recordSlots }()
-	default:
-		return HoldingObservation{}, status.Error(codes.ResourceExhausted, "record sends are busy")
+	ctx, cancel := context.WithTimeout(ctx, recordTransferTimeout)
+	defer cancel()
+	releaseSlot, err := acquireQueuedSlot(ctx, c.recordSlots, c.recordWaiters, transferQueueTimeout,
+		"record sends are busy")
+	if err != nil {
+		return HoldingObservation{}, err
 	}
+	defer releaseSlot()
 	d.Key = bytes.Clone(d.Key)
 	digest := sha256.Sum256(payload)
 	if hex.EncodeToString(digest[:]) != d.SHA256 {
@@ -275,8 +277,6 @@ func (c *GroupClient) PutRecord(ctx context.Context, target rootstate.Node, d re
 	if err != nil || len(encoded) > recordDescriptorBytes {
 		return HoldingObservation{}, errors.New("invalid record transfer descriptor")
 	}
-	ctx, cancel := context.WithTimeout(ctx, recordTransferTimeout)
-	defer cancel()
 	remote, err := c.recordPeer(target)
 	if err != nil {
 		return HoldingObservation{}, err

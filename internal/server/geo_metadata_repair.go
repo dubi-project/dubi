@@ -20,6 +20,8 @@ import (
 )
 
 const geoMetadataRepairInterval = 5 * time.Second
+const geoMetadataRepairTimeout = 30 * time.Second
+const geoRecordRepairTimeout = 2 * time.Minute
 
 // geoMetadataRepair retries only durable mirror debt. It never infers a new
 // placement from online Nodes: every task is resolved against one fresh Root
@@ -47,10 +49,12 @@ func (worker *geoMetadataRepair) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
-			_, metadataErr := worker.step(attempt)
-			_, recordErr := worker.stepRecords(attempt)
-			cancel()
+			metadataAttempt, cancelMetadata := context.WithTimeout(ctx, geoMetadataRepairTimeout)
+			_, metadataErr := worker.step(metadataAttempt)
+			cancelMetadata()
+			recordAttempt, cancelRecords := context.WithTimeout(ctx, geoRecordRepairTimeout)
+			_, recordErr := worker.stepRecords(recordAttempt)
+			cancelRecords()
 			if ctx.Err() == nil && worker.report != nil {
 				if metadataErr != nil {
 					worker.report(fmt.Errorf("retry Geo metadata mirrors: %w", metadataErr))

@@ -186,17 +186,19 @@ func (c *GroupClient) receiveRecord(ctx context.Context, stream raftwire.RecordT
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	select {
-	case c.recordReaders <- struct{}{}:
-	default:
-		return nil, status.Error(codes.ResourceExhausted, "record fetch workers are busy")
+	releaseSlot, err := acquireQueuedSlot(ctx, c.recordReaders, c.readWaiters, transferQueueTimeout,
+		"record fetch workers are busy")
+	if err != nil {
+		return nil, err
 	}
+	// The Recv worker owns the active lease until the actual Recv returns, even
+	// if this handler's context expires first.
 	type result struct {
 		frame *raftwire.GetRecordResponse
 		err   error
 	}
 	done := make(chan result, 1)
-	go func() { frame, err := stream.Recv(); <-c.recordReaders; done <- result{frame, err} }()
+	go func() { frame, err := stream.Recv(); releaseSlot(); done <- result{frame, err} }()
 	select {
 	case <-ctx.Done():
 		return nil, status.FromContextError(ctx.Err()).Err()
@@ -217,19 +219,19 @@ func (c *GroupClient) fetchRecord(ctx context.Context, source rootstate.Node, d 
 		return result, err
 	}
 	d.Key = bytes.Clone(d.Key)
-	select {
-	case c.recordSlots <- struct{}{}:
-		defer func() { <-c.recordSlots }()
-	default:
-		return result, status.Error(codes.ResourceExhausted, "record transfers are busy")
+	ctx, cancel := context.WithTimeout(ctx, limits.total)
+	defer cancel()
+	releaseSlot, err := acquireQueuedSlot(ctx, c.recordSlots, c.recordWaiters, transferQueueTimeout,
+		"record transfers are busy")
+	if err != nil {
+		return result, err
 	}
+	defer releaseSlot()
 	release, err := c.recordBuffers.TryAcquire(d.Size)
 	if err != nil {
 		return result, status.Error(codes.ResourceExhausted, "record fetch buffers are busy")
 	}
 	defer release()
-	ctx, cancel := context.WithTimeout(ctx, limits.total)
-	defer cancel()
 	remote, err := c.recordPeer(source)
 	if err != nil {
 		return result, err

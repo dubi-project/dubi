@@ -640,9 +640,12 @@ func TestRecordFetchDestinationIOKeepsAdmissionAndAmbiguousDurableBytes(t *testi
 		close(unblock)
 		t.Fatal("canceled IO released capacity early")
 	}
-	if _, err := client.PutRecord(context.Background(), target, f.descriptor, []byte("data")); status.Code(err) != codes.ResourceExhausted {
+	queuedCtx, cancelQueued := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	_, putErr := client.PutRecord(queuedCtx, target, f.descriptor, []byte("data"))
+	cancelQueued()
+	if status.Code(putErr) != codes.DeadlineExceeded || len(client.recordWaiters) != 0 {
 		close(unblock)
-		t.Fatal("Put bypassed shared fetch slots", err)
+		t.Fatal("Put bypassed shared fetch slots or leaked a timed-out waiter", putErr)
 	}
 	close(unblock)
 	for i := 0; i < recordTransferConcurrency; i++ {

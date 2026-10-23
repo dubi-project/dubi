@@ -158,7 +158,9 @@ type GroupClient struct {
 	peers         map[uint64]*groupPeer
 	closed        bool
 	recordSlots   chan struct{}
+	recordWaiters chan struct{}
 	recordReaders chan struct{}
+	readWaiters   chan struct{}
 	recordBuffers *resource.ByteBudget
 }
 
@@ -170,7 +172,10 @@ func NewGroupClient(options GroupClientOptions) (*GroupClient, error) {
 	if options.MaxSize <= 0 {
 		options.MaxSize = DefaultMaxMessageSize
 	}
-	return &GroupClient{options: options, peers: make(map[uint64]*groupPeer), recordSlots: make(chan struct{}, recordTransferConcurrency), recordReaders: make(chan struct{}, recordTransferConcurrency), recordBuffers: resource.NewByteBudget(recordTransferBufferBytes)}, nil
+	return &GroupClient{options: options, peers: make(map[uint64]*groupPeer),
+		recordSlots: make(chan struct{}, recordTransferConcurrency), recordWaiters: make(chan struct{}, transferWaiterConcurrency),
+		recordReaders: make(chan struct{}, recordTransferConcurrency), readWaiters: make(chan struct{}, transferWaiterConcurrency),
+		recordBuffers: resource.NewByteBudget(recordTransferBufferBytes)}, nil
 }
 
 func (client *GroupClient) Submit(ctx context.Context, target uint64, groupID string, command []byte) (uint64, error) {

@@ -423,7 +423,7 @@ func TestRecordHoldingAdmissionTimeoutAndCancellation(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(f.ctx)
 	defer cancel()
-	done := make(chan error, recordHoldingConcurrency)
+	done := make(chan error, recordHoldingConcurrency+recordHoldingWaiters)
 	for i := 0; i < recordHoldingConcurrency; i++ {
 		go func() { _, err := f.server.Observe(ctx, f.request); done <- err }()
 	}
@@ -434,11 +434,21 @@ func TestRecordHoldingAdmissionTimeoutAndCancellation(t *testing.T) {
 			t.Fatal("admission stalled")
 		}
 	}
+	for i := 0; i < recordHoldingWaiters; i++ {
+		go func() { _, err := f.server.Observe(ctx, f.request); done <- err }()
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(f.server.waiters) != recordHoldingWaiters && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(f.server.waiters) != recordHoldingWaiters {
+		t.Fatal("observations did not enter bounded wait queue")
+	}
 	if _, err := f.server.Observe(f.ctx, f.request); status.Code(err) != codes.ResourceExhausted {
 		t.Fatal("unbounded observations", err)
 	}
 	cancel()
-	for i := 0; i < recordHoldingConcurrency; i++ {
+	for i := 0; i < recordHoldingConcurrency+recordHoldingWaiters; i++ {
 		select {
 		case err := <-done:
 			if status.Code(err) != codes.Canceled {
@@ -448,8 +458,8 @@ func TestRecordHoldingAdmissionTimeoutAndCancellation(t *testing.T) {
 			t.Fatal("cancel stalled")
 		}
 	}
-	if len(f.server.slots) != 0 {
-		t.Fatal("canceled slots leaked")
+	if len(f.server.slots) != 0 || len(f.server.waiters) != 0 {
+		t.Fatal("canceled admission leaked")
 	}
 	f.server.timeout = 20 * time.Millisecond
 	if _, err := f.server.Observe(f.ctx, f.request); status.Code(err) != codes.DeadlineExceeded {
@@ -500,8 +510,9 @@ func TestRecordHoldingBlockedIOKeepsAdmissionUntilItActuallyReturns(t *testing.T
 	if len(f.server.slots) != recordHoldingConcurrency {
 		t.Fatal("cancellation released an active IO slot")
 	}
-	if _, err := f.server.Observe(f.ctx, f.request); status.Code(err) != codes.ResourceExhausted {
-		t.Fatal("new IO admitted behind uninterruptible operations", err)
+	f.server.timeout = 20 * time.Millisecond
+	if _, err := f.server.Observe(f.ctx, f.request); status.Code(err) != codes.DeadlineExceeded {
+		t.Fatal("queued IO did not honor its deadline", err)
 	}
 	select {
 	case <-done:

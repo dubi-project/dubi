@@ -353,12 +353,14 @@ func (client *GroupClient) WriteEngineData(ctx context.Context, targetNode roots
 	if hex.EncodeToString(digest[:]) != request.Descriptor.SHA256 {
 		return result, errors.New("engine data body differs from descriptor")
 	}
-	select {
-	case client.recordSlots <- struct{}{}:
-		defer func() { <-client.recordSlots }()
-	default:
-		return result, status.Error(codes.ResourceExhausted, "engine data sends are busy")
+	ctx, cancel := context.WithTimeout(ctx, engineDataTimeout)
+	defer cancel()
+	releaseSlot, err := acquireQueuedSlot(ctx, client.recordSlots, client.recordWaiters, transferQueueTimeout,
+		"engine data sends are busy")
+	if err != nil {
+		return result, err
 	}
+	defer releaseSlot()
 	remote, err := client.engineDataPeer(targetNode)
 	if err != nil {
 		return result, err
@@ -439,12 +441,14 @@ func (client *GroupClient) ReadEngineData(ctx context.Context, targetNode rootst
 	if client == nil || ctx == nil || target.Validate() != nil || !bytes.Equal(key, target.RoutingKey) {
 		return EngineDataReadResult{}, errors.New("invalid routed engine data read")
 	}
-	select {
-	case client.recordReaders <- struct{}{}:
-		defer func() { <-client.recordReaders }()
-	default:
-		return EngineDataReadResult{}, status.Error(codes.ResourceExhausted, "engine data reads are busy")
+	ctx, cancel := context.WithTimeout(ctx, engineDataTimeout)
+	defer cancel()
+	releaseSlot, err := acquireQueuedSlot(ctx, client.recordReaders, client.readWaiters, transferQueueTimeout,
+		"engine data reads are busy")
+	if err != nil {
+		return EngineDataReadResult{}, err
 	}
+	defer releaseSlot()
 	remote, err := client.engineDataPeer(targetNode)
 	if err != nil {
 		return EngineDataReadResult{}, err
