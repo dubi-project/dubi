@@ -74,6 +74,9 @@ func decodeHoldingDescriptor(encoded []byte) (records.Descriptor, error) {
 }
 
 func (s *RecordHoldingServer) Observe(ctx context.Context, req *raftwire.ObserveRecordHoldingRequest) (*raftwire.ObserveRecordHoldingResponse, error) {
+	started := time.Now()
+	recordID := "invalid"
+	defer func() { traceRecordRPC("holding", recordID, "total", started) }()
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "record observation request missing")
 	}
@@ -87,24 +90,33 @@ func (s *RecordHoldingServer) Observe(ctx context.Context, req *raftwire.Observe
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid record observation descriptor")
 	}
+	recordID = traceRecordID(d.ID)
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	phaseStarted := time.Now()
 	releaseSlot, err := acquireQueuedSlot(ctx, s.slots, s.waiters, transferQueueTimeout, "record observation is busy")
+	traceRecordRPC("holding", recordID, "slot_wait", phaseStarted)
 	if err != nil {
 		return nil, err
 	}
 	defer releaseSlot()
+	phaseStarted = time.Now()
 	before, _, err := s.qualify(ctx, req.FromRaftId)
+	traceRecordRPC("holding", recordID, "root_qualify_before", phaseStarted)
 	if err != nil {
 		return nil, err
 	}
+	phaseStarted = time.Now()
 	holding, verifyErr := s.store.Verify(ctx, d)
+	traceRecordRPC("holding", recordID, "pack_verify", phaseStarted)
 	// Revalidate even after a missing/corrupt result. Do not disclose current
 	// storage information to a peer whose authorization expired during IO.
+	phaseStarted = time.Now()
 	after, index, err := s.qualify(ctx, req.FromRaftId)
+	traceRecordRPC("holding", recordID, "root_qualify_after", phaseStarted)
 	if err != nil {
 		return nil, err
 	}

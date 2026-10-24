@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/protocol"
@@ -323,7 +324,9 @@ func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding,
 		_, holding, err := s.read(id, d, existing)
 		return holding, err
 	}
+	appendStarted := time.Now()
 	loc, err := s.packs.Append(ctx, pack.Record{EngineID: d.Keyspace.EngineID, TenantID: d.Keyspace.TenantID, Key: recordKey(id), Payload: payload})
+	traceRecordStore("pack_append", id, appendStarted)
 	if err != nil {
 		return Holding{}, err
 	}
@@ -343,18 +346,22 @@ func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding,
 	if err := b.Set(indexKey(id), encoded, nil); err != nil {
 		return Holding{}, err
 	}
+	commitStarted := time.Now()
 	if s.commit != nil {
 		err = s.commit(b)
 	} else {
 		err = b.Commit(pebble.Sync)
 	}
+	traceRecordStore("index_sync", id, commitStarted)
 	if err != nil {
 		s.failed = fmt.Errorf("immutable record index Sync uncertain; reopen required: %w", err)
 		return Holding{}, s.failed
 	}
 	// Confirm the physical record too. A backend's successful Append is not a
 	// substitute for descriptor/identity/CRC/digest verification.
+	verifyStarted := time.Now()
 	_, holding, err := s.read(id, d, e)
+	traceRecordStore("post_write_verify", id, verifyStarted)
 	return holding, err
 }
 

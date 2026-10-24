@@ -93,6 +93,9 @@ func (s *RecordTransferServer) receive(ctx context.Context, stream raftwire.Reco
 }
 
 func (s *RecordTransferServer) Put(stream raftwire.RecordTransferService_PutServer) error {
+	started := time.Now()
+	recordID := "invalid"
+	defer func() { traceRecordRPC("transfer_put", recordID, "total", started) }()
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
@@ -119,7 +122,10 @@ func (s *RecordTransferServer) Put(stream raftwire.RecordTransferService_PutServ
 	if err != nil {
 		return status.Error(codes.InvalidArgument, "invalid record transfer descriptor")
 	}
+	recordID = traceRecordID(d.ID)
+	phaseStarted := time.Now()
 	before, _, err := s.auth.qualify(ctx, header.FromRaftId)
+	traceRecordRPC("transfer_put", recordID, "root_qualify_before_receive", phaseStarted)
 	if err != nil {
 		return err
 	}
@@ -132,6 +138,7 @@ func (s *RecordTransferServer) Put(stream raftwire.RecordTransferService_PutServ
 	defer release()
 	payload := make([]byte, int(d.Size))
 	offset := 0
+	phaseStarted = time.Now()
 	for {
 		frame, err := s.receive(ctx, stream, s.idle)
 		if errors.Is(err, io.EOF) {
@@ -145,6 +152,7 @@ func (s *RecordTransferServer) Put(stream raftwire.RecordTransferService_PutServ
 		}
 		offset += copy(payload[offset:], frame.Data)
 	}
+	traceRecordRPC("transfer_put", recordID, "receive_payload", phaseStarted)
 	if offset != len(payload) {
 		return status.Error(codes.InvalidArgument, "incomplete record payload")
 	}
@@ -154,15 +162,21 @@ func (s *RecordTransferServer) Put(stream raftwire.RecordTransferService_PutServ
 	}
 	// Receiving all bytes is not authorization to publish indefinitely. Recheck
 	// the two Node registrations immediately before and after synchronous IO.
+	phaseStarted = time.Now()
 	ready, _, err := s.auth.qualify(ctx, header.FromRaftId)
+	traceRecordRPC("transfer_put", recordID, "root_qualify_before_write", phaseStarted)
 	if err != nil {
 		return err
 	}
 	if ready != before {
 		return status.Error(codes.FailedPrecondition, "record transfer Node registration changed")
 	}
+	phaseStarted = time.Now()
 	holding, putErr := s.store.Put(ctx, d, payload)
+	traceRecordRPC("transfer_put", recordID, "pack_write", phaseStarted)
+	phaseStarted = time.Now()
 	after, index, err := s.auth.qualify(ctx, header.FromRaftId)
+	traceRecordRPC("transfer_put", recordID, "root_qualify_after_write", phaseStarted)
 	if err != nil {
 		return err
 	}

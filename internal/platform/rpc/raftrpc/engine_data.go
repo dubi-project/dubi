@@ -155,7 +155,9 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 	}
 	ctx, cancel := context.WithTimeout(stream.Context(), engineDataTimeout)
 	defer cancel()
+	phaseStarted := time.Now()
 	first, err := server.receive(ctx, stream, engineDataIdle)
+	traceRecordRPC("engine_data_write", "pending", "receive_header", phaseStarted)
 	if err != nil {
 		return err
 	}
@@ -175,7 +177,9 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 		!bytes.Equal(descriptor.Key, target.RoutingKey) {
 		return status.Error(codes.InvalidArgument, "engine data descriptor differs from route")
 	}
+	phaseStarted = time.Now()
 	before, _, err := server.auth.qualify(ctx, h.FromRaftId)
+	traceRecordRPC("engine_data_write", h.RequestId, "qualify_before_body", phaseStarted)
 	if err != nil {
 		return err
 	}
@@ -186,6 +190,7 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 	defer release()
 	body := make([]byte, int(descriptor.Size))
 	offset := 0
+	phaseStarted = time.Now()
 	for {
 		frame, err := server.receive(ctx, stream, engineDataIdle)
 		if errors.Is(err, io.EOF) {
@@ -201,6 +206,7 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 		}
 		offset += copy(body[offset:], frame.GetData())
 	}
+	traceRecordRPC("engine_data_write", h.RequestId, "receive_body", phaseStarted)
 	if offset != len(body) {
 		return status.Error(codes.InvalidArgument, "incomplete engine data body")
 	}
@@ -208,16 +214,22 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 	if hex.EncodeToString(digest[:]) != descriptor.SHA256 {
 		return status.Error(codes.DataLoss, "engine data body digest mismatch")
 	}
+	phaseStarted = time.Now()
 	after, _, err := server.auth.qualify(ctx, h.FromRaftId)
+	traceRecordRPC("engine_data_write", h.RequestId, "qualify_after_body", phaseStarted)
 	if err != nil {
 		return err
 	}
 	if after != before {
 		return status.Error(codes.FailedPrecondition, "engine data Node registration changed")
 	}
+	phaseStarted = time.Now()
 	result, runErr := server.executor.ExecuteWrite(ctx, EngineDataWrite{RequestID: h.RequestId,
 		Target: target, Descriptor: descriptor, Body: body, Payload: h.MutationPayload})
+	traceRecordRPC("engine_data_write", h.RequestId, "execute_owner", phaseStarted)
+	phaseStarted = time.Now()
 	final, _, err := server.auth.qualify(ctx, h.FromRaftId)
+	traceRecordRPC("engine_data_write", h.RequestId, "qualify_after_owner", phaseStarted)
 	if err != nil {
 		return err
 	}

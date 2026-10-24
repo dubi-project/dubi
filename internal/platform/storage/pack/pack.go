@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
@@ -242,6 +243,8 @@ func (p *Pack) with(write bool, fn func(*os.Root) error) error {
 func (p *Pack) Append(record Record) (Location, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	appendStarted := time.Now()
+	defer tracePack("pack_append", p.header.PackID, appendStarted)
 	var loc Location
 	err := p.with(true, func(dir *os.Root) error {
 		if p.state.Sealed {
@@ -252,22 +255,28 @@ func (p *Pack) Append(record Record) (Location, error) {
 			return err
 		}
 		loc = Location{Scope: p.header.Scope, Offset: p.state.End, Length: int64(len(encoded)), CRC32C: crc32.Checksum(encoded[recordHeaderSize:], crcTable)}
+		writeStarted := time.Now()
 		if _, err := p.file.WriteAt(encoded, loc.Offset); err != nil {
 			p.failed = err
 			return err
 		}
+		tracePack("data_write", p.header.PackID, writeStarted)
+		syncStarted := time.Now()
 		if err := p.file.Sync(); err != nil {
 			p.failed = err
 			return err
 		}
+		tracePack("data_sync", p.header.PackID, syncStarted)
 		next := p.state
 		next.End += loc.Length
 		next.Count++
 		next.Sealed = next.End >= p.header.TargetSize
+		publishStarted := time.Now()
 		if err := p.publish(dir, next, false); err != nil {
 			p.failed = err
 			return err
 		}
+		tracePack("checkpoint_publish", p.header.PackID, publishStarted)
 		p.state = next
 		return nil
 	})

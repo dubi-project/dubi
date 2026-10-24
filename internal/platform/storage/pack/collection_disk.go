@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"golang.org/x/sys/unix"
@@ -80,13 +81,18 @@ func publishBytes(dir *os.Root, name, prefix string, b []byte, exclusive bool) e
 		return err
 	}
 	defer dir.Remove(temp)
+	writeStarted := time.Now()
 	if _, err := file.Write(b); err != nil {
 		_ = file.Close()
 		return err
 	}
+	tracePack("metadata_write_"+name, "", writeStarted)
+	syncStarted := time.Now()
 	if err := errors.Join(file.Sync(), file.Close()); err != nil {
 		return err
 	}
+	tracePack("metadata_sync_"+name, "", syncStarted)
+	publishStarted := time.Now()
 	if exclusive {
 		err = dir.Link(temp, name)
 	} else {
@@ -95,7 +101,11 @@ func publishBytes(dir *os.Root, name, prefix string, b []byte, exclusive bool) e
 	if err != nil {
 		return err
 	}
-	return syncDirectory(dir)
+	tracePack("metadata_publish_"+name, "", publishStarted)
+	dirSyncStarted := time.Now()
+	err = syncDirectory(dir)
+	tracePack("metadata_dir_sync_"+name, "", dirSyncStarted)
+	return err
 }
 
 func checkEmptyCollection(dir *os.Root) error {

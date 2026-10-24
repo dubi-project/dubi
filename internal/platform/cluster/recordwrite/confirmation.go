@@ -98,3 +98,59 @@ func CheckCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner 
 	}
 	return observed, nil
 }
+
+// CheckReadCurrent rechecks the logical publication and its Root cohort after
+// a read has already passed CheckCommittedLocal and the immutable bytes have
+// been read and verified. The first check establishes physical majority; this
+// final check prevents returning bytes after a concurrent Owner overwrite or
+// Region transition without repeating the same remote holding scan.
+func CheckReadCurrent(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
+	target router.Target, expected enginestate.RecordReference, confirmationRequestID string,
+	claim routedstate.LocalConfirmation, expectedPlan placement.LocalPlan) (placement.LocalPlan, error) {
+	recordID, descriptorErr := expected.Descriptor.ID()
+	if ctx == nil || barrier == nil || root == nil || owner == nil || target.Validate() != nil ||
+		owner.GroupID() != target.OwnerGroupID || claim.Validate() != nil ||
+		rootstate.ValidateRequestID(confirmationRequestID) != nil || rootstate.ValidateRequestID(expected.RequestID) != nil ||
+		expected.Index == 0 || descriptorErr != nil || expected.Descriptor.Validate() != nil ||
+		expected.OwnerGroupID != target.OwnerGroupID || expected.RangeID != target.RangeID || expected.RangeEpoch != target.Epoch ||
+		claim.Target.Keyspace != target.Keyspace || claim.Target.RangeID != target.RangeID ||
+		claim.Target.OwnerGroupID != target.OwnerGroupID || claim.Target.Epoch != target.Epoch ||
+		!bytes.Equal(claim.Target.RoutingKey, target.RoutingKey) || !bytes.Equal(claim.Key, expected.Descriptor.Key) ||
+		claim.ReferenceRequestID != expected.RequestID || claim.ReferenceIndex != expected.Index || claim.RecordID != recordID ||
+		expectedPlan.GroupID != target.OwnerGroupID || claim.RegionID != expectedPlan.RegionID ||
+		claim.Generation != expectedPlan.Generation || claim.GroupEpoch != expectedPlan.GroupEpoch ||
+		claim.FenceIndex != expectedPlan.FenceIndex {
+		return placement.LocalPlan{}, errors.New("final read check requires a valid Owner publication and Root cohort")
+	}
+	err := readOwner(ctx, barrier, owner, target, func(view enginestate.ReadView) error {
+		ref, found, readErr := view.RecordReference(expected.Descriptor.Key)
+		if readErr != nil {
+			return readErr
+		}
+		if !found || ref.Index != expected.Index || ref.RequestID != expected.RequestID ||
+			ref.CommandHash != expected.CommandHash || ref.OwnerGroupID != expected.OwnerGroupID ||
+			ref.RangeID != expected.RangeID || ref.RangeEpoch != expected.RangeEpoch ||
+			!bytes.Equal(ref.Descriptor.Key, expected.Descriptor.Key) {
+			return errors.New("authoritative record publication changed during read")
+		}
+		receipt, found, readErr := view.LocalConfirmation(expected.Descriptor.Key)
+		if readErr != nil {
+			return readErr
+		}
+		if !found || receipt.RequestID != confirmationRequestID || !reflect.DeepEqual(receipt.Claim, claim) {
+			return errors.New("exact local confirmation changed during read")
+		}
+		return nil
+	})
+	if err != nil {
+		return placement.LocalPlan{}, err
+	}
+	latest, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+	if err != nil {
+		return placement.LocalPlan{}, err
+	}
+	if !expectedPlan.Matches(latest) {
+		return placement.LocalPlan{}, errors.New("Root Region plan changed during final read check")
+	}
+	return latest, nil
+}

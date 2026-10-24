@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
@@ -367,18 +368,23 @@ func (m *Collection) ensureActive() error {
 func (m *Collection) Append(record Record) (Location, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	started := time.Now()
+	defer tracePack("collection_append", string(record.Key), started)
 	if err := validateRecord(record); err != nil {
 		return Location{}, err
 	}
 	if err := m.access(func(*os.Root) error { return nil }); err != nil {
 		return Location{}, err
 	}
+	ensureStarted := time.Now()
 	if err := m.ensureActive(); err != nil {
+		tracePack("ensure_active", string(record.Key), ensureStarted)
 		if !errors.Is(err, ErrCollectionFull) {
 			m.failed = err
 		}
 		return Location{}, err
 	}
+	tracePack("ensure_active", m.active.Scope().PackID, ensureStarted)
 	loc, err := m.active.Append(record)
 	if err != nil {
 		m.failed = err

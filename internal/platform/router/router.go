@@ -54,6 +54,29 @@ type Router struct {
 	catalog Catalog
 }
 
+type confirmedRootIndexContextKey struct{}
+
+// WithConfirmedRootIndex attaches an already quorum-confirmed Root cut to an
+// internal request context. It is intended for server-side admission paths
+// that have just confirmed current Node membership; external callers cannot
+// set this private context key.
+func WithConfirmedRootIndex(ctx context.Context, index uint64) context.Context {
+	if ctx == nil || index == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, confirmedRootIndexContextKey{}, index)
+}
+
+// ConfirmedRootIndex returns a Root read cut previously attached by a trusted
+// internal admission path.
+func ConfirmedRootIndex(ctx context.Context) (uint64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	index, ok := ctx.Value(confirmedRootIndexContextKey{}).(uint64)
+	return index, ok && index != 0
+}
+
 func New(barrier ReadBarrier, catalog Catalog) (*Router, error) {
 	if barrier == nil || catalog == nil {
 		return nil, errors.New("Root Router requires ReadIndex and catalog")
@@ -70,6 +93,16 @@ func (r *Router) Resolve(ctx context.Context, keyspace rootstate.Keyspace, routi
 	index, err := r.barrier.ReadIndex(ctx, raft.RootGroupID)
 	if err != nil {
 		return rootstate.Range{}, fmt.Errorf("confirm Root route: %w", err)
+	}
+	return r.ResolveAtIndex(keyspace, routingKey, index)
+}
+
+// ResolveAtIndex resolves from the local Root catalog after the caller has
+// already confirmed this Root cut. The catalog must have applied at least the
+// cut; otherwise the caller should obtain a fresh cut and retry.
+func (r *Router) ResolveAtIndex(keyspace rootstate.Keyspace, routingKey []byte, index uint64) (rootstate.Range, error) {
+	if err := keyspace.Validate(); err != nil || index == 0 {
+		return rootstate.Range{}, ErrDirectoryInvalid
 	}
 	if r.catalog.AppliedIndex() < index {
 		return rootstate.Range{}, ErrCatalogBehind
@@ -95,8 +128,22 @@ func (r *Router) ResolveTarget(ctx context.Context, keyspace rootstate.Keyspace,
 	if err != nil {
 		return Target{}, err
 	}
+	return targetFromRange(keyspace, routingKey, value), nil
+}
+
+// ResolveTargetAtIndex resolves a detached route using an already confirmed
+// Root cut, avoiding a second serial Root ReadIndex on the same request.
+func (r *Router) ResolveTargetAtIndex(keyspace rootstate.Keyspace, routingKey []byte, index uint64) (Target, error) {
+	value, err := r.ResolveAtIndex(keyspace, routingKey, index)
+	if err != nil {
+		return Target{}, err
+	}
+	return targetFromRange(keyspace, routingKey, value), nil
+}
+
+func targetFromRange(keyspace rootstate.Keyspace, routingKey []byte, value rootstate.Range) Target {
 	return Target{Keyspace: keyspace, RangeID: value.RangeID, OwnerGroupID: value.OwnerGroupID,
-		Epoch: value.Epoch, RoutingKey: bytes.Clone(routingKey)}, nil
+		Epoch: value.Epoch, RoutingKey: bytes.Clone(routingKey)}
 }
 
 // CheckOwner compares a forwarded Target with the exact Range fence already

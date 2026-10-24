@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -40,6 +41,8 @@ type LocalRead struct {
 }
 
 func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte) (LocalRead, error) {
+	started := time.Now()
+	defer Trace(ctx, "read.local.total", started)
 	if ctx == nil || r.Barrier == nil || r.Root == nil || r.Owner == nil || r.Store == nil ||
 		r.Observer == nil || r.Fetcher == nil || r.LocalID == 0 || r.LocalNodeID == "" ||
 		target.Validate() != nil || r.Owner.GroupID() != target.OwnerGroupID || len(key) == 0 || len(key) > 4096 {
@@ -48,6 +51,7 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 	var ref enginestate.RecordReference
 	var receipt enginestate.LocalConfirmationRecord
 	var hasRef, hasReceipt bool
+	phaseStarted := time.Now()
 	err := readOwner(ctx, r.Barrier, r.Owner, target, func(view enginestate.ReadView) error {
 		var readErr error
 		ref, hasRef, readErr = view.RecordReference(key)
@@ -57,6 +61,7 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 		receipt, hasReceipt, readErr = view.LocalConfirmation(key)
 		return readErr
 	})
+	Trace(ctx, "read.owner_reference", phaseStarted)
 	if err != nil {
 		return LocalRead{}, err
 	}
@@ -64,12 +69,15 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 		receipt.Claim.ReferenceIndex != ref.Index || receipt.Claim.ReferenceRequestID != ref.RequestID {
 		return LocalRead{}, errors.New("record has no current local durability confirmation")
 	}
+	phaseStarted = time.Now()
 	verified, err := CheckCommittedLocal(ctx, r.Barrier, r.Root, r.Owner, r.LocalID, r.LocalNodeID,
 		r.Store, r.Observer, target, ref.Descriptor, ref.RequestID, ref.Index,
 		receipt.RequestID, receipt.Claim)
+	Trace(ctx, "read.initial_majority_check", phaseStarted)
 	if err != nil {
 		return LocalRead{}, err
 	}
+	phaseStarted = time.Now()
 	body, _, err := r.Store.Read(ctx, ref.Descriptor)
 	if errors.Is(err, records.ErrNotHeld) {
 		var failures []error
@@ -102,13 +110,16 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 	} else if err != nil {
 		return LocalRead{}, err
 	}
+	Trace(ctx, "read.pack_read_or_fetch", phaseStarted)
 	// The remote fetch or local Pack read may overlap an Owner overwrite or a
-	// Region transition. Never release bytes without a final current cut.
-	final, err := CheckCommittedLocal(ctx, r.Barrier, r.Root, r.Owner, r.LocalID, r.LocalNodeID,
-		r.Store, r.Observer, target, ref.Descriptor, ref.RequestID, ref.Index,
-		receipt.RequestID, receipt.Claim)
+	// Region transition. The first full check already established physical
+	// majority; recheck logical currentness without repeating remote holding IO.
+	phaseStarted = time.Now()
+	finalPlan, err := CheckReadCurrent(ctx, r.Barrier, r.Root, r.Owner, target, ref,
+		receipt.RequestID, receipt.Claim, verified.Plan)
+	Trace(ctx, "read.final_currentness_check", phaseStarted)
 	if err != nil {
 		return LocalRead{}, err
 	}
-	return LocalRead{Body: body, Reference: final.Reference, RegionGeneration: final.Plan.Generation, State: "local_ready"}, nil
+	return LocalRead{Body: body, Reference: ref, RegionGeneration: finalPlan.Generation, State: "local_ready"}, nil
 }

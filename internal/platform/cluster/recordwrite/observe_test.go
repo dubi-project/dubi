@@ -3,15 +3,20 @@ package recordwrite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
+	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
+	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
+	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -237,6 +242,130 @@ func TestObservePublishedLocalRequiresCallerInConfirmedCohort(t *testing.T) {
 		if err == nil || got.Reference.Index != 0 || observer.callCount() != 0 {
 			t.Fatalf("caller %+v bypassed confirmed cohort membership: %+v, %v", caller, got, err)
 		}
+	}
+}
+
+func TestStagedPublicationReusesOnlyVerifiedStageEvidence(t *testing.T) {
+	root, target, descriptor, owner, _ := publishedFixture(t)
+	store := &testStore{}
+	staged, err := StageLocal(context.Background(), testBarrier{}, root, 1,
+		root.members[0].NodeID, store, &testSender{}, target, descriptor, []byte("body"))
+	if err != nil {
+		t.Fatal("stage physical majority", err)
+	}
+	for i := range staged.Holdings {
+		staged.Holdings[i].StoreID = fmt.Sprintf("store_%032x", i+1)
+	}
+	request := WriteRequest{RequestID: "published", Target: target, Descriptor: descriptor}
+	observed, err := stagedPublication(context.Background(), publishedBarrier{ownerIndex: 2}, owner, request, staged, 2)
+	if err != nil || observed.Reference.Index != 2 || !staged.Plan.Matches(observed.Plan) || len(observed.Holdings) != 2 {
+		t.Fatal("staged proof did not bind to the exact publication", observed, err)
+	}
+	claim, err := ConfirmationClaim(target, observed)
+	if err != nil || claim.ReferenceIndex != 2 || len(claim.Holdings) != 2 {
+		t.Fatal("staged proof did not produce a valid confirmation claim", claim, err)
+	}
+
+	staged.Holdings = staged.Holdings[:1]
+	if _, err := stagedPublication(context.Background(), publishedBarrier{ownerIndex: 2}, owner, request, staged, 2); err == nil {
+		t.Fatal("staged minority was accepted")
+	}
+}
+
+func readCurrentFixture(t *testing.T) (*testRoot, router.Target, enginestate.RecordReference,
+	*enginestate.State, routedstate.LocalConfirmation, string, placement.LocalPlan) {
+	t.Helper()
+	root, target, descriptor := stageFixture(t)
+	root.view.Current.GroupFenceIndex = 3
+	handler := &referenceHandler{descriptor: descriptor}
+	owner, err := enginestate.Open(t.TempDir(), target.OwnerGroupID, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close() })
+	if err := owner.ApplyMembership(1, &raftpb.ConfState{Voters: []uint64{1, 2, 3}}); err != nil {
+		t.Fatal(err)
+	}
+	rangeDescriptor := rootstate.Range{RangeID: target.RangeID, TenantID: target.Keyspace.TenantID,
+		EngineID: target.Keyspace.EngineID, DatasetID: target.Keyspace.DatasetID,
+		OwnerGroupID: target.OwnerGroupID, Epoch: target.Epoch, State: rootstate.RangeStateActive}
+	if err := owner.ApplyRange(2, "activate", rangeDescriptor); err != nil {
+		t.Fatal(err)
+	}
+	fence := regionfence.Descriptor{RegionID: "west", GroupID: target.OwnerGroupID, Generation: 1,
+		PlannedIndex: 2, GroupEpoch: 2, MembershipIndex: 1,
+		Members: []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter},
+			{RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}}
+	encodedFence, err := routedstate.EncodeRegionFence("fence", fence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := routedstate.New(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Apply(3, encodedFence); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.ApplyRouted(4, "published", target, []byte("publish")); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := ObservePublishedLocal(context.Background(), publishedBarrier{ownerIndex: 4}, root, owner,
+		1, root.members[0].NodeID, &testStore{held: true}, &testObserver{root: root},
+		target, descriptor, "published", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed.Holdings[0].StoreID = "store_00000000000000000000000000000001"
+	observed.Holdings[1].StoreID = "store_00000000000000000000000000000002"
+	claim, err := ConfirmationClaim(target, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.ApplyLocalConfirmation(owner.AppliedIndex()+1, "confirm", claim); err != nil {
+		t.Fatal(err)
+	}
+	return root, target, observed.Reference, owner, claim, "confirm", observed.Plan
+}
+
+func TestCheckReadCurrentPreservesOwnerAndRegionFencesWithoutRemoteScans(t *testing.T) {
+	root, target, ref, owner, claim, confirmationID, plan := readCurrentFixture(t)
+	root.reads = 0
+	rootReads := root.reads
+	got, err := CheckReadCurrent(context.Background(), publishedBarrier{ownerIndex: owner.AppliedIndex()},
+		root, owner, target, ref, confirmationID, claim, plan)
+	if err != nil || !plan.Matches(got) {
+		t.Fatal("current publication was rejected", got, err)
+	}
+	if root.reads-rootReads != 1 {
+		t.Fatalf("final check should use one Root read after Owner currentness, got %d", root.reads-rootReads)
+	}
+
+	root, target, ref, owner, claim, confirmationID, plan = readCurrentFixture(t)
+	if err := owner.ApplyRouted(owner.AppliedIndex()+1, "replacement", target, []byte("publish")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CheckReadCurrent(context.Background(), publishedBarrier{ownerIndex: owner.AppliedIndex()},
+		root, owner, target, ref, confirmationID, claim, plan); err == nil {
+		t.Fatal("concurrently replaced Owner reference was accepted")
+	}
+
+	root, target, ref, owner, claim, confirmationID, plan = readCurrentFixture(t)
+	root.reads = 1
+	root.afterFirst = func(view *rootstate.RegionProgress) {
+		view.Current.Generation++
+		view.Current.PlannedIndex++
+		view.Current.ConfirmedIndex++
+		view.Current.GroupEpoch++
+		view.Current.GroupFenceRequestID = "new-fence"
+		view.Current.GroupFenceIndex++
+		view.Head.CurrentGeneration++
+		view.Group.Epoch++
+		view.AppliedIndex++
+	}
+	if _, err := CheckReadCurrent(context.Background(), publishedBarrier{ownerIndex: owner.AppliedIndex()},
+		root, owner, target, ref, confirmationID, claim, plan); err == nil {
+		t.Fatal("concurrently changed Root Region plan was accepted")
 	}
 }
 

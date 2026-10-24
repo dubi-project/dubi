@@ -169,6 +169,31 @@ func TestResolveTargetDetachesRoutingKey(t *testing.T) {
 	}
 }
 
+func TestResolveTargetAtConfirmedIndexAvoidsSecondBarrier(t *testing.T) {
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+	catalog := &fakeCatalog{applied: 18, found: true, value: rootstate.Range{
+		RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+		OwnerGroupID: "data-1", Epoch: 3, State: rootstate.RangeStateActive}}
+	routes, err := New(fakeBarrier{err: errors.New("unexpected second Root ReadIndex")}, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithConfirmedRootIndex(context.Background(), 18)
+	if index, ok := ConfirmedRootIndex(ctx); !ok || index != 18 {
+		t.Fatalf("confirmed Root index = %d, %v", index, ok)
+	}
+	target, err := routes.ResolveTargetAtIndex(keyspace, []byte("key"), 18)
+	if err != nil || target.RangeID != "range-a" || target.Epoch != 3 {
+		t.Fatalf("route at confirmed Root cut = %+v, %v", target, err)
+	}
+	if !catalog.called {
+		t.Fatal("route catalog was not read at the confirmed Root cut")
+	}
+	if _, ok := ConfirmedRootIndex(context.Background()); ok {
+		t.Fatal("untrusted request context unexpectedly had a confirmed Root index")
+	}
+}
+
 func TestCheckOwnerRequiresExactAppliedGeneration(t *testing.T) {
 	current := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
 		DatasetID: "items", Start: []byte("b"), End: []byte("m"), OwnerGroupID: "data-1", Epoch: 3,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -44,6 +45,8 @@ type PublishedObservation struct {
 func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
 	localID uint64, localNodeID string, store Verifier, observer Observer,
 	target router.Target, descriptor records.Descriptor, requestID string, publicationIndex uint64) (PublishedObservation, error) {
+	started := time.Now()
+	defer Trace(ctx, "observe.total", started)
 	if ctx == nil || barrier == nil || root == nil || owner == nil || localID == 0 || localNodeID == "" ||
 		store == nil || observer == nil || target.Validate() != nil || descriptor.Validate() != nil ||
 		target.Keyspace != descriptor.Keyspace || requestID == "" || publicationIndex == 0 {
@@ -53,7 +56,9 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 	if err != nil {
 		return PublishedObservation{}, err
 	}
+	phaseStarted := time.Now()
 	plan, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+	Trace(ctx, "observe.root_plan", phaseStarted)
 	if err != nil {
 		return PublishedObservation{}, err
 	}
@@ -70,7 +75,9 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 	if !localMember {
 		return PublishedObservation{}, errors.New("local Node is not in confirmed cohort")
 	}
+	phaseStarted = time.Now()
 	reference, err := publishedReference(ctx, barrier, owner, target, descriptor.Key, recordID, requestID, publicationIndex)
+	Trace(ctx, "observe.owner_reference", phaseStarted)
 	if err != nil {
 		return PublishedObservation{}, err
 	}
@@ -86,7 +93,9 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 			if node.NodeID != localNodeID {
 				return PublishedObservation{}, errors.New("local Node identity differs from confirmed cohort")
 			}
+			phaseStarted = time.Now()
 			verified, err := store.Verify(ctx, descriptor)
+			Trace(ctx, "observe.local_pack_verify", phaseStarted)
 			if err != nil {
 				if unavailableHolding(err) {
 					failures = append(failures, fmt.Errorf("local Node: %w", err))
@@ -130,7 +139,9 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 		for _, node := range remoteNodes {
 			node := node
 			go func() {
+				phaseStarted := time.Now()
 				observed, err := observer.ObserveRecordHolding(attemptCtx, node.RaftID, descriptor)
+				Trace(ctx, fmt.Sprintf("observe.remote_holding.node_%d", node.RaftID), phaseStarted)
 				results <- holdingResult{node: node, observe: observed, err: err}
 			}()
 		}

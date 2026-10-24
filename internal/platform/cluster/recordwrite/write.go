@@ -11,6 +11,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
+	"github.com/dubi-project/dubi/internal/platform/placement"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 )
@@ -68,6 +69,8 @@ type LocalWrite struct {
 // stale/missing receipt triggers a fresh confirmation command with an
 // automatically generated internal RequestID.
 func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrite, error) {
+	started := time.Now()
+	defer Trace(ctx, "write.local.total", started)
 	if ctx == nil || w.Barrier == nil || w.Root == nil || w.Owner == nil || w.Store == nil ||
 		w.Sender == nil || w.Observer == nil || w.Submit == nil ||
 		rootstate.ValidateRequestID(request.RequestID) != nil || w.Owner.GroupID() != request.Target.OwnerGroupID {
@@ -77,9 +80,11 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 	if err != nil {
 		return LocalWrite{}, err
 	}
+	phaseStarted := time.Now()
 	publication, found, err := w.resultAtCut(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForMutation(request.RequestID, request.Target, request.Payload)
 	})
+	Trace(ctx, "write.initial_owner_read", phaseStarted)
 	if err != nil {
 		return LocalWrite{}, err
 	}
@@ -119,18 +124,23 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 			// A stale receipt or lost physical majority still needs staging.
 		}
 	}
+	phaseStarted = time.Now()
 	staged, err := StageLocal(ctx, w.Barrier, w.Root, w.LocalID, w.LocalNodeID,
 		w.Store, w.Sender, request.Target, request.Descriptor, request.Body)
+	Trace(ctx, "write.stage_local", phaseStarted)
 	if err != nil {
 		return LocalWrite{}, err
 	}
 	if !found {
+		phaseStarted = time.Now()
 		if err := w.Submit(ctx, request.Target.OwnerGroupID, mutation); err != nil {
+			Trace(ctx, "write.publish_owner", phaseStarted)
 			return LocalWrite{}, fmt.Errorf("submit immutable reference publication: %w", err)
 		}
 		publication, err = w.awaitResult(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 			return w.Owner.ResultForMutation(request.RequestID, request.Target, request.Payload)
 		})
+		Trace(ctx, "write.publish_owner", phaseStarted)
 		if err != nil {
 			return LocalWrite{}, err
 		}
@@ -138,13 +148,17 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 	if !publication.Applied || publication.Error != "" || publication.Index == 0 {
 		return LocalWrite{}, fmt.Errorf("immutable reference publication rejected: %s", publication.Error)
 	}
-	observed, err := ObservePublishedLocal(ctx, w.Barrier, w.Root, w.Owner, w.LocalID, w.LocalNodeID,
-		w.Store, w.Observer, request.Target, request.Descriptor, request.RequestID, publication.Index)
+	// StageLocal already verified the immutable Pack bytes on a strict
+	// majority and rechecked that the exact Root cohort stayed unchanged across
+	// those writes. Reuse that evidence to build the confirmation claim instead
+	// of repeating the same remote holding scan immediately after publication.
+	// finish still performs the full physical-majority scan AFTER the Owner
+	// confirmation commits, before this method can report LocalReady.
+	phaseStarted = time.Now()
+	observed, err := stagedPublication(ctx, w.Barrier, w.Owner, request, staged, publication.Index)
+	Trace(ctx, "write.staged_publication", phaseStarted)
 	if err != nil {
 		return LocalWrite{}, err
-	}
-	if !staged.Plan.Matches(observed.Plan) {
-		return LocalWrite{}, errors.New("local Region plan changed between staging and publication")
 	}
 	claim, err := ConfirmationClaim(request.Target, observed)
 	if err != nil {
@@ -153,11 +167,13 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 	// Recover an already committed confirmation before creating a new one.
 	var prior enginestate.LocalConfirmationRecord
 	var hasPrior bool
+	phaseStarted = time.Now()
 	err = readOwner(ctx, w.Barrier, w.Owner, request.Target, func(view enginestate.ReadView) error {
 		var readErr error
 		prior, hasPrior, readErr = view.LocalConfirmation(request.Descriptor.Key)
 		return readErr
 	})
+	Trace(ctx, "write.prior_confirmation_read", phaseStarted)
 	if err != nil {
 		return LocalWrite{}, err
 	}
@@ -177,19 +193,44 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 	if err != nil {
 		return LocalWrite{}, err
 	}
+	phaseStarted = time.Now()
 	if err := w.Submit(ctx, request.Target.OwnerGroupID, command); err != nil {
+		Trace(ctx, "write.confirm_owner", phaseStarted)
 		return LocalWrite{}, fmt.Errorf("submit local majority confirmation: %w", err)
 	}
 	confirmation, err := w.awaitResult(ctx, request.Target.OwnerGroupID, func() (enginestate.Result, bool, error) {
 		return w.Owner.ResultForLocalConfirmation(confirmID, claim)
 	})
+	Trace(ctx, "write.confirm_owner", phaseStarted)
 	if err != nil {
 		return LocalWrite{}, err
 	}
 	if !confirmation.Applied || confirmation.Error != "" {
 		return LocalWrite{}, fmt.Errorf("local majority confirmation rejected: %s", confirmation.Error)
 	}
-	return w.finish(ctx, request, publication.Index, confirmID, confirmation.Index, claim)
+	phaseStarted = time.Now()
+	result, err := w.finish(ctx, request, publication.Index, confirmID, confirmation.Index, claim)
+	Trace(ctx, "write.final_recheck", phaseStarted)
+	return result, err
+}
+
+func stagedPublication(ctx context.Context, barrier Barrier, owner *enginestate.State, request WriteRequest,
+	staged Staged, publicationIndex uint64) (PublishedObservation, error) {
+	if ctx == nil || barrier == nil || owner == nil || staged.RecordID == "" ||
+		staged.Plan.GroupID != request.Target.OwnerGroupID || staged.Plan.Required == 0 {
+		return PublishedObservation{}, errors.New("staged publication requires verified local-majority evidence")
+	}
+	count, err := staged.Plan.Count(staged.RecordID, staged.Holdings)
+	if err != nil || count < staged.Plan.Required {
+		return PublishedObservation{}, errors.New("staged publication lacks an independent physical majority")
+	}
+	reference, err := publishedReference(ctx, barrier, owner, request.Target, request.Descriptor.Key,
+		staged.RecordID, request.RequestID, publicationIndex)
+	if err != nil {
+		return PublishedObservation{}, err
+	}
+	return PublishedObservation{Plan: staged.Plan, Reference: reference,
+		Holdings: append([]placement.Holding(nil), staged.Holdings...)}, nil
 }
 
 func (w Writer) finish(ctx context.Context, request WriteRequest, publicationIndex uint64,

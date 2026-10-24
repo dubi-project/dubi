@@ -55,6 +55,8 @@ type Staged struct {
 // silently changing the denominator. It does not publish metadata.
 func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64, localNodeID string,
 	store Store, sender Sender, target router.Target, d records.Descriptor, body []byte) (Staged, error) {
+	started := time.Now()
+	defer Trace(ctx, "stage.total", started)
 	if ctx == nil || barrier == nil || root == nil || localID == 0 || localNodeID == "" || store == nil || sender == nil ||
 		target.Validate() != nil || target.Keyspace != d.Keyspace || d.Validate() != nil || d.Size != uint64(len(body)) {
 		return Staged{}, errors.New("local record staging requires a valid Node, descriptor, Store and sender")
@@ -64,7 +66,9 @@ func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64,
 	}
 	// Descriptor.GroupID identifies the immutable record's origin, which can
 	// differ from the current metadata owner after a Range handoff.
+	phaseStarted := time.Now()
 	plan, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+	Trace(ctx, "stage.root_plan_before", phaseStarted)
 	if err != nil {
 		return Staged{}, err
 	}
@@ -97,13 +101,17 @@ func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64,
 		}
 		var holding placement.Holding
 		if node.RaftID == localID {
+			phaseStarted = time.Now()
 			if _, err := store.Put(ctx, d, body); err != nil {
+				Trace(ctx, "stage.local_pack_write", phaseStarted)
 				return Staged{}, fmt.Errorf("store local immutable record: %w", err)
 			}
 			verified, err := store.Verify(ctx, d)
 			if err != nil {
+				Trace(ctx, "stage.local_pack_write", phaseStarted)
 				return Staged{}, fmt.Errorf("verify local immutable record: %w", err)
 			}
+			Trace(ctx, "stage.local_pack_write", phaseStarted)
 			if id, err := verified.Descriptor.ID(); err != nil || id != recordID {
 				return Staged{}, errors.New("local Store verified a different immutable descriptor")
 			}
@@ -111,8 +119,10 @@ func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64,
 		} else {
 			attempt, done := remoteCandidateContext(ctx, remainingRemote)
 			remainingRemote--
+			phaseStarted = time.Now()
 			observed, err := sender.PutRecord(attempt, node, d, body)
 			done()
+			Trace(ctx, fmt.Sprintf("stage.remote_put.node_%d", node.RaftID), phaseStarted)
 			if err != nil {
 				if ctx.Err() != nil {
 					return Staged{}, ctx.Err()
@@ -141,7 +151,9 @@ func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64,
 	if len(staged.Holdings) < plan.Required {
 		return Staged{}, errors.Join(append([]error{errors.New("stable local data majority was not physically verified")}, failures...)...)
 	}
+	phaseStarted = time.Now()
 	latest, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+	Trace(ctx, "stage.root_plan_after", phaseStarted)
 	if err != nil {
 		return Staged{}, err
 	}

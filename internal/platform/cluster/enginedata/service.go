@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
@@ -94,6 +96,8 @@ func (service *Service) WriteLocal(ctx context.Context, request WriteRequest) (W
 }
 
 func (service *Service) write(ctx context.Context, request WriteRequest, allowRemote bool) (WriteResult, error) {
+	started := time.Now()
+	defer recordwrite.Trace(ctx, "engine.write.total", started)
 	result := WriteResult{State: WriteUnknown}
 	if service == nil || service.runtime == nil || service.client == nil || ctx == nil ||
 		request.Publish == nil || request.Keyspace.Validate() != nil ||
@@ -101,7 +105,9 @@ func (service *Service) write(ctx context.Context, request WriteRequest, allowRe
 		return result, errors.New("local engine write requires a valid Keyspace, key and publisher")
 	}
 	key, body := bytes.Clone(request.Key), bytes.Clone(request.Body)
+	phaseStarted := time.Now()
 	target, err := service.resolveTarget(ctx, request.Keyspace, key)
+	recordwrite.Trace(ctx, "engine.write.resolve_root_route", phaseStarted)
 	if err != nil {
 		return result, err
 	}
@@ -138,7 +144,9 @@ func (service *Service) write(ctx context.Context, request WriteRequest, allowRe
 			writeCtx, writeCancel = writeCandidateContext(ctx, alternates+1)
 		}
 	}
+	phaseStarted = time.Now()
 	completed, err := service.ExecuteWrite(writeCtx, call)
+	recordwrite.Trace(ctx, "engine.write.owner_execution", phaseStarted)
 	writeCancel()
 	local := fromWrite(completed)
 	if err == nil || !allowRemote || ctx.Err() != nil {
@@ -185,7 +193,9 @@ func (service *Service) forwardWrite(ctx context.Context, request raftrpc.Engine
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		phaseStarted := time.Now()
 		node, found, err := service.runtime.Root.RootMember(id)
+		recordwrite.Trace(ctx, fmt.Sprintf("engine.write.forward.resolve_member.node_%d", id), phaseStarted)
 		if err != nil {
 			return result, err
 		}
@@ -193,7 +203,9 @@ func (service *Service) forwardWrite(ctx context.Context, request raftrpc.Engine
 			continue
 		}
 		attempt, done := writeCandidateContext(ctx, attemptsLeft)
+		phaseStarted = time.Now()
 		response, err := service.client.WriteEngineData(attempt, node, request)
+		recordwrite.Trace(ctx, fmt.Sprintf("engine.write.forward.rpc.node_%d", id), phaseStarted)
 		done()
 		if err == nil {
 			return fromWrite(response), nil
@@ -218,6 +230,12 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Engine
 		request.Descriptor.GroupID != request.Target.OwnerGroupID || !bytes.Equal(request.Descriptor.Key, request.Target.RoutingKey) {
 		return result, errors.New("engine data write differs from its Owner route")
 	}
+	if os.Getenv("DUBI_TRACE_DATA") == "1" {
+		ctx = recordwrite.WithTrace(ctx, func(phase string, elapsed time.Duration) {
+			log.Printf("dubi_data_trace operation=owner_execute request_id=%q phase=%s elapsed_ms=%d",
+				request.RequestID, phase, elapsed.Milliseconds())
+		})
+	}
 	actual, err := records.Describe(request.Target.Keyspace, request.Target.OwnerGroupID,
 		request.Target.RoutingKey, request.Body)
 	if err != nil {
@@ -241,8 +259,11 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Engine
 			}
 			return service.runtime.Host.Submit(groupID, command)
 		}, MirrorGeo: service.client, MirrorRetry: service.geoRetry}
-	if geo, err := service.geoPlan(ctx, request.Target); err != nil {
-		return result, err
+	phaseStarted := time.Now()
+	geo, geoErr := service.geoPlan(ctx, request.Target)
+	recordwrite.Trace(ctx, "owner.geo_plan", phaseStarted)
+	if geoErr != nil {
+		return result, geoErr
 	} else if geo != nil {
 		written, err := writer.WriteGeoFromRange(ctx, recordwrite.WriteRequest{RequestID: request.RequestID,
 			Target: request.Target, Descriptor: request.Descriptor, Body: request.Body, Payload: request.Payload}, 16, 256)
@@ -256,8 +277,10 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Engine
 			string(WriteGeoReady), written.Reference, written.ConfirmationIndex, written.RegionGeneration, written.RequiredRegions
 		return result, nil
 	}
+	phaseStarted = time.Now()
 	ready, err := writer.WriteLocal(ctx, recordwrite.WriteRequest{RequestID: request.RequestID,
 		Target: request.Target, Descriptor: request.Descriptor, Body: request.Body, Payload: request.Payload})
+	recordwrite.Trace(ctx, "owner.local_write", phaseStarted)
 	if err != nil {
 		if service.currentPublication(ctx, owner, request.Target, request.Descriptor, request.RequestID) {
 			result.State = string(WritePublishedUnconfirmed)
@@ -303,12 +326,16 @@ func (service *Service) ReadLocal(ctx context.Context, keyspace rootstate.Keyspa
 }
 
 func (service *Service) read(ctx context.Context, keyspace rootstate.Keyspace, key []byte, allowRemote bool) (recordwrite.LocalRead, error) {
+	started := time.Now()
+	defer recordwrite.Trace(ctx, "engine.read.total", started)
 	if service == nil || service.runtime == nil || service.client == nil || ctx == nil ||
 		keyspace.Validate() != nil || len(key) == 0 || len(key) > records.MaxKeyBytes {
 		return recordwrite.LocalRead{}, errors.New("local engine read requires a valid Keyspace and key")
 	}
 	key = bytes.Clone(key)
+	phaseStarted := time.Now()
 	target, err := service.resolveTarget(ctx, keyspace, key)
+	recordwrite.Trace(ctx, "engine.read.resolve_root_route", phaseStarted)
 	if err != nil {
 		return recordwrite.LocalRead{}, err
 	}
@@ -331,7 +358,9 @@ func (service *Service) read(ctx context.Context, keyspace rootstate.Keyspace, k
 			readCtx, readCancel = readCandidateContext(ctx, alternates+1)
 		}
 	}
+	phaseStarted = time.Now()
 	got, err := service.ExecuteRead(readCtx, target, key)
+	recordwrite.Trace(ctx, "engine.read.owner_execution", phaseStarted)
 	readCancel()
 	if err != nil {
 		if !allowRemote || ctx.Err() != nil {
@@ -415,6 +444,8 @@ func candidateContext(ctx context.Context, remaining int, maximum time.Duration)
 }
 
 func (service *Service) ExecuteRead(ctx context.Context, target router.Target, key []byte) (raftrpc.EngineDataReadResult, error) {
+	started := time.Now()
+	defer recordwrite.Trace(ctx, "engine.execute_read.total", started)
 	if service == nil || service.runtime == nil || ctx == nil || target.Validate() != nil ||
 		!bytes.Equal(target.RoutingKey, key) {
 		return raftrpc.EngineDataReadResult{}, errors.New("engine data read differs from its Owner route")
@@ -440,10 +471,24 @@ func (service *Service) ExecuteRead(ctx context.Context, target router.Target, k
 }
 
 func (service *Service) resolveTarget(ctx context.Context, keyspace rootstate.Keyspace, key []byte) (router.Target, error) {
+	started := time.Now()
+	defer recordwrite.Trace(ctx, "engine.resolve_target.total", started)
 	barrier := rootRouteBarrier{local: service.runtime}
 	routes, err := router.New(barrier, service.runtime.Root)
 	if err != nil {
 		return router.Target{}, err
+	}
+	if index, confirmed := router.ConfirmedRootIndex(ctx); confirmed {
+		target, err := routes.ResolveTargetAtIndex(keyspace, key, index)
+		if err == nil {
+			return target, nil
+		}
+		if !errors.Is(err, router.ErrCatalogBehind) {
+			return router.Target{}, err
+		}
+		// A confirmed cut can reach the entry Node before its local Root FSM
+		// applies it. In that case, fall back to a fresh cut rather than spin
+		// forever on the admission cut.
 	}
 	return retryRoute(ctx, routeAttemptTimeout, func(attempt context.Context) (router.Target, error) {
 		return routes.ResolveTarget(attempt, keyspace, key)

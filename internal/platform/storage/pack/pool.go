@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 )
@@ -82,6 +83,8 @@ func (p *Pool) AppendToVolume(ctx context.Context, volumeID string, record Recor
 }
 
 func (p *Pool) appendCandidates(ctx context.Context, record Record, candidates []string) (Location, error) {
+	started := time.Now()
+	defer tracePack("pool_append", string(record.Key), started)
 	if err := validateRecord(record); err != nil {
 		return Location{}, err
 	}
@@ -93,7 +96,9 @@ func (p *Pool) appendCandidates(ctx context.Context, record Record, candidates [
 	if err := ctx.Err(); err != nil {
 		return Location{}, err
 	}
+	statusStarted := time.Now()
 	report, err := p.registry.Status()
+	tracePack("pool_volume_status", string(record.Key), statusStarted)
 	if err != nil {
 		return Location{}, err
 	}
@@ -108,7 +113,9 @@ func (p *Pool) appendCandidates(ctx context.Context, record Record, candidates [
 		}
 		eligible = append(eligible, v.ID)
 	}
+	reserveStarted := time.Now()
 	lease, err := p.registry.Reserve(appendBudget(record), eligible)
+	tracePack("pool_reserve", string(record.Key), reserveStarted)
 	if err != nil {
 		return Location{}, err
 	}
@@ -116,13 +123,18 @@ func (p *Pool) appendCandidates(ctx context.Context, record Record, candidates [
 	if err := ctx.Err(); err != nil {
 		return Location{}, err
 	}
+	leaseCheckStarted := time.Now()
 	if err := lease.Check(); err != nil {
+		tracePack("pool_lease_check", string(record.Key), leaseCheckStarted)
 		return Location{}, err
 	}
+	tracePack("pool_lease_check", string(record.Key), leaseCheckStarted)
 	id := lease.VolumeID()
 	m := p.collections[id]
 	if m == nil {
+		openStarted := time.Now()
 		m, err = InitializeCollection(p.registry, id, 0)
+		tracePack("pool_collection_open", string(record.Key), openStarted)
 		if err != nil {
 			p.blocked[id] = err
 			return Location{}, fmt.Errorf("open write Volume %s: %w", id, err)
@@ -132,10 +144,15 @@ func (p *Pool) appendCandidates(ctx context.Context, record Record, candidates [
 	if err := ctx.Err(); err != nil {
 		return Location{}, err
 	}
+	leaseCheckStarted = time.Now()
 	if err := lease.Check(); err != nil {
+		tracePack("pool_lease_check", string(record.Key), leaseCheckStarted)
 		return Location{}, err
 	}
+	tracePack("pool_lease_check", string(record.Key), leaseCheckStarted)
+	collectionStarted := time.Now()
 	loc, err := m.Append(record)
+	tracePack("pool_collection_call", string(record.Key), collectionStarted)
 	if err != nil {
 		p.blocked[id] = err
 		return Location{}, fmt.Errorf("append on Volume %s (outcome may be uncertain; no automatic retry): %w", id, err)

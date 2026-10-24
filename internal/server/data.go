@@ -754,8 +754,10 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 	if size > maxDemoRecordBytes+(32<<10) {
 		return nil, nil, status.Error(codes.ResourceExhausted, "data request exceeds limit")
 	}
+	queueStarted := time.Now()
 	select {
 	case s.slots <- struct{}{}:
+		recordwrite.Trace(ctx, "rpc.begin_slot_wait", queueStarted)
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		budgetRelease := func() {}
 		if s.requestBudget != nil {
@@ -782,10 +784,14 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 			release()
 			return nil, nil, status.Error(codes.PermissionDenied, "matching Node certificate required")
 		}
-		if _, err := s.runtime.ReadRootIndex(ctx); err != nil {
+		phaseStarted := time.Now()
+		rootIndex, err := s.runtime.ReadRootIndex(ctx)
+		if err != nil {
+			recordwrite.Trace(ctx, "rpc.begin_root_membership_read_index", phaseStarted)
 			release()
 			return nil, nil, status.Errorf(codes.Unavailable, "confirm Root membership: %v", err)
 		}
+		recordwrite.Trace(ctx, "rpc.begin_root_membership_read_index", phaseStarted)
 		if _, err := identity.VerifiedPeerCertificate(ctx, time.Now()); err != nil {
 			release()
 			return nil, nil, status.Error(codes.PermissionDenied, "Node certificate expired during Root confirmation")
@@ -795,7 +801,7 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 			release()
 			return nil, nil, status.Error(codes.PermissionDenied, "Node is not a current Root member")
 		}
-		return ctx, release, nil
+		return router.WithConfirmedRootIndex(ctx, rootIndex), release, nil
 	default:
 		return nil, nil, status.Error(codes.ResourceExhausted, "data entry is busy")
 	}
@@ -998,7 +1004,12 @@ func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecord
 	if request == nil || rootstate.ValidateRequestID(request.GetRequestId()) != nil || len(request.GetValue()) > maxDemoRecordBytes || proto.Size(request) > maxDemoRecordBytes+(32<<10) {
 		return nil, status.Error(codes.InvalidArgument, "invalid Record mutation")
 	}
+	started := time.Now()
+	ctx = withDataTrace(ctx, "put", request.GetRequestId())
+	defer recordwrite.Trace(ctx, "rpc.put.total", started)
+	phaseStarted := time.Now()
 	ctx, release, err := s.begin(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request))
+	recordwrite.Trace(ctx, "rpc.put.begin", phaseStarted)
 	if err != nil {
 		return nil, err
 	}
@@ -1008,10 +1019,12 @@ func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecord
 		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
 	}
 	keyspace := rootstate.Keyspace{TenantID: request.TenantId, EngineID: record.EngineID, DatasetID: request.DatasetId}
+	phaseStarted = time.Now()
 	result, err := entry.Write(ctx, enginedata.WriteRequest{RequestID: request.RequestId, Keyspace: keyspace,
 		Key: request.Key, Body: request.Value, Publish: func(descriptor records.Descriptor) ([]byte, error) {
 			return record.ReferencePutPayload(descriptor)
 		}})
+	recordwrite.Trace(ctx, "rpc.put.engine_write", phaseStarted)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "write Record with physical majority: %v", err)
 	}
@@ -1023,7 +1036,12 @@ func (s *dataService) GetRecord(ctx context.Context, request *datawire.GetRecord
 	if request == nil || proto.Size(request) > 32<<10 {
 		return nil, status.Error(codes.InvalidArgument, "invalid Record read")
 	}
+	started := time.Now()
+	ctx = withDataTrace(ctx, "get", "")
+	defer recordwrite.Trace(ctx, "rpc.get.total", started)
+	phaseStarted := time.Now()
 	ctx, release, err := s.begin(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request))
+	recordwrite.Trace(ctx, "rpc.get.begin", phaseStarted)
 	if err != nil {
 		return nil, err
 	}
@@ -1033,7 +1051,9 @@ func (s *dataService) GetRecord(ctx context.Context, request *datawire.GetRecord
 		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
 	}
 	keyspace := rootstate.Keyspace{TenantID: request.TenantId, EngineID: record.EngineID, DatasetID: request.DatasetId}
+	phaseStarted = time.Now()
 	read, err := entry.Read(ctx, keyspace, request.Key)
+	recordwrite.Trace(ctx, "rpc.get.engine_read", phaseStarted)
 	if err != nil {
 		if errors.Is(err, router.ErrNoRoute) {
 			return &datawire.GetRecordResponse{State: "not_found"}, nil
