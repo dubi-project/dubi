@@ -41,6 +41,7 @@ type dataService struct {
 	slots         chan struct{}
 	volumeSlots   chan struct{}
 	maintenance   *resource.ByteBudget
+	io            *resource.Maintenance
 	requestBudget *resource.ByteBudget
 	geoRetry      *recordwrite.GeoMetadataRetryStore
 	geoRecords    *recordrepair.GeoRecordRepairStore
@@ -541,6 +542,13 @@ func (s *dataService) RemoveVolume(ctx context.Context, request *datawire.Remove
 					return nil, status.Errorf(codes.FailedPrecondition, "record lost Volume decision: %v", err)
 				}
 			} else if item.State != volume.Removed {
+				maintenanceCtx, finish, admissionErr := s.io.TryStart(ctx, "volume-drain")
+				if admissionErr != nil {
+					return nil, status.Error(codes.ResourceExhausted, admissionErr.Error())
+				}
+				defer finish()
+				ctx = maintenanceCtx
+
 				if _, err := s.runtime.Records.MigrateVolume(ctx, item.ID); err != nil {
 					return nil, status.Errorf(codes.FailedPrecondition, "migrate Volume data before removal: %v", err)
 				}
@@ -589,6 +597,12 @@ func (s *dataService) CompactStore(ctx context.Context, request *datawire.Compac
 		}
 		defer release()
 	}
+	maintenanceCtx, finish, admissionErr := s.io.TryStart(ctx, "compaction")
+	if admissionErr != nil {
+		return nil, status.Error(codes.ResourceExhausted, admissionErr.Error())
+	}
+	defer finish()
+	ctx = maintenanceCtx
 	var report records.CompactReport
 	var err error
 	if request.GetRewrite() {
@@ -674,7 +688,7 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 		}
 		response.VolumeMigration = &datawire.VolumeMigrationStatus{Active: migration.Active,
 			SourceVolumeId: migration.SourceVolumeID, Cursor: migration.Cursor,
-			Migrated: migration.Migrated, LastError: migration.LastError}
+			Migrated: migration.Migrated, LastError: migration.LastError, TargetVolumeId: migration.TargetVolumeID, SourcePackId: migration.SourcePackID}
 		if !migration.StartedAt.IsZero() {
 			response.VolumeMigration.StartedUnix = migration.StartedAt.Unix()
 		}
@@ -690,6 +704,14 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "read Volume health: %v", err)
 		}
+		response.CapacitySupported = true
+		var blocked map[string]string
+		if s.runtime.Packs != nil {
+			blocked = s.runtime.Packs.WriteErrors()
+		}
+		response.WritableBytes = volume.WritableCapacity(report, blocked)
+		capacity := volume.WritableDiskCapacity(report, blocked)
+		response.CapacityTotalBytes, response.CapacityAvailableBytes = capacity.TotalBytes, capacity.AvailableBytes
 		for _, item := range report.Volumes {
 			if len(response.Volumes) >= 64 {
 				break
@@ -697,6 +719,11 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 			response.Volumes = append(response.Volumes, &datawire.VolumeHealthStatus{VolumeId: item.ID,
 				State: string(item.State), Health: item.Health, Error: item.Error})
 		}
+	}
+	if s.io != nil {
+		ioStatus := s.io.Status()
+		response.MaintenanceIo = &datawire.MaintenanceIOStatus{Active: ioStatus.Active, Foreground: ioStatus.Foreground,
+			BytesPerSecond: ioStatus.BytesPerSecond, AccountedBytes: ioStatus.AccountedBytes, Deferred: ioStatus.Deferred}
 	}
 	if s.maintenance != nil {
 		budget := s.maintenance.Status()
@@ -709,18 +736,18 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 			UsedBytes: budget.UsedBytes, PeakBytes: budget.PeakBytes, Rejected: budget.Rejected}
 	}
 	if s.geoRetry != nil {
-		entries, err := s.geoRetry.List()
+		count, err := s.geoRetry.Count()
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "read Geo metadata debt: %v", err)
 		}
-		response.GeoMetadataDebt = uint64(len(entries))
+		response.GeoMetadataDebt = uint64(count)
 	}
 	if s.geoRecords != nil {
-		entries, err := s.geoRecords.List()
+		count, err := s.geoRecords.Count()
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "read Geo record debt: %v", err)
 		}
-		response.GeoRecordDebt = uint64(len(entries))
+		response.GeoRecordDebt = uint64(count)
 	}
 	response.NodeId = local.NodeID
 	response.RaftId = local.RaftID
@@ -728,7 +755,8 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 }
 
 func encodeRepairStatus(observation repairObservation) *datawire.LocalRepairStatusResponse {
-	response := &datawire.LocalRepairStatusResponse{WorkerEnabled: true}
+	response := &datawire.LocalRepairStatusResponse{WorkerEnabled: true, ScanProgressSupported: true,
+		TotalScanGroups: uint32(len(observation.Progress))}
 	response.LastCheckUnix = observation.LastCheck.Unix()
 	if observation.LastCheck.IsZero() {
 		response.LastCheckUnix = 0
@@ -741,13 +769,19 @@ func encodeRepairStatus(observation repairObservation) *datawire.LocalRepairStat
 		}
 		response.Issues = append(response.Issues, &datawire.LocalRepairIssue{GroupId: issue.GroupID, Error: string(message)})
 	}
+	for _, progress := range observation.Progress[:min(len(observation.Progress), 64)] {
+		response.ScanProgress = append(response.ScanProgress, &datawire.RepairScanProgress{
+			GroupId: progress.GroupID, Phase: progress.Phase, Scanned: progress.Scanned,
+			Unresolved: progress.Unresolved, NeedsCleanSweep: progress.NeedsCleanSweep,
+			StartedUnix: progress.StartedUnix, LastProgressUnix: progress.LastProgressUnix, LastCleanUnix: progress.LastCleanUnix})
+	}
 	return response
 }
 
 func newDataService(runtime *node.Runtime, client *raftrpc.GroupClient, routes *raftrpc.RootDirectory) *dataService {
 	return &dataService{runtime: runtime, client: client, routes: routes,
 		slots: make(chan struct{}, 8), volumeSlots: make(chan struct{}, 1),
-		maintenance: resource.NewByteBudget(128 << 20), requestBudget: resource.NewByteBudget(128 << 20)}
+		maintenance: resource.NewByteBudget(128 << 20), io: resource.NewMaintenance(0), requestBudget: resource.NewByteBudget(128 << 20)}
 }
 
 func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, size int) (context.Context, func(), error) {
@@ -769,7 +803,8 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 				return nil, nil, status.Error(codes.ResourceExhausted, "data request buffers are busy")
 			}
 		}
-		release := func() { budgetRelease(); cancel(); <-s.slots }
+		foregroundDone := s.io.Foreground()
+		release := func() { foregroundDone(); budgetRelease(); cancel(); <-s.slots }
 		if cluster != s.runtime.Identity.ClusterID || raftID == 0 {
 			release()
 			return nil, nil, status.Error(codes.PermissionDenied, "data request belongs to a different Cluster")
@@ -1017,6 +1052,9 @@ func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecord
 	entry, err := enginedata.NewWithGeoRetry(s.runtime, s.client, s.geoRetry)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
+	}
+	if s.geoRecords != nil {
+		entry.SetGeoRetryStores(s.geoRetry, s.geoRecords)
 	}
 	keyspace := rootstate.Keyspace{TenantID: request.TenantId, EngineID: record.EngineID, DatasetID: request.DatasetId}
 	phaseStarted = time.Now()

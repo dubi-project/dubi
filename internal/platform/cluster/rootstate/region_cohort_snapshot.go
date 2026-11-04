@@ -6,7 +6,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
 )
 
 // Use the same fixed view for every link, retaining bounded per-record memory.
@@ -76,11 +78,25 @@ func validateRegionCohortSnapshot(view rootSnapshotReader, index uint64, key, va
 		return bad
 	}
 	if c.State == RegionCohortConfirmed && c.Generation == head.CurrentGeneration && group.Epoch != c.GroupEpoch {
-		var growth RegionGrowth
-		var task GroupChange
-		if head.PendingGeneration == 0 || streamJSON(view, regionGrowthKey(c.RegionID, head.PendingGeneration), &growth) != nil || growth.Validate() != nil || growth.Seal.ExpectedEpoch != c.GroupEpoch ||
-			streamJSON(view, groupChangeKey(growth.Seal.ChangeID), &task) != nil || !growthMatchesTask(growth, task) || task.State != GroupChangeCompleted || task.CompletedEpoch != group.Epoch || group.Epoch != c.GroupEpoch+1 {
-			return bad
+		if cohortContainsMembers(c, group.Members) {
+			// Explicit removals advance Group membership before an ordinary
+			// new-member growth can replace the immutable confirmed cohort.
+			if err := validateSnapshotMaintenance(view, c, group); err != nil {
+				return err
+			}
+		} else {
+			var growth RegionGrowth
+			var task GroupChange
+			if head.PendingGeneration == 0 || streamJSON(view, regionGrowthKey(c.RegionID, head.PendingGeneration), &growth) != nil || growth.Validate() != nil || growth.Seal.ExpectedEpoch < c.GroupEpoch ||
+				streamJSON(view, groupChangeKey(growth.Seal.ChangeID), &task) != nil || !growthMatchesTask(growth, task) || task.State != GroupChangeCompleted || task.CompletedEpoch != group.Epoch || group.Epoch != growth.Seal.ExpectedEpoch+1 || !slices.Equal(group.Members, growth.Seal.Members) {
+				return bad
+			}
+			if growth.Seal.ExpectedEpoch > c.GroupEpoch {
+				base := Group{GroupID: c.GroupID, StateKind: GroupStateEngine, Epoch: growth.Seal.ExpectedEpoch, Members: growth.BaseMembers}
+				if err := validateSnapshotMaintenance(view, c, base); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	for _, id := range c.Nodes {
@@ -105,4 +121,90 @@ func validateRegionCohortSnapshot(view rootSnapshotReader, index uint64, key, va
 		}
 	}
 	return nil
+}
+
+// The history is already Root-committed, but every epoch gap must still have
+// its exact completed maintenance task. Iterate the SAME fixed view with
+// bounded per-row memory; do not invent a new persistent history index.
+func validateSnapshotMaintenance(view rootSnapshotReader, cohort RegionCohort, group Group) error {
+	bad := errors.New("regional snapshot lacks completed maintenance history")
+	if group.Epoch <= cohort.GroupEpoch || group.Epoch-cohort.GroupEpoch > uint64(len(cohort.Nodes)) || !cohortContainsMembers(cohort, group.Members) {
+		return bad
+	}
+	var previous []GroupMember
+	if cohort.Generation > 1 && !cohort.Reformation {
+		var growth RegionGrowth
+		if streamJSON(view, regionGrowthKey(cohort.RegionID, cohort.Generation), &growth) != nil || growth.Validate() != nil || !cohortMatchesMembers(cohort, growth.Seal.Members) {
+			return bad
+		}
+		previous = growth.Seal.Members
+	} else if len(cohort.Nodes) <= 3 {
+		// Cohort confirmation requires min(3, N) voters, so these roles
+		// are exact even for an initial cohort without a growth record.
+		for _, id := range cohort.Nodes {
+			previous = append(previous, GroupMember{RaftID: id, Role: GroupMemberVoter})
+		}
+	}
+	for epoch := cohort.GroupEpoch; epoch < group.Epoch; epoch++ {
+		var task GroupChange
+		found := false
+		err := walkSnapshotGroupChanges(view, func(key, value []byte) error {
+			var candidate GroupChange
+			if len(value) > snapshot.MaxValueBytes || decodeStreamJSON(value, &candidate) != nil {
+				return bad
+			}
+			if candidate.GroupID != group.GroupID || candidate.ExpectedEpoch != epoch || candidate.State != GroupChangeCompleted {
+				return nil
+			}
+			if found || !candidate.Maintenance || candidate.RegionID != "" || candidate.GrowthGeneration != 0 || candidate.CompletedEpoch != epoch+1 || !validID(candidate.ChangeID) || !bytes.Equal(key, groupChangeKey(candidate.ChangeID)) || validateGroupMembers(candidate.Members) != nil {
+				return bad
+			}
+			task, found = candidate, true
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if !found || !cohortContainsMembers(cohort, task.Members) || len(task.Members) >= len(cohort.Nodes) {
+			return bad
+		}
+		if previous != nil && validateMaintenanceRemoval(Group{Members: previous}, task.Members) != nil {
+			return bad
+		}
+		previous = task.Members
+	}
+	if !slices.Equal(previous, group.Members) {
+		return bad
+	}
+	return nil
+}
+
+func walkSnapshotGroupChanges(view rootSnapshotReader, visit func([]byte, []byte) error) (returnErr error) {
+	if inline, ok := view.(inlineRootView); ok {
+		for key, value := range inline {
+			if strings.HasPrefix(key, "data/group-change/") {
+				if err := visit([]byte(key), value); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	reader, ok := view.(interface {
+		NewIter(*pebble.IterOptions) (*pebble.Iterator, error)
+	})
+	if !ok {
+		return errors.New("Root snapshot view cannot verify maintenance tasks")
+	}
+	it, err := reader.NewIter(&pebble.IterOptions{LowerBound: []byte("data/group-change/"), UpperBound: []byte("data/group-change0")})
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, it.Close()) }()
+	for valid := it.First(); valid; valid = it.Next() {
+		if err := visit(it.Key(), it.Value()); err != nil {
+			return err
+		}
+	}
+	return it.Error()
 }

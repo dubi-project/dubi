@@ -49,10 +49,13 @@ type Staged struct {
 }
 
 // StageLocal obtains synchronous confirmations from a strict majority of the
-// exact confirmed cohort. Network failures may leave unreferenced bytes;
-// retries use the Store's verified deduplication. Root is checked before and
-// after IO, and a pending generation invalidates the attempt rather than
-// silently changing the denominator. It does not publish metadata.
+// Root-confirmed cohort selected at admission. Network failures may leave
+// unreferenced bytes; retries use the Store's verified deduplication. It does
+// not perform a post-IO Root ReadIndex: the subsequent LocalConfirmation is
+// committed by the Owner Group and atomically checks the current Region fence,
+// membership, Range fence and publication before the write can report ready.
+// A topology change during staging therefore leaves an unconfirmed reference,
+// never a false LocalReady result.
 func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64, localNodeID string,
 	store Store, sender Sender, target router.Target, d records.Descriptor, body []byte) (Staged, error) {
 	started := time.Now()
@@ -67,7 +70,13 @@ func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64,
 	// Descriptor.GroupID identifies the immutable record's origin, which can
 	// differ from the current metadata owner after a Range handoff.
 	phaseStarted := time.Now()
-	plan, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+	var plan placement.LocalPlan
+	var err error
+	if index, confirmed := router.ConfirmedRootIndex(ctx); confirmed {
+		plan, err = placement.ReadLocalPlanAtCut(index, root, target.OwnerGroupID)
+	} else {
+		plan, err = placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+	}
 	Trace(ctx, "stage.root_plan_before", phaseStarted)
 	if err != nil {
 		return Staged{}, err
@@ -150,15 +159,6 @@ func StageLocal(ctx context.Context, barrier Barrier, root Root, localID uint64,
 	}
 	if len(staged.Holdings) < plan.Required {
 		return Staged{}, errors.Join(append([]error{errors.New("stable local data majority was not physically verified")}, failures...)...)
-	}
-	phaseStarted = time.Now()
-	latest, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
-	Trace(ctx, "stage.root_plan_after", phaseStarted)
-	if err != nil {
-		return Staged{}, err
-	}
-	if !plan.Matches(latest) {
-		return Staged{}, errors.New("local Region cohort changed during immutable data staging")
 	}
 	return staged, nil
 }

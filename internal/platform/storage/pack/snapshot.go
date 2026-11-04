@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 )
 
 // SnapshotPack identifies one immutable, sealed Pack file at a local
@@ -18,13 +20,14 @@ type SnapshotPack struct {
 	Path     string
 	Size     int64
 	file     *os.File
+	pin      *snapshotPin
 }
 
 // Open returns a read-only view pinned to the sealed Pack inode. Compaction
 // may unlink the pathname after SnapshotPacks returns, but the view remains
 // readable until Close is called on the SnapshotPack itself.
 func (p SnapshotPack) Open() (io.ReadCloser, error) {
-	if p.file == nil {
+	if p.file == nil || (p.pin != nil && p.pin.closed.Load()) {
 		return nil, errors.New("Pack snapshot is closed")
 	}
 	return io.NopCloser(io.NewSectionReader(p.file, 0, p.Size)), nil
@@ -33,7 +36,13 @@ func (p SnapshotPack) Open() (io.ReadCloser, error) {
 // Close releases the inode pin held by this snapshot. Callers must close all
 // returned SnapshotPacks after their backup worker has uploaded the bytes.
 func (p *SnapshotPack) Close() error {
-	if p == nil || p.file == nil {
+	if p == nil {
+		return nil
+	}
+	if p.pin != nil {
+		return p.pin.Close()
+	}
+	if p.file == nil {
 		return nil
 	}
 	err := p.file.Close()
@@ -79,4 +88,19 @@ func (m *Collection) snapshotPacks(volumePath string) ([]SnapshotPack, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+// Copies share one release, so duplicate Close cannot drop the inode pin or
+// the Pool's accounting twice. Open on any copy rejects an already closed pin.
+type snapshotPin struct {
+	file    *os.File
+	once    sync.Once
+	closed  atomic.Bool
+	release func()
+	err     error
+}
+
+func (p *snapshotPin) Close() error {
+	p.once.Do(func() { p.closed.Store(true); p.err = p.file.Close(); p.release() })
+	return p.err
 }

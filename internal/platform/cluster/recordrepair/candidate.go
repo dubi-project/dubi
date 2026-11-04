@@ -10,6 +10,8 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
+	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
@@ -36,8 +38,8 @@ func VerifyPendingCandidateLocal(ctx context.Context, barrier PendingBarrier, ro
 			if err != nil {
 				return Report{}, err
 			}
-			report, err := verifyCandidateReferences(ctx, cut, candidates, local, destination.Verify,
-				client.ObserveRecordHolding, func(visit func(enginestate.RecordReference) error) error {
+			report, err := verifyCandidateReferencesBatched(ctx, cut, candidates, local, destination.Verify,
+				barrier, client.ObserveRecordHolding, client.ObserveRecordHoldings, func(visit func(enginestate.RecordReference) error) error {
 					return enginestate.WalkVerifiedRecordCut(ctx, artifacts, cut, visit)
 				})
 			if err != nil {
@@ -70,6 +72,52 @@ func pendingCandidateMembers(root PendingRoot, seal regionfence.Handoff) ([]root
 
 type candidateLocalVerify func(context.Context, records.Descriptor) (records.Holding, error)
 type candidateRemoteObserve func(context.Context, uint64, records.Descriptor) (raftrpc.HoldingObservation, error)
+
+// Reuse a fresh Root cut for at most 64 physical observations. Each responder
+// still authenticates both identities against its applied Root membership and
+// re-reads Pack bytes. The outer pending-cut and candidate-member rechecks are
+// mandatory before publication; a page cut is not a retention lease or vote.
+// Without this bound, every row adds two global WAN barriers and a large cut
+// can never complete within a bounded growth reconciliation round.
+func candidatePageObserver(barrier PendingBarrier, minimum uint64, observe candidateRemoteObserve) candidateRemoteObserve {
+	budget := candidateObservationCut{barrier: barrier, minimum: minimum}
+	return func(ctx context.Context, target uint64, d records.Descriptor) (raftrpc.HoldingObservation, error) {
+		work, err := budget.admit(ctx, 1)
+		if err != nil {
+			return raftrpc.HoldingObservation{}, err
+		}
+		return observe(work, target, d)
+	}
+}
+
+// The budget counts physical rows, not RPC envelopes. Batching must not stretch
+// one Root cut over more observations than the existing single-row path.
+type candidateObservationCut struct {
+	barrier        PendingBarrier
+	minimum, index uint64
+	remaining      int
+}
+
+func (b *candidateObservationCut) admit(ctx context.Context, rows int) (context.Context, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if rows < 1 || rows > 64 {
+		return nil, errors.New("invalid candidate observation row budget")
+	}
+	if b.remaining < rows {
+		index, err := b.barrier.ReadIndex(ctx, raft.RootGroupID)
+		if err != nil {
+			return nil, err
+		}
+		if index == 0 || index < b.minimum {
+			return nil, errors.New("candidate observation Root cut precedes the sealed plan")
+		}
+		b.index, b.remaining = index, 64
+	}
+	b.remaining -= rows
+	return router.WithConfirmedRootIndex(ctx, b.index), nil
+}
 
 func verifyCandidateReferences(ctx context.Context, cut enginestate.RecordCut, candidates []rootstate.Node, local uint64,
 	verify candidateLocalVerify, observe candidateRemoteObserve, walk cutWalker) (Report, error) {

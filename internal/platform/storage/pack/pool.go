@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
@@ -24,6 +25,7 @@ type Pool struct {
 	collections map[string]*Collection
 	blocked     map[string]error
 	closed      bool
+	pins        atomic.Int64
 }
 
 // StoreID is the immutable local ownership scope, not a replicated identity.
@@ -252,6 +254,10 @@ func (p *Pool) SnapshotPacks(ctx context.Context) ([]SnapshotPack, error) {
 		}
 		return result[i].PackID < result[j].PackID
 	})
+	for i := range result {
+		p.pins.Add(1)
+		result[i].pin = &snapshotPin{file: result[i].file, release: func() { p.pins.Add(-1) }}
+	}
 	return result, nil
 }
 
@@ -396,8 +402,18 @@ func (p *Pool) RemoveDrained(ctx context.Context, volumeID string) error {
 // from the caller's logical index. The predicate is evaluated while the Pool
 // is exclusively held, so a Store can pass one stable index snapshot.
 func (p *Pool) Compact(ctx context.Context, live func(Location) bool) (CompactReport, error) {
+	return p.compact(ctx, live, nil)
+}
+
+// CompactByPack accepts a complete, validated index's Pack reachability set.
+// It avoids rereading every obsolete payload solely to rediscover its PackID.
+func (p *Pool) CompactByPack(ctx context.Context, live func(Scope) bool) (CompactReport, error) {
+	return p.compact(ctx, nil, live)
+}
+
+func (p *Pool) compact(ctx context.Context, live func(Location) bool, livePack func(Scope) bool) (CompactReport, error) {
 	var result CompactReport
-	if live == nil {
+	if live == nil && livePack == nil {
 		return result, errors.New("nil live Pack record predicate")
 	}
 	p.mu.Lock()
@@ -436,7 +452,7 @@ func (p *Pool) Compact(ctx context.Context, live func(Location) bool) (CompactRe
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		report, err := collection.Compact(ctx, live)
+		report, err := collection.compact(ctx, live, livePack)
 		if err != nil {
 			return result, err
 		}
@@ -469,3 +485,6 @@ func appendBudget(record Record) uint64 {
 	const granularity uint64 = 64 << 10
 	return (encoded+granularity-1)/granularity*granularity + 4<<20
 }
+
+// PinnedPacks counts live checkpoint handles, including unlinked files whose disk space is still retained.
+func (p *Pool) PinnedPacks() int64 { return p.pins.Load() }

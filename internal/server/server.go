@@ -96,6 +96,7 @@ type Server struct {
 	geoRecordRepair *recordrepair.GeoRecordRepairStore
 	geoRepair       *geoMetadataRepair
 	volumeMigration *volumeMigrationWorker
+	nodeBalance     *nodeBalanceWorker
 	backup          *backupWorker
 	ready           chan struct{}
 	localNode       *rootstate.Node
@@ -230,6 +231,19 @@ func Open(options Options) (*Server, error) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		if _, bounded := ctx.Deadline(); !bounded {
+			membership, err := runtime.Host.Membership(raft.RootGroupID)
+			if err != nil {
+				return 0, err
+			}
+			// Preserve a finite overall budget for deadline-free callers too.
+			// This is the existing maximum number of voter attempts; normal
+			// request/worker deadlines remain the outer limit when supplied.
+			attempts := rootReadRetryCount * max(1, len(membership.GetVoters())+len(membership.GetVotersOutgoing()))
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, rootReadAttemptTimeout*time.Duration(attempts))
+			defer cancel()
+		}
 		// Prefer the currently observed leader. Fanning each Root read out to
 		// every voter makes each request generate several competing Raft
 		// ReadIndex rounds; on a cluster with many learner Nodes this can
@@ -286,9 +300,11 @@ func Open(options Options) (*Server, error) {
 			}
 			for _, voter := range voters {
 				if voter == runtime.Identity.RaftID {
-					if localLeader {
-						add(voter, true)
-					}
+					// A local Root voter can still obtain a quorum ReadIndex as a
+					// follower. Keep it as the final fallback when the observed
+					// leader and other remote voters have stale election state.
+					// Learners are not in voters and therefore never use this path.
+					add(voter, true)
 					continue
 				}
 				add(voter, false)
@@ -297,34 +313,18 @@ func Open(options Options) (*Server, error) {
 				return 0, raft.ErrNoLeader
 			}
 			for _, item := range targets {
-				attempt, cancel := context.WithTimeout(ctx, rootReadAttemptTimeout)
-				var index uint64
-				var readErr error
-				if item.local {
-					index, readErr = runtime.Host.ReadIndex(attempt, raft.RootGroupID)
-				} else {
-					index, readErr = client.ReadIndex(attempt, item.id, raft.RootGroupID)
-				}
-				if readErr == nil && index == 0 {
-					readErr = errors.New("Root voter returned an empty read cut")
-				}
-				if readErr == nil {
-					ticker := time.NewTicker(10 * time.Millisecond)
-					for runtime.Root.AppliedIndex() < index && attempt.Err() == nil {
-						<-ticker.C
+				index, readErr := readRootTarget(ctx, rootReadAttemptTimeout, func(attempt context.Context) (uint64, error) {
+					if item.local {
+						return runtime.Host.ReadIndex(attempt, raft.RootGroupID)
 					}
-					ticker.Stop()
-					if runtime.Root.AppliedIndex() < index {
-						readErr = attempt.Err()
-					}
-				}
-				cancel()
+					return client.ReadIndex(attempt, item.id, raft.RootGroupID)
+				}, runtime.Root.AppliedIndex)
 				if readErr == nil {
 					return index, nil
 				}
 				failures = append(failures, fmt.Errorf("Root voter %d: %w", item.id, readErr))
 				if ctx.Err() != nil {
-					return 0, ctx.Err()
+					return 0, failures[len(failures)-1]
 				}
 			}
 			if pass+1 < rootReadRetryCount {
@@ -406,7 +406,7 @@ func Open(options Options) (*Server, error) {
 		plan, err := (&Server{Runtime: runtime, NodeRemoval: nodeRemoval}).RemoveNodeByName(ctx, name)
 		return plan.Node.RaftID, err
 	})
-	adminRoute := &nodeAdminRoute{runtime: runtime, directory: rootDirectory, credentials: clientCredentials,
+	adminRoute := &nodeAdminRoute{runtime: runtime, directory: rootDirectory, inspector: client, credentials: clientCredentials,
 		clusterID: runtime.Identity.ClusterID, localRaft: runtime.Identity.RaftID}
 	nodeAdminServer.SetRemoveRouter(adminRoute.remove)
 	nodeAdminServer.SetRemoveByNameRouter(adminRoute.removeByName)
@@ -468,6 +468,9 @@ func Open(options Options) (*Server, error) {
 	rootJoinServer.SetRootReadIndex(runtime.ReadRootIndex)
 	rootjoinwire.RegisterRootJoinServiceServer(grpcServer, rootJoinServer)
 	dataServer := newDataService(runtime, client, rootDirectory)
+	if runtime.Records != nil {
+		runtime.Records.SetMaintenanceScheduler(dataServer.io)
+	}
 	datawire.RegisterDataServiceServer(grpcServer, dataServer)
 	routedData, err := raftrpc.NewEngineDataServer(runtime.Identity, runtime, runtime.Root,
 		runtime.Records, options.AuthorizePeer, localData, options.MaxMessageSize)
@@ -476,7 +479,9 @@ func Open(options Options) (*Server, error) {
 		return fail(err, transport, client)
 	}
 	raftwire.RegisterEngineDataServiceServer(grpcServer, routedData)
-	raftwire.RegisterRecordRepairServiceServer(grpcServer, newRecordRepairService(runtime, client, options.AuthorizePeer))
+	repairServer := newRecordRepairService(runtime, client, options.AuthorizePeer)
+	repairServer.io = dataServer.io
+	raftwire.RegisterRecordRepairServiceServer(grpcServer, repairServer)
 	rootControlHost, err := newRootControlHost(runtime.Host, client, runtime.Identity.RaftID)
 	if err != nil {
 		grpcServer.Stop()
@@ -547,14 +552,19 @@ func Open(options Options) (*Server, error) {
 			grpcServer.Stop()
 			return fail(err, transport, client)
 		}
-		geoRepair = &geoMetadataRepair{runtime: runtime, client: client, store: geoRetry, records: geoRecordRepair, report: options.ReportError}
-		liveRepair = &liveRecordRepair{runtime: runtime, client: client, progress: repairProgress, geoRecordRepair: geoRecordRepair, report: options.ReportError}
+		geoRepair = &geoMetadataRepair{io: dataServer.io, runtime: runtime, client: client, store: geoRetry, records: geoRecordRepair, report: options.ReportError}
+		liveRepair = &liveRecordRepair{io: dataServer.io, runtime: runtime, client: client, progress: repairProgress, geoRecordRepair: geoRecordRepair, report: options.ReportError}
 		dataServer.repair = liveRepair
 		dataServer.geoRetry = geoRetry
 		dataServer.geoRecords = geoRecordRepair
+		localData.SetGeoRetryStores(geoRetry, geoRecordRepair)
 	}
-	volumeMigration = &volumeMigrationWorker{runtime: runtime, report: options.ReportError, budget: dataServer.maintenance}
-	backup = &backupWorker{runtime: runtime, client: client, storeRoot: options.StoreRoot, report: options.ReportError}
+	volumeMigration = &volumeMigrationWorker{io: dataServer.io, runtime: runtime, report: options.ReportError, budget: dataServer.maintenance}
+	var nodeBalance *nodeBalanceWorker
+	if options.Network != nil {
+		nodeBalance = &nodeBalanceWorker{io: dataServer.io, runtime: runtime, client: client, report: options.ReportError}
+	}
+	backup = &backupWorker{io: dataServer.io, runtime: runtime, client: client, storeRoot: options.StoreRoot, report: options.ReportError}
 	var publicHTTP *http.Server
 	var publicTLS *tls.Config
 	ready := make(chan struct{})
@@ -570,7 +580,7 @@ func Open(options Options) (*Server, error) {
 		publicTLS.NextProtos = []string{"http/1.1"}
 	}
 	return &Server{Runtime: runtime, GroupClient: client, EngineData: localData, MembershipReconciler: reconciler, NodeRemoval: nodeRemoval,
-		listener: options.Listener, publicListener: options.PublicListener, publicHTTP: publicHTTP, publicTLS: publicTLS,
+		listener: limitListener(options.Listener, internalConnectionLimit), publicListener: limitedPublicListener(options.PublicListener), publicHTTP: publicHTTP, publicTLS: publicTLS,
 		grpc: grpcServer, transport: transport,
 		scheduler: scheduler, certificates: certificates, regional: regional, liveRepair: liveRepair, ready: ready, localNode: localNode,
 		desiredName: func() string {
@@ -579,7 +589,7 @@ func Open(options Options) (*Server, error) {
 			}
 			return ""
 		}(),
-		storeRoot: options.StoreRoot, repairProgress: repairProgress, geoRetry: geoRetry, geoRecordRepair: geoRecordRepair, geoRepair: geoRepair, volumeMigration: volumeMigration, backup: backup, closeDone: make(chan struct{})}, nil
+		storeRoot: options.StoreRoot, repairProgress: repairProgress, geoRetry: geoRetry, geoRecordRepair: geoRecordRepair, geoRepair: geoRepair, volumeMigration: volumeMigration, nodeBalance: nodeBalance, backup: backup, closeDone: make(chan struct{})}, nil
 }
 
 // RemoveNode runs one explicit operator-requested removal pass. It is not
@@ -738,8 +748,11 @@ func (server *Server) Run(ctx context.Context) error {
 	server.mu.Unlock()
 	result := server.run(runCtx, cancelCause)
 	server.workers.Done()
+	// Close cancels runCtx itself. Capture its state first so an internal
+	// startup/RPC timeout is not mistaken for an intentional process shutdown.
+	canceled := runCtx.Err() != nil
 	closeErr := server.Close()
-	if runCtx.Err() != nil && (errors.Is(result, context.Canceled) || errors.Is(result, context.DeadlineExceeded)) {
+	if canceled && (errors.Is(result, context.Canceled) || errors.Is(result, context.DeadlineExceeded)) {
 		result = nil
 	}
 	if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
@@ -839,6 +852,10 @@ func (server *Server) run(runCtx context.Context, cancel context.CancelCauseFunc
 	if server.volumeMigration != nil {
 		server.workers.Add(1)
 		go func() { defer server.workers.Done(); server.volumeMigration.run(runCtx) }()
+	}
+	if server.nodeBalance != nil {
+		server.workers.Add(1)
+		go func() { defer server.workers.Done(); server.nodeBalance.run(runCtx) }()
 	}
 	if server.backup != nil {
 		server.workers.Add(1)

@@ -17,6 +17,7 @@ import (
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/resource"
+	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 	"go.etcd.io/raft/v3/raftpb"
@@ -229,14 +230,21 @@ func TestRecordTransferFramingAuthorizationAndPublication(t *testing.T) {
 					frames = frames[1:]
 					return next, nil
 				}
-				want = codes.PermissionDenied
+				// Membership was valid when the authenticated transfer began.
+				// If it changes in flight, Owner LocalConfirmation—not this
+				// low-level transfer ACK—decides whether the write can be ready.
+				want = codes.OK
+				expectWrite = true
 			case "removed-after-io":
 				writer = func(ctx context.Context, d records.Descriptor, b []byte) (records.Holding, error) {
 					h, err := f.store.Put(ctx, d, b)
 					remove()
 					return h, err
 				}
-				want = codes.PermissionDenied
+				// This low-level transfer only returns a durable holding. The
+				// foreground StageLocal coordinator performs the post-IO Root
+				// cohort cut and refuses to count this holding after removal.
+				want = codes.OK
 				expectWrite = true
 			case "store-error":
 				writer = func(context.Context, records.Descriptor, []byte) (records.Holding, error) {
@@ -492,6 +500,14 @@ func TestRecordTransferMutualTLSPinsIdentityBeforeSending(t *testing.T) {
 			t.Cleanup(func() { client.Close() })
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			var originalRootRead regionReadBarrier
+			if mode == "correct" {
+				ctx = router.WithConfirmedRootIndex(ctx, f.root.AppliedIndex())
+				originalRootRead = s.auth.host
+				s.auth.host = regionBarrierFunc(func(context.Context, string) (uint64, error) {
+					return 0, errors.New("unexpected global Root ReadIndex")
+				})
+			}
 			target := rootstate.Node{NodeID: f.local.NodeID, RaftID: f.local.RaftID}
 			payload := bytes.Repeat([]byte("z"), recordTransferFrameBytes*2+1)
 			d, _ := records.Describe(f.descriptor.Keyspace, f.descriptor.GroupID, []byte("network-record"), payload)
@@ -516,6 +532,7 @@ func TestRecordTransferMutualTLSPinsIdentityBeforeSending(t *testing.T) {
 			if recordVolumeBytes(t, f.volumePath) != before {
 				t.Fatal("network retry appended")
 			}
+			s.auth.host = originalRootRead
 			// A real gRPC peer sends the whole body but never EOF. The derived
 			// idle timeout must return the handler, unblock transport Recv, and
 			// reclaim both worker and body reservations without publication.

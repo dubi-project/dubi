@@ -23,13 +23,14 @@ import (
 )
 
 const (
-	DefaultRPCTimeout     = 2 * time.Second
-	DefaultRootRPCTimeout = 10 * time.Second
-	DefaultPeerQueueSize  = 256
-	controlQueueSize      = 64
-	controlBudgetBytes    = 8 << 20
-	messageBudgetBytes    = 64 << 20
-	snapshotBudgetBytes   = 128 << 20
+	DefaultRPCTimeout      = 2 * time.Second
+	DefaultRootRPCTimeout  = 10 * time.Second
+	DefaultPeerQueueSize   = 256
+	controlQueueSize       = 64
+	rootControlConcurrency = 4
+	controlBudgetBytes     = 8 << 20
+	messageBudgetBytes     = 64 << 20
+	snapshotBudgetBytes    = 128 << 20
 )
 
 type TransportOptions struct {
@@ -221,9 +222,16 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 	if peer == nil {
 		peer = &peerSender{rootRead: make(chan outbound, 1), rootControl: make(chan outbound, controlQueueSize), control: make(chan outbound, controlQueueSize), queue: make(chan outbound, t.options.QueueSize), snapshots: make(chan outbound, 1)}
 		t.peers[message.GetTo()] = peer
-		t.workers.Add(5)
+		t.workers.Add(rootControlConcurrency + 4)
 		go t.runPeerMode(message.GetTo(), peer, peer.rootRead, true, true)
-		go t.runPeerMode(message.GetTo(), peer, peer.rootControl, true, true)
+		// Root commits can advance through the faster voter majority while a
+		// distant Node is still receiving its log. Serial unary round trips
+		// otherwise put that Node's log behind every queued heartbeat/append.
+		// Raft tolerates reordered delivery; a fixed pipeline preserves the
+		// global byte budgets and avoids growing a goroutine for each message.
+		for range rootControlConcurrency {
+			go t.runPeerMode(message.GetTo(), peer, peer.rootControl, true, true)
+		}
 		go t.runPeer(message.GetTo(), peer, peer.control, true)
 		go t.runPeer(message.GetTo(), peer, peer.queue, false)
 		go t.runSnapshots(message.GetTo(), peer)

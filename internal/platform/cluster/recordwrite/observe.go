@@ -57,7 +57,7 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 		return PublishedObservation{}, err
 	}
 	phaseStarted := time.Now()
-	plan, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+	plan, err := readInitialLocalPlan(ctx, barrier, root, target.OwnerGroupID)
 	Trace(ctx, "observe.root_plan", phaseStarted)
 	if err != nil {
 		return PublishedObservation{}, err
@@ -207,6 +207,21 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 		return PublishedObservation{}, errors.New("authoritative record reference changed during physical observation")
 	}
 	return result, nil
+}
+
+// readInitialLocalPlan can reuse the Root cut established during request
+// admission. This is only an initial cohort lookup: ObservePublishedLocal
+// still takes a fresh Root cut after physical holding checks before accepting
+// the observation. If this Node has not applied the admission cut yet, fall
+// back to a new Root ReadIndex rather than weakening the placement check.
+func readInitialLocalPlan(ctx context.Context, barrier Barrier, root Root, group string) (placement.LocalPlan, error) {
+	if index, confirmed := router.ConfirmedRootIndex(ctx); confirmed {
+		plan, err := placement.ReadLocalPlanAtCut(index, root, group)
+		if err == nil {
+			return plan, nil
+		}
+	}
+	return placement.ReadLocalPlan(ctx, barrier, root, group)
 }
 
 func publishedReference(ctx context.Context, barrier Barrier, owner *enginestate.State, target router.Target,

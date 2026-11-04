@@ -6,6 +6,7 @@ package diskpressure
 import (
 	"errors"
 	"fmt"
+	"github.com/dubi-project/dubi/internal/platform/storage/diskbudget"
 	"math"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ type Status struct {
 	Path            string    `json:"path"`
 	TotalBytes      uint64    `json:"total_bytes"`
 	AvailableBytes  uint64    `json:"available_bytes"`
+	ReservedBytes   uint64    `json:"reserved_bytes"`
 	ReserveBytes    uint64    `json:"reserve_bytes"`
 	RecoveryAtBytes uint64    `json:"recovery_at_bytes"`
 	HealthyChecks   int       `json:"healthy_checks"`
@@ -49,6 +51,7 @@ type Guard struct {
 	last              Status
 	recoveryCheckedAt time.Time
 	closed            bool
+	device            uint64
 	probe             func() (Capacity, error) // nil uses the pinned directory descriptor.
 	now               func() time.Time         // nil uses the real clock; tests never need to sleep.
 }
@@ -76,7 +79,11 @@ func Open(path string) (*Guard, error) {
 	if err != nil || !info.IsDir() {
 		return nil, errors.Join(err, errors.New("Store path is not a directory"), directory.Close())
 	}
-	return &Guard{path: path, directory: directory, identity: info}, nil
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(directory.Fd()), &stat); err != nil {
+		return nil, errors.Join(err, directory.Close())
+	}
+	return &Guard{path: path, directory: directory, identity: info, device: uint64(stat.Dev)}, nil
 }
 
 func (g *Guard) Check() error {
@@ -85,8 +92,8 @@ func (g *Guard) Check() error {
 		return fmt.Errorf("%w: %s", ErrProbe, s.LastError)
 	}
 	if s.Pressured {
-		return fmt.Errorf("%w: available=%d reserve=%d recovery=%d healthy_probes=%d/%d",
-			ErrPressure, s.AvailableBytes, s.ReserveBytes, s.RecoveryAtBytes, s.HealthyChecks, RecoveryChecks)
+		return fmt.Errorf("%w: available=%d reserved=%d reserve=%d recovery=%d healthy_probes=%d/%d",
+			ErrPressure, s.AvailableBytes, s.ReservedBytes, s.ReserveBytes, s.RecoveryAtBytes, s.HealthyChecks, RecoveryChecks)
 	}
 	return nil
 }
@@ -116,6 +123,11 @@ func (g *Guard) Status() Status {
 		err = errors.New("filesystem returned invalid capacity")
 	}
 	s.TotalBytes, s.AvailableBytes = capacity.TotalBytes, capacity.AvailableBytes
+	s.ReservedBytes = diskbudget.Shared.Reserved(g.device)
+	effective := uint64(0)
+	if s.AvailableBytes > s.ReservedBytes {
+		effective = s.AvailableBytes - s.ReservedBytes
+	}
 	s.ReserveBytes = max(MinFreeBytes, capacity.TotalBytes/20)
 	margin := max(RecoveryBytes, capacity.TotalBytes/100)
 	s.RecoveryAtBytes = s.ReserveBytes
@@ -125,7 +137,7 @@ func (g *Guard) Status() Status {
 		s.RecoveryAtBytes += margin
 	}
 	s.LastError = ""
-	if err != nil || capacity.AvailableBytes <= s.ReserveBytes {
+	if err != nil || effective <= s.ReserveBytes {
 		if !s.Pressured {
 			s.PressuredSince = now.UTC()
 		}
@@ -135,7 +147,7 @@ func (g *Guard) Status() Status {
 			s.LastError = err.Error()
 		}
 	} else if s.Pressured {
-		if capacity.AvailableBytes < s.RecoveryAtBytes {
+		if effective < s.RecoveryAtBytes {
 			s.HealthyChecks = 0
 			g.recoveryCheckedAt = time.Time{}
 		} else if g.recoveryCheckedAt.IsZero() || now.Sub(g.recoveryCheckedAt) >= ProbeInterval {
@@ -149,6 +161,23 @@ func (g *Guard) Status() Status {
 	}
 	g.last = s
 	return s
+}
+
+// Reserve is for bounded optional artifact writes; Raft/LSM persistence uses
+// the committed class through the shared Pebble filesystem wrapper.
+func (g *Guard) Reserve(bytes uint64) (*diskbudget.Lease, error) {
+	if err := g.Check(); err != nil {
+		return nil, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return nil, errors.New("disk guard is closed")
+	}
+	if _, err := g.capacity(); err != nil {
+		return nil, err
+	}
+	return diskbudget.ReserveFD(g.directory.Fd(), bytes, diskbudget.Discretionary)
 }
 
 func (g *Guard) capacity() (Capacity, error) {

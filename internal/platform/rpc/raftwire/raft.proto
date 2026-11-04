@@ -235,6 +235,25 @@ service RangeControlService {
 service EngineService {
   rpc Mutate(EngineMutateRequest) returns (EngineResult);
   rpc Read(EngineReadRequest) returns (EngineReadResponse);
+  // Bounded platform metadata only; each row has its own durable result.
+  rpc MirrorGeoBatch(EngineMirrorBatchRequest) returns (EngineMirrorBatchResponse);
+}
+
+message EngineMirrorBatchRequest {
+  string cluster_id = 1;
+  string group_id = 2;
+  uint64 from_raft_id = 3;
+  uint64 to_raft_id = 4;
+  repeated bytes routed_commands = 5;
+}
+message EngineMirrorBatchItem {
+  string request_id = 1;
+  EngineResult result = 2;
+  uint32 error_code = 3;
+  string error = 4;
+}
+message EngineMirrorBatchResponse {
+  repeated EngineMirrorBatchItem items = 1;
 }
 
 // Gateway-to-Owner immutable data operations. The receiving Owner member
@@ -321,6 +340,32 @@ message ObserveRecordHoldingResponse {
 
 service RecordHoldingService {
   rpc Observe(ObserveRecordHoldingRequest) returns (ObserveRecordHoldingResponse);
+  rpc ObserveBatch(ObserveRecordHoldingsRequest) returns (ObserveRecordHoldingsResponse);
+}
+
+// One bounded physical check on one Node, with the same authorization cut.
+// Results are in request order. A row has either a holding or a storage error;
+// authentication/Root failures reject the entire RPC without revealing rows.
+message ObserveRecordHoldingsRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  uint64 to_raft_id = 3;
+  repeated bytes record_descriptors = 4;
+}
+
+message ObserveRecordHoldingResult {
+  ObserveRecordHoldingResponse holding = 1;
+  uint32 error_code = 2;
+  string error = 3;
+}
+
+message ObserveRecordHoldingsResponse {
+  uint32 version = 1;
+  string cluster_id = 2;
+  uint64 raft_id = 3;
+  string node_id = 4;
+  uint64 root_confirmed_index = 5;
+  repeated ObserveRecordHoldingResult results = 6;
 }
 
 // Exactly one header, then nonempty bounded data frames, then client EOF.
@@ -334,6 +379,17 @@ message PutRecordRequest {
 service RecordTransferService {
   rpc Put(stream PutRecordRequest) returns (ObserveRecordHoldingResponse);
   rpc Get(ObserveRecordHoldingRequest) returns (stream GetRecordResponse);
+  rpc GetBatch(GetRecordBatchRequest) returns (stream GetRecordResponse);
+}
+
+// Bounded immutable-record reads. Each requested descriptor has one header,
+// followed by exactly its declared payload bytes. Successful final status is
+// required for the entire batch before any destination publication.
+message GetRecordBatchRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  uint64 to_raft_id = 3;
+  repeated bytes record_descriptors = 4;
 }
 
 // The caller specifies the exact sealed handoff it expects. The responder
@@ -421,6 +477,31 @@ message RepairRecordResponse {
 service RecordRepairService {
   rpc Fill(FillRecordCutRequest) returns (FillRecordCutResponse);
   rpc Repair(RepairRecordRequest) returns (RepairRecordResponse);
+  rpc Retain(RetainRecordRequest) returns (RepairRecordResponse);
+  rpc ReleaseRetention(ReleaseRecordRetentionRequest) returns (ReleaseRecordRetentionResponse);
+}
+
+// Durable, non-expiring keeper promise for one source identity/sequence.
+// It protects bytes during capacity handoff; it is not a write receipt.
+message RetainRecordRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  uint64 to_raft_id = 3;
+  uint64 sequence = 4;
+  string scope = 5;
+  bytes record_descriptor = 6;
+}
+message ReleaseRecordRetentionRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  uint64 to_raft_id = 3;
+  uint64 sequence = 4;
+}
+message ReleaseRecordRetentionResponse {
+  uint64 raft_id = 1;
+  string node_id = 2;
+  uint64 root_confirmed_index = 3;
+  uint64 sequence = 4;
 }
 
 // One verified physical holding header, followed by nonempty bounded data

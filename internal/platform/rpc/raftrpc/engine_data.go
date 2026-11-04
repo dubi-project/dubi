@@ -177,12 +177,29 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 		!bytes.Equal(descriptor.Key, target.RoutingKey) {
 		return status.Error(codes.InvalidArgument, "engine data descriptor differs from route")
 	}
+	rootCut, hasRootCut, err := confirmedRootCutFromMetadata(ctx)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "invalid Root authorization cut")
+	}
 	phaseStarted = time.Now()
-	before, _, err := server.auth.qualify(ctx, h.FromRaftId)
+	var before [2]rootstate.Node
+	var index uint64
+	if hasRootCut {
+		before, index, err = server.auth.qualifyAtRootCut(ctx, h.FromRaftId, rootCut)
+		if status.Code(err) == codes.Unavailable {
+			// A current sender cut may reach a lagging receiver first. Preserve
+			// availability by obtaining a fresh quorum cut rather than treating
+			// an unapplied cut as authorization.
+			before, index, err = server.auth.qualify(ctx, h.FromRaftId)
+		}
+	} else {
+		before, index, err = server.auth.qualify(ctx, h.FromRaftId)
+	}
 	traceRecordRPC("engine_data_write", h.RequestId, "qualify_before_body", phaseStarted)
 	if err != nil {
 		return err
 	}
+	ctx = router.WithConfirmedRootIndex(ctx, index)
 	release, err := server.buffers.TryAcquire(descriptor.Size)
 	if err != nil {
 		return status.Error(codes.ResourceExhausted, "engine data buffers are busy")
@@ -215,7 +232,7 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 		return status.Error(codes.DataLoss, "engine data body digest mismatch")
 	}
 	phaseStarted = time.Now()
-	after, _, err := server.auth.qualify(ctx, h.FromRaftId)
+	after, _, err := server.auth.qualifyAtRootCut(ctx, h.FromRaftId, index)
 	traceRecordRPC("engine_data_write", h.RequestId, "qualify_after_body", phaseStarted)
 	if err != nil {
 		return err
@@ -227,17 +244,16 @@ func (server *EngineDataServer) Write(stream raftwire.EngineDataService_WriteSer
 	result, runErr := server.executor.ExecuteWrite(ctx, EngineDataWrite{RequestID: h.RequestId,
 		Target: target, Descriptor: descriptor, Body: body, Payload: h.MutationPayload})
 	traceRecordRPC("engine_data_write", h.RequestId, "execute_owner", phaseStarted)
-	phaseStarted = time.Now()
-	final, _, err := server.auth.qualify(ctx, h.FromRaftId)
-	traceRecordRPC("engine_data_write", h.RequestId, "qualify_after_owner", phaseStarted)
-	if err != nil {
-		return err
-	}
-	if final != before {
-		return status.Error(codes.FailedPrecondition, "engine data Node registration changed")
-	}
+	// The caller was requalified immediately before Owner execution. Once
+	// admitted, let this operation finish even if membership changes while its
+	// Owner transaction is in flight; the Owner's Range/Region fences govern
+	// whether it can commit. A post-commit Root ReadIndex cannot make an already
+	// committed write safer and would add another global WAN round trip.
 	response := &raftwire.EngineDataWriteResponse{State: result.State}
 	if runErr != nil {
+		if onlyStalePreflight(runErr) && result.State == "unknown" && result.Reference.Index == 0 && result.ConfirmationIndex == 0 {
+			return status.Error(codes.Aborted, "Owner route changed before mutation submission")
+		}
 		if result.State != "unknown" && result.State != "published_unconfirmed" {
 			return status.Error(codes.Internal, "Owner returned an invalid failed write state")
 		}
@@ -298,12 +314,31 @@ func (server *EngineDataServer) Read(req *raftwire.EngineDataReadRequest,
 	}
 	ctx, cancel := context.WithTimeout(stream.Context(), engineDataTimeout)
 	defer cancel()
-	before, _, err := server.auth.qualify(ctx, req.FromRaftId)
+	rootCut, hasRootCut, err := confirmedRootCutFromMetadata(ctx)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "invalid Root authorization cut")
+	}
+	var before [2]rootstate.Node
+	var index uint64
+	if hasRootCut {
+		before, index, err = server.auth.qualifyAtRootCut(ctx, req.FromRaftId, rootCut)
+		if status.Code(err) == codes.Unavailable {
+			// A current sender cut can reach a lagging Owner before its Root FSM
+			// applies that cut. Fall back to a fresh quorum read in that case.
+			before, index, err = server.auth.qualify(ctx, req.FromRaftId)
+		}
+	} else {
+		before, index, err = server.auth.qualify(ctx, req.FromRaftId)
+	}
 	if err != nil {
 		return err
 	}
+	ctx = router.WithConfirmedRootIndex(ctx, index)
 	result, err := server.executor.ExecuteRead(ctx, target, req.Key)
 	if err != nil {
+		if onlyRouteErrors(err, true) {
+			return status.Error(codes.Aborted, "Owner read route is stale")
+		}
 		return mutationError("read current engine data", err, codes.FailedPrecondition)
 	}
 	after, _, err := server.auth.qualify(ctx, req.FromRaftId)
@@ -377,6 +412,7 @@ func (client *GroupClient) WriteEngineData(ctx context.Context, targetNode roots
 	if err != nil {
 		return result, err
 	}
+	ctx = appendConfirmedRootCut(ctx)
 	route, err := json.Marshal(request.Target)
 	if err != nil {
 		return result, err
@@ -465,6 +501,7 @@ func (client *GroupClient) ReadEngineData(ctx context.Context, targetNode rootst
 	if err != nil {
 		return EngineDataReadResult{}, err
 	}
+	ctx = appendConfirmedRootCut(ctx)
 	route, err := json.Marshal(target)
 	if err != nil {
 		return EngineDataReadResult{}, err
@@ -520,4 +557,32 @@ func (client *GroupClient) ReadEngineData(ctx context.Context, targetNode rootst
 	}
 	return EngineDataReadResult{Body: body, Reference: ref,
 		RegionGeneration: first.GetHeader().RegionGeneration, State: state}, nil
+}
+
+// A joined uncertain failure must never be collapsed into a pre-submission
+// rejection, even if another branch happens to mention a stale route.
+func onlyStalePreflight(err error) bool {
+	return onlyRouteErrors(err, false)
+}
+
+func onlyRouteErrors(err error, read bool) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !onlyRouteErrors(child, read) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return onlyRouteErrors(wrapped.Unwrap(), read)
+	}
+	return err == router.ErrStaleTarget || (read && (err == router.ErrRouteFenced || err == router.ErrWrongOwner))
 }

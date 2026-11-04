@@ -8,11 +8,14 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // A single dropped read request/response must not strand startup forever.
-// Only leader absence and an expired attempt are retried; storage/consensus
-// failures remain visible. The caller owns the whole startup lifetime. Each
+// Leader absence, unavailable peers and an expired attempt are retried;
+// storage/consensus and authorization failures remain visible. The caller
+// owns the whole startup lifetime. Each
 // attempt asks Raft for a fresh barrier and still waits for local application.
 func confirmStartupRoot(ctx context.Context, read func(context.Context) error, initial time.Duration) error {
 	duration := initial
@@ -30,7 +33,7 @@ func confirmStartupRoot(ctx context.Context, read func(context.Context) error, i
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if !errors.Is(err, raft.ErrNoLeader) && !(expired && errors.Is(err, context.DeadlineExceeded)) {
+		if !startupRootRetryable(err, expired) {
 			return err
 		}
 		// Avoid a hot retry loop while an election is in progress.
@@ -43,6 +46,29 @@ func confirmStartupRoot(ctx context.Context, read func(context.Context) error, i
 		}
 		duration = min(duration*2, 30*time.Second)
 	}
+}
+
+// A Root read can aggregate failures from several voters. Retry only when
+// every failure is transient; one unavailable peer must not mask a permanent
+// authorization, storage or malformed-response failure from another peer.
+func startupRootRetryable(err error, expired bool) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !startupRootRetryable(child, expired) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return startupRootRetryable(wrapped.Unwrap(), expired)
+	}
+	return errors.Is(err, raft.ErrNoLeader) || status.Code(err) == codes.Unavailable ||
+		(expired && (errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded))
 }
 
 // A heartbeat can reveal a leader before an empty learner has installed any

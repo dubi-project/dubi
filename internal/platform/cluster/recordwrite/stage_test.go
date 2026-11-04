@@ -25,6 +25,13 @@ func (testBarrier) ReadIndex(_ context.Context, group string) (uint64, error) {
 	return 5, nil
 }
 
+type countingTestBarrier struct{ calls int }
+
+func (b *countingTestBarrier) ReadIndex(ctx context.Context, group string) (uint64, error) {
+	b.calls++
+	return testBarrier{}.ReadIndex(ctx, group)
+}
+
 type testRoot struct {
 	view       rootstate.RegionProgress
 	members    []rootstate.Node
@@ -114,6 +121,19 @@ func TestStageLocalSlowRemoteLeavesTimeForHealthyMajority(t *testing.T) {
 	}
 }
 
+func TestStageLocalUsesAdmissionRootCutWithoutPostIOBarrier(t *testing.T) {
+	root, target, descriptor := stageFixture(t)
+	barrier := &countingTestBarrier{}
+	ctx := router.WithConfirmedRootIndex(context.Background(), 5)
+	if _, err := StageLocal(ctx, barrier, root, 1, root.members[0].NodeID,
+		&testStore{}, &testSender{}, target, descriptor, []byte("body")); err != nil {
+		t.Fatal(err)
+	}
+	if barrier.calls != 0 || root.reads != 1 {
+		t.Fatalf("stage performed a redundant post-IO Root barrier: barriers=%d plan_reads=%d", barrier.calls, root.reads)
+	}
+}
+
 func stageFixture(t *testing.T) (*testRoot, router.Target, records.Descriptor) {
 	t.Helper()
 	members := []rootstate.Node{
@@ -163,30 +183,15 @@ func TestStageLocalRequiresRealMajorityAndFallsBackWithinStableCohort(t *testing
 				}
 				return
 			}
-			if len(got.Holdings) != 2 || got.Plan.Required != 2 || root.reads != 2 {
-				t.Fatal("stage did not recheck the exact Root cohort", got, root.reads)
+			if len(got.Holdings) != 2 || got.Plan.Required != 2 || root.reads != 1 {
+				t.Fatal("stage did not use its single Root-confirmed cohort", got, root.reads)
 			}
 		})
 	}
 }
 
-func TestStageLocalRejectsChangedCohortAndUntrustedObservations(t *testing.T) {
+func TestStageLocalRejectsUntrustedObservations(t *testing.T) {
 	root, target, descriptor := stageFixture(t)
-	root.afterFirst = func(view *rootstate.RegionProgress) {
-		view.Current.Generation = 2
-		view.Current.PlannedIndex = 2
-		view.Current.ConfirmedIndex = 6
-		view.Current.GroupEpoch = 3
-		view.Current.GroupFenceRequestID = "new-fence"
-		view.Current.GroupFenceIndex = 5
-		view.Head.CurrentGeneration = 2
-		view.Group.Epoch = 3
-		view.AppliedIndex = 6
-	}
-	if got, err := StageLocal(context.Background(), testBarrier{}, root, 1, root.members[0].NodeID, &testStore{}, &testSender{}, target, descriptor, []byte("body")); err == nil || got.RecordID != "" {
-		t.Fatal("changed cohort accepted", got, err)
-	}
-	root, target, descriptor = stageFixture(t)
 	if got, err := StageLocal(context.Background(), testBarrier{}, root, 1, root.members[0].NodeID, &testStore{}, &testSender{badID: true}, target, descriptor, []byte("body")); err == nil || got.RecordID != "" {
 		t.Fatal("wrong RecordID accepted", got, err)
 	}

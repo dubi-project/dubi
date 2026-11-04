@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/dubi-project/dubi/internal/platform/storage/diskbudget"
 	"golang.org/x/sys/unix"
 )
 
@@ -24,6 +25,7 @@ type reservationState struct {
 	device, bytes uint64
 	directory     os.FileInfo
 	released      bool // Protected by Registry.mu; copies of Reservation share this state.
+	shared        *diskbudget.Lease
 }
 
 // Reservation is a short-lived in-process budget, NOT filesystem preallocation
@@ -107,7 +109,7 @@ func (r *Registry) Reserve(bytes uint64, candidates []string) (*Reservation, err
 	bestDistance := len(r.manifest.Volumes)
 	for i, c := range choices {
 		s := devices[c.sample.Device]
-		free := writableBytes(s, r.reserved[s.Device])
+		free := writableBytes(s, diskbudget.Shared.Reserved(s.Device))
 		if bytes > free {
 			continue
 		}
@@ -122,13 +124,40 @@ func (r *Registry) Reserve(bytes uint64, candidates []string) (*Reservation, err
 		return nil, ErrInsufficientSpace
 	}
 	c := choices[best]
+	sample := devices[c.sample.Device]
+	var shared *diskbudget.Lease
+	var err error
+	if r.probe != nil {
+		// Deterministic injected observations are used only by package tests.
+		shared, err = diskbudget.Shared.Reserve(diskbudget.Capacity{Device: sample.Device, Total: sample.Total, Available: sample.Available}, bytes, diskbudget.Discretionary)
+	} else {
+		err = r.withVolumeLocked(c.id, true, false, func(root *os.Root, _ string) error {
+			directory, err := root.Open(".")
+			if err != nil {
+				return err
+			}
+			defer directory.Close()
+			info, err := directory.Stat()
+			if err != nil || !os.SameFile(info, c.directory) {
+				return errors.Join(err, ErrInvalidReservation)
+			}
+			// Reprobe and reserve under one shared-ledger lock. A completed
+			// writer must not release its claim between our free-space sample
+			// and this admission, making the old sample appear free twice.
+			shared, err = diskbudget.ReserveFD(directory.Fd(), bytes, diskbudget.Discretionary)
+			return err
+		})
+	}
+	if err != nil {
+		return nil, errors.Join(ErrInsufficientSpace, err)
+	}
 	if r.reserved == nil {
 		r.reserved = make(map[uint64]uint64)
 	}
 	// writableBytes already proves addition cannot overflow.
 	r.reserved[c.sample.Device] += bytes
 	r.reserveCursor = (c.index + 1) % len(r.manifest.Volumes)
-	return &Reservation{r, &reservationState{volumeID: c.id, device: c.sample.Device, bytes: bytes, directory: c.directory}}, nil
+	return &Reservation{r, &reservationState{volumeID: c.id, device: c.sample.Device, bytes: bytes, directory: c.directory, shared: shared}}, nil
 }
 
 // Check revalidates lifecycle, pinned directory identity and current free space.
@@ -165,7 +194,7 @@ func (l *Reservation) Check() error {
 		}
 		// All budgets still count, even if part of an operation is already on
 		// disk. This intentional double-counting errs on the conservative side.
-		if writableBytes(disk, 0) < r.reserved[s.device] {
+		if writableBytes(disk, 0) < diskbudget.Shared.Reserved(s.device) {
 			return ErrInsufficientSpace
 		}
 		return nil
@@ -184,6 +213,7 @@ func (l *Reservation) Release() {
 		return
 	}
 	l.state.released = true
+	l.state.shared.Release()
 	r.reserved[l.state.device] -= l.state.bytes
 	if r.reserved[l.state.device] == 0 {
 		delete(r.reserved, l.state.device)

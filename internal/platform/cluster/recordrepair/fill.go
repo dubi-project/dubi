@@ -41,7 +41,7 @@ func FillLocalCut(ctx context.Context, artifacts *snapshot.Store, cut enginestat
 			return Report{}, errors.New("record fill source differs from the sealed Region")
 		}
 	}
-	report, err := fillMode(ctx, cut.Seal.Intent.Previous.Fence.Nodes(), cut.Seal.Intent.Next.Nodes, localRaftID, sources, cut.Seal.Intent.Recovery,
+	report, err := fillModePipelined(ctx, cut.Seal.Intent.Previous.Fence.Nodes(), cut.Seal.Intent.Next.Nodes, localRaftID, sources, cut.Seal.Intent.Recovery,
 		func(visit func(enginestate.RecordReference) error) error {
 			return enginestate.WalkVerifiedRecordCut(ctx, artifacts, cut, visit)
 		},
@@ -49,6 +49,8 @@ func FillLocalCut(ctx context.Context, artifacts *snapshot.Store, cut enginestat
 		func(attempt context.Context, source rootstate.Node, d records.Descriptor) error {
 			_, err := client.FetchRecord(attempt, source, d, destination)
 			return err
+		}, func(attempt context.Context, source rootstate.Node, ds []records.Descriptor) error {
+			return client.FetchRecords(attempt, source, ds, destination)
 		})
 	if err != nil {
 		return Report{}, err
@@ -68,6 +70,12 @@ func fill(ctx context.Context, oldIDs, nextIDs []uint64, localRaftID uint64, sou
 }
 
 func fillMode(ctx context.Context, oldIDs, nextIDs []uint64, localRaftID uint64, sources []rootstate.Node, recoverySources bool, walk cutWalker, verify verifier, fetch fetcher) (Report, error) {
+	return fillModeBatched(ctx, oldIDs, nextIDs, localRaftID, sources, recoverySources, walk, verify, fetch, nil)
+}
+
+type batchFetcher func(context.Context, rootstate.Node, []records.Descriptor) error
+
+func fillModeBatched(ctx context.Context, oldIDs, nextIDs []uint64, localRaftID uint64, sources []rootstate.Node, recoverySources bool, walk cutWalker, verify verifier, fetch fetcher, batch batchFetcher) (Report, error) {
 	var report Report
 	if ctx == nil || walk == nil || verify == nil || fetch == nil || localRaftID == 0 || !slices.Contains(nextIDs, localRaftID) || len(oldIDs) == 0 || len(sources) == 0 || (!recoverySources && len(sources) != len(oldIDs)) || (recoverySources && len(sources) < 2) {
 		return report, errors.New("record fill requires an old cohort and a next-generation destination")
@@ -88,6 +96,70 @@ func fillMode(ctx context.Context, oldIDs, nextIDs []uint64, localRaftID uint64,
 	if len(remaining) != 0 && !recoverySources {
 		return report, errors.New("record fill omits an old participant")
 	}
+
+	// Keep only a bounded page of missing descriptors. When no single source
+	// holds the whole page, ordinary per-record source selection remains valid.
+	var pending []enginestate.RecordReference
+	var pendingBytes uint64
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		ds := make([]records.Descriptor, len(pending))
+		for i, ref := range pending {
+			ds[i] = ref.Descriptor
+		}
+		remaining := 0
+		for _, source := range sources {
+			if source.RaftID != localRaftID {
+				remaining++
+			}
+		}
+		for _, source := range sources {
+			if source.RaftID == localRaftID {
+				continue
+			}
+			attempt, cancel := sourceAttemptContext(ctx, remaining)
+			remaining--
+			err := batch(attempt, source, ds)
+			cancel()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err == nil {
+				for _, d := range ds {
+					if err := verify(d); err != nil {
+						return fmt.Errorf("verify fetched batch record: %w", err)
+					}
+				}
+				report.Fetched += uint64(len(ds))
+				pending = nil
+				pendingBytes = 0
+				return nil
+			}
+			if !retryableRecordSource(err) {
+				return fmt.Errorf("fetch sealed batch from Node %d: %w", source.RaftID, err)
+			}
+		}
+		// Disjoint source holdings and partial local I/O are handled by the same
+		// verified per-record resume path. No batch success is treated as a vote.
+		result, err := fillMode(ctx, oldIDs, nextIDs, localRaftID, sources, recoverySources, func(visit func(enginestate.RecordReference) error) error {
+			for _, ref := range pending {
+				if err := visit(ref); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, verify, fetch)
+		if err != nil {
+			return err
+		}
+		report.AlreadyHeld += result.AlreadyHeld
+		report.Fetched += result.Fetched
+		pending = nil
+		pendingBytes = 0
+		return nil
+	}
 	err := walk(func(ref enginestate.RecordReference) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -101,7 +173,21 @@ func fillMode(ctx context.Context, oldIDs, nextIDs []uint64, localRaftID uint64,
 		} else if !errors.Is(err, records.ErrNotHeld) {
 			// A damaged local index or Pack is not an invitation to overwrite it.
 			return fmt.Errorf("verify local record: %w", err)
+
+		} else if batch != nil && d.Size <= raftrpc.FetchRecordBatchBytes {
+			if len(pending) == raftrpc.FetchRecordBatchLimit || d.Size > raftrpc.FetchRecordBatchBytes-pendingBytes {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+			// The cut walker may reuse its frame; retain only our own descriptor key.
+			d.Key = slices.Clone(d.Key)
+			pending = append(pending, enginestate.RecordReference{Descriptor: d})
+			pendingBytes += d.Size
 		} else {
+			if err := flush(); err != nil {
+				return err
+			}
 			var last error
 			copied := false
 			remaining := 0
@@ -151,6 +237,9 @@ func fillMode(ctx context.Context, oldIDs, nextIDs []uint64, localRaftID uint64,
 		return nil
 	})
 	if err != nil {
+		return Report{}, err
+	}
+	if err := flush(); err != nil {
 		return Report{}, err
 	}
 	return report, nil

@@ -145,6 +145,8 @@ type groupPeer struct {
 	address      string
 	conn         *grpc.ClientConn
 	client       raftwire.GroupServiceClient
+	rootConn     *grpc.ClientConn
+	rootClient   raftwire.GroupServiceClient
 	ranges       raftwire.RangeControlServiceClient
 	engines      raftwire.EngineServiceClient
 	memberships  raftwire.GroupMembershipServiceClient
@@ -182,7 +184,7 @@ func (client *GroupClient) Submit(ctx context.Context, target uint64, groupID st
 	if len(command) == 0 || len(command) > client.options.MaxSize {
 		return 0, errors.New("Group command is empty or exceeds size limit")
 	}
-	peer, err := client.peer(target)
+	peer, err := client.consensusPeer(target, groupID)
 	if err != nil {
 		return 0, err
 	}
@@ -199,7 +201,7 @@ func (client *GroupClient) Submit(ctx context.Context, target uint64, groupID st
 }
 
 func (client *GroupClient) ReadIndex(ctx context.Context, target uint64, groupID string) (uint64, error) {
-	peer, err := client.peer(target)
+	peer, err := client.consensusPeer(target, groupID)
 	if err != nil {
 		return 0, err
 	}
@@ -210,6 +212,11 @@ func (client *GroupClient) ReadIndex(ctx context.Context, target uint64, groupID
 	}
 	client.observeLeader(groupID, response.GetLeaderRaftId())
 	if response.GetConfirmedIndex() == 0 {
+		if groupID == raft.RootGroupID && response.GetLeaderRaftId() != 0 {
+			// A follower returns only a routing hint, never a successful read.
+			// Keep that election/startup condition retryable for Root callers.
+			return 0, status.Errorf(codes.Unavailable, "Root read requires leader %d confirmation", response.GetLeaderRaftId())
+		}
 		return 0, errors.New("Group read response has no confirmed index")
 	}
 	return response.GetConfirmedIndex(), nil
@@ -252,6 +259,9 @@ func (client *GroupClient) peer(raftID uint64) (raftwire.GroupServiceClient, err
 	}
 	if peer != nil {
 		_ = peer.conn.Close()
+		if peer.rootConn != nil {
+			_ = peer.rootConn.Close()
+		}
 		if peer.recordConn != nil {
 			_ = peer.recordConn.Close()
 		}
@@ -273,6 +283,34 @@ func (client *GroupClient) peer(raftID uint64) (raftwire.GroupServiceClient, err
 	return peer.client, nil
 }
 
+// Root commands and barriers need an independent HTTP/2 stream quota. Engine
+// mutations can wait for regional consensus while occupying every stream on
+// the regular connection, even when the destination's Root Group is healthy.
+// Keep one lazily opened Root connection per peer, with the same credentials,
+// deadlines and reply validation as ordinary Group RPCs.
+func (client *GroupClient) consensusPeer(raftID uint64, groupID string) (raftwire.GroupServiceClient, error) {
+	rpc, err := client.peer(raftID)
+	if err != nil || groupID != raft.RootGroupID {
+		return rpc, err
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed {
+		return nil, errors.New("Group client is closed")
+	}
+	peer := client.peers[raftID]
+	if peer.rootClient == nil {
+		conn, err := grpc.NewClient(peer.address, grpc.WithTransportCredentials(client.options.Credentials),
+			grpc.WithDisableRetry(),
+			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(client.options.MaxSize+1024)))
+		if err != nil {
+			return nil, err
+		}
+		peer.rootConn, peer.rootClient = conn, raftwire.NewGroupServiceClient(conn)
+	}
+	return peer.rootClient, nil
+}
+
 func (client *GroupClient) Close() error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -283,6 +321,9 @@ func (client *GroupClient) Close() error {
 	var failures []error
 	for _, peer := range client.peers {
 		failures = append(failures, peer.conn.Close())
+		if peer.rootConn != nil {
+			failures = append(failures, peer.rootConn.Close())
+		}
 		if peer.recordConn != nil {
 			failures = append(failures, peer.recordConn.Close())
 		}

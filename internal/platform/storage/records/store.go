@@ -12,10 +12,13 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/protocol"
+	"github.com/dubi-project/dubi/internal/platform/resource"
+	"github.com/dubi-project/dubi/internal/platform/storage/diskbudget"
 	"github.com/dubi-project/dubi/internal/platform/storage/pack"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 )
@@ -86,6 +89,7 @@ type Store struct {
 	failed                    error
 	commit                    func(*pebble.Batch) error // Test-only Sync uncertainty boundary.
 	binding                   *volume.ResourceBinding
+	maintenance               atomic.Pointer[resource.Maintenance]
 }
 
 // SnapshotIndex creates a deterministic, module-neutral image of the local
@@ -97,6 +101,10 @@ func (s *Store) SnapshotIndex(ctx context.Context) ([]byte, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.snapshotIndexLocked(ctx)
+}
+
+func (s *Store) snapshotIndexLocked(ctx context.Context) ([]byte, error) {
 	if err := s.usable(); err != nil {
 		return nil, err
 	}
@@ -293,6 +301,8 @@ func (s *Store) usable() error {
 // read and checked, never accepted from the locator or a previous result alone.
 // Different content at the same logical key remains separately addressable.
 func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding, error) {
+	foregroundDone := resource.EnterForeground(ctx, s.maintenance.Load())
+	defer foregroundDone()
 	if err := ctx.Err(); err != nil {
 		return Holding{}, err
 	}
@@ -301,6 +311,9 @@ func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding,
 	}
 	if uint64(len(payload)) != d.Size {
 		return Holding{}, errors.New("record payload size differs from descriptor")
+	}
+	if err := resource.WaitIO(ctx, d.Size*2); err != nil {
+		return Holding{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -325,6 +338,13 @@ func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding,
 		return holding, err
 	}
 	appendStarted := time.Now()
+	// A separate data disk does not make the Store's index filesystem healthy.
+	// Reserve metadata headroom before writing an otherwise orphaned Pack body.
+	metadataLease, err := diskbudget.ReservePath(s.root, 64<<10, diskbudget.Discretionary)
+	if err != nil {
+		return Holding{}, err
+	}
+	defer metadataLease.Release()
 	loc, err := s.packs.Append(ctx, pack.Record{EngineID: d.Keyspace.EngineID, TenantID: d.Keyspace.TenantID, Key: recordKey(id), Payload: payload})
 	traceRecordStore("pack_append", id, appendStarted)
 	if err != nil {
@@ -344,6 +364,11 @@ func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding,
 		return Holding{}, err
 	}
 	if err := b.Set(indexKey(id), encoded, nil); err != nil {
+		return Holding{}, err
+	}
+	// Foreground demand may cache a previously offloaded immutable record.
+	// Publish the bytes and clear the maintenance hint in the same Sync.
+	if err := b.Delete([]byte("retention/offloaded/"+id), nil); err != nil {
 		return Holding{}, err
 	}
 	commitStarted := time.Now()
@@ -366,6 +391,8 @@ func (s *Store) Put(ctx context.Context, d Descriptor, payload []byte) (Holding,
 }
 
 func (s *Store) Read(ctx context.Context, d Descriptor) ([]byte, Holding, error) {
+	foregroundDone := resource.EnterForeground(ctx, s.maintenance.Load())
+	defer foregroundDone()
 	if err := ctx.Err(); err != nil {
 		return nil, Holding{}, err
 	}
@@ -374,6 +401,9 @@ func (s *Store) Read(ctx context.Context, d Descriptor) ([]byte, Holding, error)
 		return nil, Holding{}, err
 	}
 	d = d.clone()
+	if err := resource.WaitIO(ctx, d.Size); err != nil {
+		return nil, Holding{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.usable(); err != nil {
@@ -423,7 +453,14 @@ func (s *Store) Compact(ctx context.Context) (CompactReport, error) {
 	if !ok {
 		return result, errors.New("Pack backend does not support compaction")
 	}
-	live := make(map[pack.Location]struct{})
+	scoped, byPack := s.packs.(interface {
+		CompactByPack(context.Context, func(pack.Scope) bool) (pack.CompactReport, error)
+	})
+	var live map[pack.Location]struct{}
+	if !byPack {
+		live = make(map[pack.Location]struct{})
+	}
+	livePacks := make(map[pack.Scope]bool)
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("record/"), UpperBound: []byte("record0")})
 	if err != nil {
 		return result, classifyIndexRead(err)
@@ -446,15 +483,23 @@ func (s *Store) Compact(ctx context.Context) (CompactReport, error) {
 			_ = iter.Close()
 			return result, err
 		}
-		live[e.Location] = struct{}{}
+		if !byPack {
+			live[e.Location] = struct{}{}
+		}
+		livePacks[pack.Scope{StoreID: e.Location.StoreID, VolumeID: e.Location.VolumeID, PackID: e.Location.PackID}] = true
 	}
 	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
 		return result, classifyIndexRead(err)
 	}
-	report, err := compactor.Compact(ctx, func(loc pack.Location) bool {
-		_, found := live[loc]
-		return found
-	})
+	var report pack.CompactReport
+	if byPack {
+		report, err = scoped.CompactByPack(ctx, func(scope pack.Scope) bool { return livePacks[scope] })
+	} else {
+		report, err = compactor.Compact(ctx, func(loc pack.Location) bool {
+			_, found := live[loc]
+			return found
+		})
+	}
 	if err != nil {
 		return result, err
 	}
@@ -504,6 +549,8 @@ func (s *Store) RelocationNeeded(ctx context.Context, d Descriptor) (bool, error
 // changes a logical reference, or makes a quorum durability claim. The caller
 // must obtain the payload from an authenticated, current cohort source.
 func (s *Store) RepairExisting(ctx context.Context, d Descriptor, payload []byte) (Holding, error) {
+	foregroundDone := resource.EnterForeground(ctx, s.maintenance.Load())
+	defer foregroundDone()
 	if err := ctx.Err(); err != nil {
 		return Holding{}, err
 	}
@@ -513,6 +560,9 @@ func (s *Store) RepairExisting(ctx context.Context, d Descriptor, payload []byte
 	}
 	if !d.matches(payload) {
 		return Holding{}, errors.New("repair payload differs from immutable record descriptor")
+	}
+	if err := resource.WaitIO(ctx, d.Size*2); err != nil {
+		return Holding{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -661,4 +711,10 @@ func (s *Store) Close() error {
 	}
 	s.closed = true
 	return errors.Join(s.db.Close(), s.lease.Close())
+}
+
+// SetMaintenanceScheduler binds the Node's scheduler before serving requests.
+// The pointer is atomic so binding cannot race an early diagnostic read.
+func (s *Store) SetMaintenanceScheduler(scheduler *resource.Maintenance) {
+	s.maintenance.CompareAndSwap(nil, scheduler)
 }

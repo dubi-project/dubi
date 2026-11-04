@@ -30,6 +30,18 @@ func ReadLocalPlan(ctx context.Context, barrier ReadBarrier, root RootReader, gr
 	if index == 0 {
 		return LocalPlan{}, errors.New("Root read barrier returned no confirmed index")
 	}
+	return ReadLocalPlanAtCut(index, root, group)
+}
+
+// ReadLocalPlanAtCut derives a plan from Root state that has applied one
+// already-confirmed Root cut. It is useful for the initial plan read in a
+// request whose admission already performed a Root ReadIndex; callers must
+// still obtain a fresh cut after long-running physical IO before accepting
+// the staged result.
+func ReadLocalPlanAtCut(index uint64, root RootReader, group string) (LocalPlan, error) {
+	if index == 0 || root == nil {
+		return LocalPlan{}, errors.New("local placement requires a confirmed Root cut and reader")
+	}
 	view, found, err := root.RegionProgress(group)
 	if err != nil || !found || view.AppliedIndex < index {
 		return LocalPlan{}, errors.Join(err, errors.New("confirmed Region progress is not available at Root read cut"))

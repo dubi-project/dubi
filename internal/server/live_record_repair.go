@@ -16,6 +16,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 )
 
@@ -25,6 +26,7 @@ import (
 // on the next sweep from authoritative Owner references.
 type liveRecordRepair struct {
 	runtime          *node.Runtime
+	io               *resource.Maintenance
 	client           *raftrpc.GroupClient
 	progress         *recordrepair.ProgressStore
 	geoRecordRepair  *recordrepair.GeoRecordRepairStore
@@ -37,13 +39,27 @@ type liveRecordRepair struct {
 	statusMu         sync.RWMutex
 	lastCheck        time.Time
 	lastErr          map[string]string
+	lastReported     map[string]string // Health restoration is not diagnostic delivery.
+	recordDebt       map[string]bool
+	progressStatus   map[string]repairScanProgress // Protected by statusMu.
 }
 
+// A record debt survives clean pages until a complete clean sweep. A failed
+// read/metadata operation is resolved by the next successful page for that
+// Group, provided no actual unresolved record debt was observed earlier.
+type liveRepairRecordDebt struct{ error }
+
+func (debt *liveRepairRecordDebt) Unwrap() error { return debt.error }
+
 type liveRepairCursor struct {
-	owner        *enginestate.State
-	cursor       []byte
-	unresolved   uint64
-	firstFailure string
+	owner                                        *enginestate.State
+	cohort                                       rootstate.RegionCohort
+	cursor                                       []byte
+	unresolved                                   uint64
+	firstFailure                                 string
+	needsCleanSweep                              bool
+	scanned                                      uint64
+	startedUnix, lastProgressUnix, lastCleanUnix int64
 }
 
 // repairReadBarrier routes Root confirmation through the Node-level fallback
@@ -54,6 +70,7 @@ type liveRepairCursor struct {
 type repairReadBarrier struct {
 	runtime *node.Runtime
 	client  repairGroupReadClient
+	phase   func(string)
 }
 
 type repairGroupReadClient interface {
@@ -69,7 +86,21 @@ type repairLocalGroupReader interface {
 const repairGroupReadAttemptTimeout = 8 * time.Second
 const repairLocalGroupReadAttemptTimeout = 2 * time.Second
 
-func (barrier repairReadBarrier) ReadIndex(ctx context.Context, groupID string) (uint64, error) {
+func (barrier repairReadBarrier) ReadIndex(ctx context.Context, groupID string) (index uint64, resultErr error) {
+	started := time.Now()
+	defer traceRepairBarrier(ctx, groupID, started)
+	if barrier.phase != nil {
+		phase := "waiting_owner"
+		if groupID == raft.RootGroupID {
+			phase = "waiting_root"
+		}
+		barrier.phase(phase)
+		defer func() {
+			if resultErr == nil {
+				barrier.phase("repairing")
+			}
+		}()
+	}
 	if groupID == raft.RootGroupID {
 		index, err := barrier.runtime.ReadRootIndex(ctx)
 		if err != nil {
@@ -166,20 +197,32 @@ func readRepairOwnerIndex(ctx context.Context, local repairLocalGroupReader, cli
 
 func (cursor *liveRepairCursor) addFailures(failures []error) {
 	cursor.unresolved += uint64(len(failures))
+	if len(failures) != 0 {
+		cursor.needsCleanSweep = true
+	}
 	if cursor.firstFailure == "" && len(failures) != 0 {
-		cursor.firstFailure = failures[0].Error()
+		message := []rune(failures[0].Error())
+		cursor.firstFailure = string(message[:min(len(message), 1024)])
 	}
 }
 
 func (cursor liveRepairCursor) debtError(groupID string) error {
 	if cursor.unresolved == 0 {
+		if cursor.needsCleanSweep {
+			return &liveRepairRecordDebt{fmt.Errorf("Group %s has known record debt awaiting a full clean sweep (first: %s)", groupID, cursor.firstFailure)}
+		}
 		return nil
 	}
-	return fmt.Errorf("Group %s has %d unresolved records in the completed sweep (first: %s)",
-		groupID, cursor.unresolved, cursor.firstFailure)
+	return &liveRepairRecordDebt{fmt.Errorf("Group %s has %d unresolved records in this sweep (first: %s)",
+		groupID, cursor.unresolved, cursor.firstFailure)}
 }
 
-const liveRepairPageLimit = 8
+// Root and Owner quorum barriers are paid per page, even for already healthy
+// records. Eight rows made a WAN sweep spend minutes on barriers before a
+// returning Node reached newly written references. Retain only bounded
+// descriptor metadata for 64 rows; payloads are still verified/copied one at a
+// time under the shared IO budget and the existing page deadline.
+const liveRepairPageLimit = 64
 const liveRepairInterval = 5 * time.Second
 const liveRepairContinuationDelay = 100 * time.Millisecond
 
@@ -199,7 +242,14 @@ func (worker *liveRecordRepair) run(ctx context.Context) {
 			return
 		case <-timer.C:
 			stepCtx, cancel := context.WithTimeout(ctx, liveRepairTimeout)
-			err := worker.step(stepCtx)
+			// Local availability/confirmation repair must keep progressing while
+			// a WAN Geo round owns the exclusive maintenance lane. It is already
+			// one bounded worker, uses the shared transfer admission and charges
+			// the SAME IO bucket. Remote authenticated repair uses this same
+			// cooperative shaping path; no extra job, buffer or transfer slot is
+			// created here. Geo/backup/migration remain mutually exclusive.
+			maintenanceCtx := resource.WithMaintenance(stepCtx, worker.io)
+			err := worker.step(maintenanceCtx)
 			cancel()
 			worker.observeStep(ctx, err)
 			timer.Reset(worker.nextDelay())
@@ -212,7 +262,11 @@ func (worker *liveRecordRepair) run(ctx context.Context) {
 // scanning does not become an unbounded busy loop. Full sweeps still use the
 // low-frequency idle interval.
 func (worker *liveRecordRepair) nextDelay() time.Duration {
-	if worker.lastPageAdvanced || (worker.lastDone && len(worker.groups) != 0) {
+	unfinished := false
+	for _, cursor := range worker.groups {
+		unfinished = unfinished || len(cursor.cursor) != 0 || cursor.lastProgressUnix == 0
+	}
+	if worker.lastPageAdvanced || (worker.lastDone && unfinished) {
 		return liveRepairContinuationDelay
 	}
 	return liveRepairInterval
@@ -223,9 +277,13 @@ func (worker *liveRecordRepair) observeStep(ctx context.Context, err error) {
 	worker.lastCheck = time.Now()
 	if err == nil {
 		delete(worker.lastErr, "") // Global discovery succeeded this round.
-		// A clean page does not erase debt found earlier in this sweep.
-		if worker.lastDone {
+		delete(worker.lastReported, "")
+		// Do not retain a recovered Root/Owner barrier error for an entire
+		// large sweep, or erase known record debt after only one clean page.
+		if worker.lastDone || !worker.recordDebt[worker.lastGroup] {
 			delete(worker.lastErr, worker.lastGroup)
+			delete(worker.lastReported, worker.lastGroup)
+			delete(worker.recordDebt, worker.lastGroup)
 		}
 		worker.statusMu.Unlock()
 		return
@@ -237,11 +295,22 @@ func (worker *liveRecordRepair) observeStep(ctx context.Context, err error) {
 	if worker.lastErr == nil {
 		worker.lastErr = make(map[string]string)
 	}
-	if err.Error() == worker.lastErr[worker.lastGroup] {
+	var recordDebt *liveRepairRecordDebt
+	if errors.As(err, &recordDebt) {
+		if worker.recordDebt == nil {
+			worker.recordDebt = make(map[string]bool)
+		}
+		worker.recordDebt[worker.lastGroup] = true
+	}
+	worker.lastErr[worker.lastGroup] = err.Error()
+	if err.Error() == worker.lastReported[worker.lastGroup] {
 		worker.statusMu.Unlock()
 		return
 	}
-	worker.lastErr[worker.lastGroup] = err.Error()
+	if worker.lastReported == nil {
+		worker.lastReported = make(map[string]string)
+	}
+	worker.lastReported[worker.lastGroup] = err.Error()
 	worker.statusMu.Unlock()
 	if worker.report != nil {
 		worker.report(fmt.Errorf("repair current immutable records: %w", err))
@@ -256,6 +325,49 @@ type repairIssue struct {
 type repairObservation struct {
 	LastCheck time.Time
 	Issues    []repairIssue
+	Progress  []repairScanProgress
+}
+
+type repairScanProgress struct {
+	GroupID                                      string
+	Phase                                        string
+	Scanned, Unresolved                          uint64
+	NeedsCleanSweep                              bool
+	StartedUnix, LastProgressUnix, LastCleanUnix int64
+}
+
+func (worker *liveRecordRepair) publishProgress(groupID, phase string, cursor liveRepairCursor) {
+	worker.statusMu.Lock()
+	defer worker.statusMu.Unlock()
+	if worker.progressStatus == nil {
+		worker.progressStatus = make(map[string]repairScanProgress)
+	}
+	worker.progressStatus[groupID] = repairScanProgress{GroupID: groupID, Phase: phase,
+		Scanned: cursor.scanned, Unresolved: cursor.unresolved, NeedsCleanSweep: cursor.needsCleanSweep,
+		StartedUnix: cursor.startedUnix, LastProgressUnix: cursor.lastProgressUnix, LastCleanUnix: cursor.lastCleanUnix}
+	// Restore durable debt before any potentially slow Root/Owner request.
+	if debt := cursor.debtError(groupID); debt != nil {
+		if worker.recordDebt == nil {
+			worker.recordDebt = make(map[string]bool)
+		}
+		if worker.lastErr == nil {
+			worker.lastErr = make(map[string]string)
+		}
+		worker.recordDebt[groupID] = true
+		if worker.lastErr[groupID] == "" {
+			worker.lastErr[groupID] = debt.Error()
+		}
+	}
+}
+
+func (worker *liveRecordRepair) setPhase(groupID, phase string) {
+	worker.statusMu.Lock()
+	defer worker.statusMu.Unlock()
+	progress := worker.progressStatus[groupID]
+	progress.Phase = phase
+	if progress.GroupID != "" {
+		worker.progressStatus[groupID] = progress
+	}
 }
 
 func (worker *liveRecordRepair) snapshot() repairObservation {
@@ -267,8 +379,12 @@ func (worker *liveRecordRepair) snapshot() repairObservation {
 	for groupID, issue := range worker.lastErr {
 		result.Issues = append(result.Issues, repairIssue{GroupID: groupID, Error: issue})
 	}
+	for _, progress := range worker.progressStatus {
+		result.Progress = append(result.Progress, progress)
+	}
 	worker.statusMu.RUnlock()
 	slices.SortFunc(result.Issues, func(a, b repairIssue) int { return strings.Compare(a.GroupID, b.GroupID) })
+	slices.SortFunc(result.Progress, func(a, b repairScanProgress) int { return strings.Compare(a.GroupID, b.GroupID) })
 	return result
 }
 
@@ -279,6 +395,8 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctx, finishTiming := withRepairTiming(ctx, "local")
+	defer finishTiming()
 	descriptors, err := worker.runtime.Root.Groups()
 	if err != nil {
 		return err
@@ -315,6 +433,13 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 	for id := range worker.lastErr {
 		if id != "" && !active[id] {
 			delete(worker.lastErr, id)
+			delete(worker.lastReported, id)
+			delete(worker.recordDebt, id)
+		}
+	}
+	for id := range worker.progressStatus {
+		if !active[id] {
+			delete(worker.progressStatus, id)
 		}
 	}
 	worker.statusMu.Unlock()
@@ -322,6 +447,29 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 		return nil
 	}
 	slices.Sort(groupIDs)
+	// Load every locally eligible Group before publishing the first successful
+	// observation. Otherwise round-robin selection could hide another Group's
+	// durable debt until its turn, especially while this Group waits on a cut.
+	if worker.groups == nil {
+		worker.groups = make(map[string]liveRepairCursor)
+	}
+	for _, id := range groupIDs {
+		owner, _ := worker.runtime.Engines.Resolve(id)
+		previous := worker.groups[id]
+		current := regionViews[id].Current
+		if previous.owner == owner && previous.cohort.Generation == current.Generation &&
+			previous.cohort.GroupEpoch == current.GroupEpoch && previous.cohort.GroupFenceIndex == current.GroupFenceIndex &&
+			slices.Equal(previous.cohort.Nodes, current.Nodes) {
+			continue
+		}
+		cursor, err := worker.loadCursor(id, regionViews[id])
+		if err != nil {
+			return err
+		}
+		cursor.owner = owner
+		worker.groups[id] = cursor
+		worker.publishProgress(id, "pending", cursor)
+	}
 	groupID := groupIDs[worker.next%len(groupIDs)]
 	worker.next = (worker.next + 1) % len(groupIDs)
 	worker.lastGroup = groupID
@@ -330,88 +478,113 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 		delete(worker.groups, groupID)
 		return nil
 	}
-	if worker.groups == nil {
-		worker.groups = make(map[string]liveRepairCursor)
-	}
 	previous := worker.groups[groupID]
-	if previous.owner != owner {
-		previous = liveRepairCursor{}
-	}
-	if previous.owner == nil && worker.progress != nil {
-		saved, found, err := worker.progress.Load(groupID)
-		if err != nil {
-			return fmt.Errorf("Group %s repair progress: %w", groupID, err)
-		}
-		if found && !saved.Done {
-			if saved.Matches(regionViews[groupID]) {
-				previous.cursor = saved.Cursor
-				previous.unresolved = saved.Unresolved
-				previous.firstFailure = saved.FirstError
-			} else if err := worker.progress.Delete(groupID); err != nil {
-				return fmt.Errorf("Group %s discard stale repair progress: %w", groupID, err)
+	worker.publishProgress(groupID, "repairing", previous)
+	activePhase := "repairing"
+	readBarrier := repairReadBarrier{runtime: worker.runtime, client: worker.client,
+		phase: func(phase string) {
+			if phase == "repairing" {
+				phase = activePhase
 			}
-		}
+			worker.setPhase(groupID, phase)
+		}}
+	pageCut, err := beginRepairPage(ctx, readBarrier, worker.runtime.Root, groupID)
+	if err != nil {
+		delete(worker.groups, groupID)
+		return fmt.Errorf("Group %s begin repair page: %w", groupID, err)
 	}
-	readBarrier := repairReadBarrier{runtime: worker.runtime, client: worker.client}
-	page, err := recordrepair.RepairCurrentLocalPage(ctx, readBarrier, worker.runtime.Root,
+	cohort := regionViews[groupID].Current
+	if pageCut.plan.Generation != cohort.Generation || pageCut.plan.GroupEpoch != cohort.GroupEpoch || pageCut.plan.FenceIndex != cohort.GroupFenceIndex {
+		delete(worker.groups, groupID)
+		return fmt.Errorf("Group %s repair cursor cohort changed before admission", groupID)
+	}
+	page, err := recordrepair.RepairCurrentLocalPageWithRetry(ctx, pageCut, worker.runtime.Root,
 		owner, groupID, worker.runtime.Identity.RaftID, worker.runtime.Identity.NodeID,
 		worker.runtime.Records, worker.client, previous.cursor, liveRepairPageLimit)
 	if err != nil {
 		delete(worker.groups, groupID)
 		return fmt.Errorf("Group %s: %w", groupID, err)
 	}
-	if worker.geoRecordRepair != nil {
-		for _, ref := range page.Unresolved {
-			if err := worker.geoRecordRepair.Save(ref); err != nil {
-				delete(worker.groups, groupID)
-				return fmt.Errorf("Group %s save Geo repair task: %w", groupID, err)
-			}
+	// Checkpoint newly discovered debt before metadata/confirmation operations
+	// which can fail or be interrupted. Retry from the old cursor on failure.
+	previous.addFailures(page.Failures)
+	if len(page.Failures) != 0 {
+		if err := worker.saveCursor(regionViews[groupID], groupID, previous, false, previous.cursor); err != nil {
+			delete(worker.groups, groupID)
+			return err
 		}
-		for _, ref := range page.References {
-			if err := worker.geoRecordRepair.Delete(ref); err != nil {
-				delete(worker.groups, groupID)
-				return fmt.Errorf("Group %s delete completed Geo repair task: %w", groupID, err)
-			}
-		}
+		worker.publishProgress(groupID, "repairing", previous)
+	}
+	if err := worker.recordGeoRepairHints(page); err != nil {
+		delete(worker.groups, groupID)
+		return fmt.Errorf("Group %s save Geo repair task: %w", groupID, err)
 	}
 	status, err := worker.runtime.Host.Status(groupID)
 	if err != nil {
 		delete(worker.groups, groupID)
 		return fmt.Errorf("Group %s leader status: %w", groupID, err)
 	}
-	failures := slices.Clone(page.Failures)
 	// The local foreground repair path is only for Regions that can publish a
 	// local physical-majority confirmation. One- and two-Node Regions use the
 	// cross-Region/Geo repair path; treating them as local-repair failures would
 	// create a false background error even when their configured policy is sound.
 	if status.LeaderID == worker.runtime.Identity.RaftID && len(regionViews[groupID].Current.Nodes) >= 3 {
-		writer := recordwrite.Writer{Barrier: readBarrier, Root: worker.runtime.Root,
+		activePhase = "confirming"
+		worker.setPhase(groupID, "confirming")
+		writer := recordwrite.Writer{Barrier: pageCut, Root: worker.runtime.Root,
 			Owner: owner, LocalID: worker.runtime.Identity.RaftID,
-			LocalNodeID: worker.runtime.Identity.NodeID, Store: worker.runtime.Records,
-			Observer: worker.client, Submit: func(call context.Context, groupID string, command []byte) error {
+			LocalNodeID: worker.runtime.Identity.NodeID, Store: repairTimingVerifier{worker.runtime.Records},
+			Observer: repairTimingObserver{worker.client}, Submit: func(call context.Context, groupID string, command []byte) error {
 				if err := call.Err(); err != nil {
 					return err
 				}
+				started := time.Now()
+				defer recordwrite.Trace(call, "repair.owner_submit", started)
 				return worker.runtime.Host.Submit(groupID, command)
-			}}
-		for _, ref := range page.References {
-			if _, err := writer.EnsureCurrentLocalConfirmation(ctx, ref); err != nil {
-				if ctx.Err() != nil {
-					delete(worker.groups, groupID)
-					return ctx.Err()
+			}, SubmitBatch: func(call context.Context, groupID string, commands [][]byte) ([]error, error) {
+				if err := call.Err(); err != nil {
+					return nil, err
 				}
-				failures = append(failures, fmt.Errorf("reconfirm %s: %w", ref.RequestID, err))
+				return worker.runtime.Host.SubmitBatch(groupID, commands)
+			}}
+		started := time.Now()
+		failures, err := writer.ReconcileLocalConfirmationPage(ctx, page.References)
+		recordwrite.Trace(ctx, "repair.local_page", started)
+		if err != nil {
+			delete(worker.groups, groupID)
+			return fmt.Errorf("Group %s reconcile local confirmation page: %w", groupID, err)
+		}
+		if len(failures) != 0 {
+			previous.addFailures(failures)
+			if err := worker.saveCursor(regionViews[groupID], groupID, previous, false, previous.cursor); err != nil {
+				delete(worker.groups, groupID)
+				return err
 			}
+			worker.publishProgress(groupID, "confirming", previous)
 		}
 	}
-	previous.addFailures(failures)
+	if err := pageCut.finish(ctx); err != nil {
+		delete(worker.groups, groupID)
+		return fmt.Errorf("Group %s finish repair page: %w", groupID, err)
+	}
+	return worker.advanceCursor(regionViews[groupID], groupID, owner, previous, page)
+}
+
+// advanceCursor commits a fully processed page before publishing completion.
+func (worker *liveRecordRepair) advanceCursor(view rootstate.RegionProgress, groupID string, owner *enginestate.State, previous liveRepairCursor, page recordrepair.LivePageReport) error {
+	previous.scanned += page.AlreadyHeld + page.Fetched + page.Unrepaired + page.Offloaded
+	previous.lastProgressUnix = time.Now().Unix()
 	if page.Page.Done {
-		if worker.progress != nil {
-			if err := worker.progress.Save(repairProgressForPage(regionViews[groupID], groupID, previous, page.Page.Done, nil)); err != nil {
-				delete(worker.groups, groupID)
-				return fmt.Errorf("Group %s save completed repair progress: %w", groupID, err)
-			}
+		previous.needsCleanSweep = previous.unresolved != 0
+		if !previous.needsCleanSweep {
+			previous.firstFailure = ""
+			previous.lastCleanUnix = previous.lastProgressUnix
 		}
+		if err := worker.saveCursor(view, groupID, previous, true, nil); err != nil {
+			delete(worker.groups, groupID)
+			return err
+		}
+		worker.publishProgress(groupID, "idle", previous)
 		delete(worker.groups, groupID)
 		worker.lastDone = true
 	} else if len(page.Page.Cursor) == 0 || bytes.Equal(page.Page.Cursor, previous.cursor) {
@@ -419,20 +592,68 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 		return fmt.Errorf("Group %s repair cursor did not advance", groupID)
 	} else {
 		previous.owner, previous.cursor = owner, page.Page.Cursor
-		if worker.progress != nil {
-			if err := worker.progress.Save(repairProgressForPage(regionViews[groupID], groupID, previous, false, page.Page.Cursor)); err != nil {
-				delete(worker.groups, groupID)
-				return fmt.Errorf("Group %s save repair progress: %w", groupID, err)
-			}
+		if err := worker.saveCursor(view, groupID, previous, false, page.Page.Cursor); err != nil {
+			delete(worker.groups, groupID)
+			return err
 		}
+		worker.publishProgress(groupID, "pending", previous)
 		worker.groups[groupID] = previous
 		worker.lastPageAdvanced = true
 	}
-	if worker.lastDone {
-		return previous.debtError(groupID)
+	return previous.debtError(groupID)
+}
+
+func (worker *liveRecordRepair) loadCursor(groupID string, view rootstate.RegionProgress) (liveRepairCursor, error) {
+	cursor := liveRepairCursor{cohort: view.Current, startedUnix: time.Now().Unix()}
+	if worker.progress == nil {
+		return cursor, nil
 	}
-	if len(failures) != 0 {
-		return fmt.Errorf("Group %s has %d unresolved records: %w", groupID, len(failures), errors.Join(failures...))
+	saved, found, err := worker.progress.Load(groupID)
+	if err != nil {
+		return liveRepairCursor{}, fmt.Errorf("Group %s repair progress: %w", groupID, err)
+	}
+	if !found {
+		return cursor, nil
+	}
+	// Old ledgers did not have a latch; their unresolved count is still debt.
+	cursor.needsCleanSweep = saved.NeedsCleanSweep || saved.Unresolved != 0
+	if cursor.needsCleanSweep {
+		cursor.firstFailure = saved.FirstError
+	}
+	if saved.Matches(view) {
+		cursor.lastCleanUnix, cursor.lastProgressUnix = saved.LastCleanUnix, saved.LastProgressUnix
+		if !saved.Done {
+			cursor.cursor, cursor.unresolved, cursor.scanned = saved.Cursor, saved.Unresolved, saved.Scanned
+			if saved.StartedUnix != 0 {
+				cursor.startedUnix = saved.StartedUnix
+			}
+		}
+	}
+	// A changed cohort rewinds the scan, never erases known debt.
+	return cursor, nil
+}
+
+func (worker *liveRecordRepair) saveCursor(view rootstate.RegionProgress, groupID string, cursor liveRepairCursor, done bool, next []byte) error {
+	if worker.progress == nil {
+		return nil
+	}
+	if err := worker.progress.Save(repairProgressForPage(view, groupID, cursor, done, next)); err != nil {
+		return fmt.Errorf("Group %s save repair progress: %w", groupID, err)
+	}
+	return nil
+}
+
+// recordGeoRepairHints hands local failures to the shared Geo retry ledger.
+// A locally healthy reference does not prove cross-Region coverage. Only the
+// Geo worker may retire a task after observing the full placement majority.
+func (worker *liveRecordRepair) recordGeoRepairHints(page recordrepair.LivePageReport) error {
+	if worker.geoRecordRepair == nil {
+		return nil
+	}
+	for _, ref := range page.Unresolved {
+		if err := worker.geoRecordRepair.Save(ref); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -440,5 +661,7 @@ func (worker *liveRecordRepair) step(ctx context.Context) error {
 func repairProgressForPage(view rootstate.RegionProgress, groupID string, cursor liveRepairCursor, done bool, next []byte) recordrepair.Progress {
 	return recordrepair.Progress{GroupID: groupID, RegionID: view.Current.RegionID, Generation: view.Current.Generation,
 		GroupEpoch: view.Current.GroupEpoch, FenceIndex: view.Current.GroupFenceIndex, Nodes: slices.Clone(view.Current.Nodes),
-		Cursor: slices.Clone(next), Unresolved: cursor.unresolved, FirstError: cursor.firstFailure, Done: done}
+		Cursor: slices.Clone(next), Unresolved: cursor.unresolved, FirstError: cursor.firstFailure, Done: done,
+		NeedsCleanSweep: cursor.needsCleanSweep, Scanned: cursor.scanned, StartedUnix: cursor.startedUnix,
+		LastProgressUnix: cursor.lastProgressUnix, LastCleanUnix: cursor.lastCleanUnix}
 }

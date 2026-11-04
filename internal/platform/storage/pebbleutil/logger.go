@@ -66,6 +66,7 @@ func Open(path string, options *pebble.Options) (db *pebble.DB, err error) {
 	if options.MaxConcurrentCompactions == nil {
 		options.MaxConcurrentCompactions = func() int { return 1 }
 	}
+	options.FS = withDiskBudget(options.FS)
 	defer recoverOpenFatal(&db, &err)
 	return pebble.Open(path, options)
 }

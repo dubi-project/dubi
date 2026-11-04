@@ -72,3 +72,26 @@ func TestProgressBindsToCurrentCohortAndCompletedSweep(t *testing.T) {
 		t.Fatal("completed sweep retained a cursor")
 	}
 }
+
+func TestProgressRetainsIndependentDebtAndTelemetry(t *testing.T) {
+	store, err := OpenProgressStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	progress := progressFixture()
+	progress.Unresolved = 0 // New sweep has no failures so far.
+	progress.NeedsCleanSweep = true
+	progress.Scanned, progress.StartedUnix, progress.LastProgressUnix, progress.LastCleanUnix = 80, 100, 200, 50
+	if err := store.Save(progress); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := store.Load(progress.GroupID)
+	if err != nil || !reflect.DeepEqual(got, progress) {
+		t.Fatal(got, err)
+	}
+	progress.LastCleanUnix = -1
+	if err := store.Save(progress); err == nil {
+		t.Fatal("negative diagnostic timestamp accepted")
+	}
+}

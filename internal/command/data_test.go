@@ -25,6 +25,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/regiongroups"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
+	"github.com/dubi-project/dubi/internal/platform/config"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
@@ -157,6 +158,7 @@ func activateEngineTestDataset(t *testing.T, ctx context.Context, first *server.
 }
 
 func TestEngineDataAnyNodeGateway(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	mux := referenceTestMux(t)
@@ -278,6 +280,20 @@ func TestEngineDataAnyNodeGateway(t *testing.T) {
 	if len(candidates) != 3 || owners[candidates[0]] == nil {
 		t.Fatal("gateway lacks the expected Owner candidates", candidates)
 	}
+	// Exercise the Root election on every run, rather than depending on the
+	// random Node IDs to make the first Owner candidate the Root leader.
+	rootStatus, err := first.Runtime.Host.Status(raft.RootGroupID)
+	if err != nil || rootStatus.LeaderID == 0 || ownerServers[rootStatus.LeaderID] == nil {
+		t.Fatal("cannot identify current Root leader before Owner failure", rootStatus, err)
+	}
+	if rootStatus.LeaderID != candidates[0] {
+		if _, err := ownerServers[rootStatus.LeaderID].Runtime.Host.TransferLeadership(ctx, raft.RootGroupID, candidates[0]); err != nil {
+			t.Fatal("prepare simultaneous Owner and Root leader failure", err)
+		}
+	}
+	if _, err := gateway.Runtime.ReadRootIndex(ctx); err != nil {
+		t.Fatal("gateway did not observe Root before the failure", err)
+	}
 	beforeConf, beforeErr := gateway.Runtime.Root.RootMembership()
 	t.Logf("before Owner loss: candidates=%v stopped=%x RootConf=%v err=%v", candidates, candidates[0], beforeConf, beforeErr)
 	owners[candidates[0]]()
@@ -329,7 +345,10 @@ func TestEngineDataAnyNodeGateway(t *testing.T) {
 }
 
 func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	t.Setenv("HOME", t.TempDir())
+	// This scenario performs several enrollments, outages and cold restarts.
+	// Its accumulated setup time is not an individual repair latency budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	mux := referenceTestMux(t)
 	type running struct {
@@ -601,6 +620,9 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	nodes[1].process = recoveredSecond
 	nodes[1].stop, wait = startJoinTestServer(t, recoveredSecond)
 	wait()
+	if _, hosted := recoveredSecond.Runtime.Engines.Resolve(group); !hosted {
+		t.Fatal("restarted Node advertised readiness without reopening its Owner Group")
+	}
 	nodes[2].stop()
 	recoveredThird, err := openServerWithMux([]string{"--store", nodes[2].store, "--listen", nodes[2].address}, io.Discard, mux)
 	if err != nil {
@@ -609,6 +631,9 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	nodes[2].process = recoveredThird
 	nodes[2].stop, wait = startJoinTestServer(t, recoveredThird)
 	wait()
+	if _, hosted := recoveredThird.Runtime.Engines.Resolve(group); !hosted {
+		t.Fatal("restarted Node advertised readiness without reopening its Owner Group")
+	}
 	command("record", "put", "--request-id", "data-test-put", "demo", "items", "greeting", "hello")
 	read := func(i int) {
 		t.Helper()
@@ -1016,7 +1041,10 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		readerNode.Runtime.Root, readerOwner, group,
 		readerNode.Runtime.Identity.RaftID, readerNode.Runtime.Identity.NodeID,
 		readerNode.Runtime.Records, readerNode.GroupClient)
-	if err != nil || repair.Cut.Count != uint64(len(refs)+len(engineCases)) ||
+	// The Owner cut also contains the two Record CLI writes above: greeting and
+	// failover, in addition to the module-owned references and shared Engine data.
+	expectedReferences := uint64(len(refs) + len(engineCases) + 2)
+	if err != nil || repair.Cut.Count != expectedReferences ||
 		repair.Fetched+repair.AlreadyHeld != repair.Cut.Count {
 		t.Fatal("live Owner reference cut did not repair missing local Pack data", repair, err)
 	}
@@ -1215,7 +1243,20 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	nodes[3].process = interruptedFourth
 	nodes[3].stop, wait = startJoinTestServer(t, interruptedFourth)
 	wait()
+	_, repairTLS, err := config.LoadTLS(nodes[3].store, interruptedFourth.Runtime.Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairNode, found, err := interruptedFourth.Runtime.Root.RootMember(interruptedFourth.Runtime.Identity.RaftID)
+	if err != nil || !found {
+		t.Fatal("repair destination registration missing", err)
+	}
+	nextDiagnostic := time.Now().Add(15 * time.Second)
 	for !strings.Contains(reports.String(), "reference-source-failover") {
+		if time.Now().After(nextDiagnostic) {
+			t.Logf("waiting for failed repair sweep: %+v", probePeerRepair(ctx, interruptedFourth.Runtime.Identity, repairTLS, repairNode))
+			nextDiagnostic = time.Now().Add(15 * time.Second)
+		}
 		select {
 		case <-ctx.Done():
 			t.Fatal("background repair did not report its unresolved reference", reports.String(), ctx.Err())
@@ -1236,6 +1277,10 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		nodes[i].stop, wait = startJoinTestServer(t, restored)
 		wait()
 	}
+	// Give the final recovery its own bounded window, including on a one-core
+	// VPS; earlier setup must not consume the destination's entire deadline.
+	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 45*time.Second)
+	defer recoveryCancel()
 	recoveredFourth, err := openServerWithMux([]string{"--store", nodes[3].store, "--listen", nodes[3].address}, io.Discard, mux)
 	if err != nil {
 		t.Fatal("restart repair destination after source outage", err)
@@ -1244,26 +1289,26 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	nodes[3].stop, wait = startJoinTestServer(t, recoveredFourth)
 	wait()
 	for {
-		if _, err := recoveredFourth.Runtime.Records.Verify(ctx, recovery.descriptor); err == nil {
+		if _, err := recoveredFourth.Runtime.Records.Verify(recoveryCtx, recovery.descriptor); err == nil {
 			break
 		} else if !errors.Is(err, records.ErrNotHeld) {
 			t.Fatal("restarted Node could not verify fallback repair", err)
 		}
 		select {
-		case <-ctx.Done():
-			t.Fatal("restarted Node did not automatically repair from surviving source", ctx.Err())
+		case <-recoveryCtx.Done():
+			t.Fatal("restarted Node did not automatically repair from surviving source", recoveryCtx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
 	for {
-		if _, err := nodes[2].process.Runtime.Records.Verify(ctx, recovery.descriptor); err == nil {
+		if _, err := nodes[2].process.Runtime.Records.Verify(recoveryCtx, recovery.descriptor); err == nil {
 			break
 		} else if !errors.Is(err, records.ErrNotHeld) {
 			t.Fatal("second old member could not verify repair", err)
 		}
 		select {
-		case <-ctx.Done():
-			t.Fatal("second old member did not restore the physical majority", ctx.Err())
+		case <-recoveryCtx.Done():
+			t.Fatal("second old member did not restore the physical majority", recoveryCtx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -1276,7 +1321,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		LocalNodeID: recoveredFourth.Runtime.Identity.NodeID, Store: recoveredFourth.Runtime.Records,
 		Observer: recoveredFourth.GroupClient, Fetcher: recoveredFourth.GroupClient}
 	for {
-		ready, err := recoveryReader.ReadLocal(ctx, recovery.target, recovery.key)
+		ready, err := recoveryReader.ReadLocal(recoveryCtx, recovery.target, recovery.key)
 		if err == nil {
 			if !bytes.Equal(ready.Body, recovery.body) || ready.RegionGeneration != 2 {
 				t.Fatal("recovered local read differs from immutable source", ready)
@@ -1284,9 +1329,72 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 			break
 		}
 		select {
-		case <-ctx.Done():
+		case <-recoveryCtx.Done():
 			t.Fatal("surviving three-Node majority did not reconfirm repaired data", err)
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+}
+
+func TestSingleRegionThreeNodeMajorityWriteRemainsLocalReady(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	mux := referenceTestMux(t)
+	store := filepath.Join(t.TempDir(), "n1")
+	if err := runInit([]string{"--store", store}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	first, err := openServerWithMux([]string{"--store", store, "--listen", "127.0.0.1:0"}, io.Discard, mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, wait := startJoinTestServer(t, first)
+	wait()
+	firstNode, found, err := first.Runtime.Root.Node(first.Runtime.Identity.RaftID)
+	if err != nil || !found {
+		t.Fatal("initial Node is not registered", err)
+	}
+	for i := 0; i < 2; i++ {
+		_, ticket := joinTestTicket(t, store, firstNode.Address)
+		peerStore := filepath.Join(t.TempDir(), "node")
+		peer, err := openJoiningServerWithMux(ctx, []string{"--store", peerStore,
+			"--listen", "127.0.0.1:0", "--ticket-file", ticket}, nil, io.Discard, mux)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, ready := startJoinTestServer(t, peer)
+		ready()
+	}
+	group := regiongroups.GroupID("default")
+	for {
+		progress, ready, err := first.Runtime.Root.RegionProgress(group)
+		if err == nil && ready && progress.Eligible && progress.Pending == nil && len(progress.Current.Nodes) == 3 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("single Region did not confirm three voters", err)
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	if err := saveLocalContext(store, first.Runtime.Identity, first.LocalAddress(), firstNode.Address, firstNode.Address); err != nil {
+		t.Fatal("select local entry Node", err)
+	}
+	command := func(args ...string) []byte {
+		t.Helper()
+		var out, diagnostics bytes.Buffer
+		if code := Run(ctx, args, &out, &diagnostics); code != 0 {
+			t.Fatalf("%v failed: %s", args[:2], diagnostics.String())
+		}
+		return out.Bytes()
+	}
+	command("dataset", "create", "--request-id", "single-region-create", "single-region", "items")
+	var result struct {
+		State string `json:"state"`
+	}
+	encoded := command("record", "put", "--request-id", "single-region-write", "single-region", "items", "key", "value")
+	if err := json.Unmarshal(encoded, &result); err != nil || result.State != string(enginedata.WriteLocalReady) {
+		t.Fatal("single-Region majority did not preserve LocalReady", string(encoded), err)
 	}
 }

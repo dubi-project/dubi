@@ -30,6 +30,7 @@ import (
 // persistent stores on ONE host. This proves automatic Root voter operation,
 // not data Placement, independent Region hardware, or physical disk failure.
 func TestManagedRootTopologyAutomaticQuorumFailoverAndColdRestart(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	for _, regions := range [][]string{{"default", "default", "default"}, {"west", "east", "north"}, {"west", "west", "west", "east", "east", "east", "north", "north", "north"}} {
 		t.Run(fmt.Sprint(regions), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)

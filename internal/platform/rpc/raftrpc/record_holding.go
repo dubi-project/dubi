@@ -73,6 +73,12 @@ func decodeHoldingDescriptor(encoded []byte) (records.Descriptor, error) {
 	return d, nil
 }
 
+// DecodeRecordDescriptor applies the shared strict schema and message bound
+// to platform-owned record RPCs outside this package.
+func DecodeRecordDescriptor(encoded []byte) (records.Descriptor, error) {
+	return decodeHoldingDescriptor(encoded)
+}
+
 func (s *RecordHoldingServer) Observe(ctx context.Context, req *raftwire.ObserveRecordHoldingRequest) (*raftwire.ObserveRecordHoldingResponse, error) {
 	started := time.Now()
 	recordID := "invalid"
@@ -104,7 +110,23 @@ func (s *RecordHoldingServer) Observe(ctx context.Context, req *raftwire.Observe
 	}
 	defer releaseSlot()
 	phaseStarted = time.Now()
-	before, _, err := s.qualify(ctx, req.FromRaftId)
+	rootCut, hasRootCut, cutErr := confirmedRootCutFromMetadata(ctx)
+	if cutErr != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Root authorization cut")
+	}
+	var before [2]rootstate.Node
+	var index uint64
+	if hasRootCut {
+		before, index, err = s.qualifyAtRootCut(ctx, req.FromRaftId, rootCut)
+		if status.Code(err) == codes.Unavailable {
+			// A current sender cut can reach a lagging receiver before its Root
+			// FSM applies it. Preserve availability by obtaining a fresh cut.
+			hasRootCut = false
+			before, index, err = s.qualify(ctx, req.FromRaftId)
+		}
+	} else {
+		before, index, err = s.qualify(ctx, req.FromRaftId)
+	}
 	traceRecordRPC("holding", recordID, "root_qualify_before", phaseStarted)
 	if err != nil {
 		return nil, err
@@ -115,7 +137,12 @@ func (s *RecordHoldingServer) Observe(ctx context.Context, req *raftwire.Observe
 	// Revalidate even after a missing/corrupt result. Do not disclose current
 	// storage information to a peer whose authorization expired during IO.
 	phaseStarted = time.Now()
-	after, index, err := s.qualify(ctx, req.FromRaftId)
+	var after [2]rootstate.Node
+	if hasRootCut {
+		after, _, err = s.qualifyAtRootCut(ctx, req.FromRaftId, index)
+	} else {
+		after, index, err = s.qualify(ctx, req.FromRaftId)
+	}
 	traceRecordRPC("holding", recordID, "root_qualify_after", phaseStarted)
 	if err != nil {
 		return nil, err
@@ -176,6 +203,21 @@ func (s *RecordHoldingServer) qualify(ctx context.Context, caller uint64) ([2]ro
 	index, err := s.host.ReadIndex(ctx, raft.RootGroupID)
 	if err != nil {
 		return nodes, 0, observationWaitError(err)
+	}
+	return s.qualifyAtRootCut(ctx, caller, index)
+}
+
+// qualifyAtRootCut verifies this RPC's exact TLS identities against locally
+// applied Root membership at or beyond a cut already confirmed by the sender.
+// It avoids a second global ReadIndex on an in-flight transfer; a missing or
+// unapplied cut is never treated as authorization.
+func (s *RecordHoldingServer) qualifyAtRootCut(ctx context.Context, caller, index uint64) ([2]rootstate.Node, uint64, error) {
+	var nodes [2]rootstate.Node
+	if err := ctx.Err(); err != nil {
+		return nodes, 0, status.FromContextError(err).Err()
+	}
+	if err := authorizeSender(ctx, caller, s.authorize); err != nil {
+		return nodes, 0, err
 	}
 	if index == 0 || s.root.AppliedIndex() < index {
 		return nodes, 0, status.Error(codes.Unavailable, "Root authorization cut is not applied")
@@ -256,6 +298,7 @@ func (client *GroupClient) ObserveRecordHolding(ctx context.Context, target uint
 	}
 	ctx, cancel := context.WithTimeout(ctx, recordHoldingTimeout)
 	defer cancel()
+	ctx = appendConfirmedRootCut(ctx)
 	if _, err := client.peer(target); err != nil {
 		return HoldingObservation{}, err
 	}

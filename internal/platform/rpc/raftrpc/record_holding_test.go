@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -354,6 +355,67 @@ func TestRecordHoldingChecksStorageAndCurrentAuthorization(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecordHoldingQualifiesAtSenderConfirmedRootCutWithoutGlobalRead(t *testing.T) {
+	f := newHoldingFixture(t)
+	cut := f.root.AppliedIndex()
+	f.server.host = regionBarrierFunc(func(context.Context, string) (uint64, error) {
+		return 0, errors.New("unexpected global Root ReadIndex")
+	})
+	if _, gotCut, err := f.server.qualifyAtRootCut(f.ctx, f.caller.RaftID, cut); err != nil || gotCut != cut {
+		t.Fatal("applied confirmed cut did not qualify current peers", gotCut, err)
+	}
+	if err := f.root.ApplyMembership(f.root.AppliedIndex()+1, &raftpb.ConfState{
+		Voters: []uint64{f.local.RaftID}, Learners: []uint64{f.other.RaftID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.server.qualifyAtRootCut(f.ctx, f.caller.RaftID, cut); status.Code(err) != codes.PermissionDenied {
+		t.Fatal("removed caller passed a locally applied Root membership check", err)
+	}
+	if _, _, err := f.server.qualifyAtRootCut(f.ctx, f.caller.RaftID, f.root.AppliedIndex()+1); status.Code(err) != codes.Unavailable {
+		t.Fatal("unapplied Root cut was treated as authorization", err)
+	}
+}
+
+func TestRecordHoldingUsesSenderCutAndStillRechecksMembershipAfterDiskIO(t *testing.T) {
+	t.Run("reuses cut", func(t *testing.T) {
+		f := newHoldingFixture(t)
+		cut := f.root.AppliedIndex()
+		rootReads := 0
+		f.server.host = regionBarrierFunc(func(context.Context, string) (uint64, error) {
+			rootReads++
+			return 0, errors.New("unexpected global Root ReadIndex")
+		})
+		ctx := metadata.NewIncomingContext(f.ctx, metadata.Pairs(confirmedRootCutMetadataKey, fmt.Sprint(cut)))
+		response, err := f.server.Observe(ctx, f.request)
+		if err != nil || response.GetRootConfirmedIndex() != cut || rootReads != 0 {
+			t.Fatal("holding proof did not reuse the authenticated request cut", response, rootReads, err)
+		}
+	})
+	t.Run("membership changes during disk IO", func(t *testing.T) {
+		f := newHoldingFixture(t)
+		cut := f.root.AppliedIndex()
+		rootReads := 0
+		f.server.host = regionBarrierFunc(func(context.Context, string) (uint64, error) {
+			rootReads++
+			return 0, errors.New("unexpected global Root ReadIndex")
+		})
+		ctx := metadata.NewIncomingContext(f.ctx, metadata.Pairs(confirmedRootCutMetadataKey, fmt.Sprint(cut)))
+		f.server.store = holdingVerifyFunc(func(context.Context, records.Descriptor) (records.Holding, error) {
+			if err := f.root.ApplyMembership(f.root.AppliedIndex()+1, &raftpb.ConfState{
+				Voters: []uint64{f.local.RaftID}, Learners: []uint64{f.other.RaftID},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return f.holding, nil
+		})
+		response, err := f.server.Observe(ctx, f.request)
+		if status.Code(err) != codes.PermissionDenied || response != nil || rootReads != 0 {
+			t.Fatal("membership removal during disk IO escaped cut-bound revalidation", response, rootReads, err)
+		}
+	})
 }
 
 func TestRecordHoldingResponseRejectsForgedIdentityAndDescriptor(t *testing.T) {

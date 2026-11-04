@@ -1,10 +1,73 @@
 package raft
 
 import (
+	"errors"
 	"testing"
 
 	etcdraft "go.etcd.io/raft/v3"
+	"go.etcd.io/raft/v3/raftpb"
 )
+
+func TestFencedMembershipAlreadyAppliedIsIdempotentButStaleCutIsRejected(t *testing.T) {
+	transport := &queuedTransport{groups: make(map[uint64]*Group), blocked: make(map[uint64]bool)}
+	for _, id := range []uint64{71, 72} {
+		root := t.TempDir()
+		options := GroupOptions{StoreRoot: root, GroupID: "regional", RaftID: id,
+			State: &testTransferState{testState: openTestState(t, root)}, Transport: transport, Joining: id == 72}
+		if id == 71 {
+			options.BootstrapPeers = []uint64{71}
+		}
+		group, err := OpenGroup(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport.groups[id] = group
+		t.Cleanup(func() { _ = group.Close() })
+	}
+	leader := transport.groups[71]
+	if err := leader.Campaign(); err != nil {
+		t.Fatal(err)
+	}
+	transport.deliver(t)
+	apply := func(operation raftpb.ConfChangeType) {
+		t.Helper()
+		cut, err := leader.MembershipCut()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := leader.ChangeMembership(cut, 72, operation); err != nil {
+			t.Fatal(err)
+		}
+		transport.deliver(t)
+	}
+	repeat := func(operation raftpb.ConfChangeType) {
+		t.Helper()
+		before, err := leader.storage.LastIndex()
+		if err != nil {
+			t.Fatal(err)
+		}
+		apply(operation)
+		if after, err := leader.storage.LastIndex(); err != nil || after != before {
+			t.Fatal("already-applied membership appended another command", before, after, err)
+		}
+	}
+	apply(raftpb.ConfChangeType_ConfChangeAddLearnerNode)
+	repeat(raftpb.ConfChangeType_ConfChangeAddLearnerNode)
+	stale, err := leader.MembershipCut()
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(raftpb.ConfChangeType_ConfChangeAddNode)
+	repeat(raftpb.ConfChangeType_ConfChangeAddNode)
+	apply(raftpb.ConfChangeType_ConfChangeRemoveNode)
+	repeat(raftpb.ConfChangeType_ConfChangeRemoveNode)
+	if err := leader.ChangeMembership(stale, 72, raftpb.ConfChangeType_ConfChangeRemoveNode); !errors.Is(err, ErrMembershipChanged) {
+		t.Fatal("idempotence bypassed the membership CAS", err)
+	}
+	if err := leader.RemoveMember(72); err == nil {
+		t.Fatal("unfenced removal unexpectedly became idempotent")
+	}
+}
 
 // A matched log is historical evidence, not evidence that the learner is
 // still reachable. Promoting this disconnected second node would change a

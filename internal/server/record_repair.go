@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordrepair"
+	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
 	"github.com/dubi-project/dubi/internal/platform/cluster/regionfence"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
@@ -31,10 +33,25 @@ type recordRepairService struct {
 	client  *raftrpc.GroupClient
 	peer    raftrpc.AuthorizePeer
 	slots   chan struct{}
+	io      *resource.Maintenance
 }
 
 func newRecordRepairService(runtime *node.Runtime, client *raftrpc.GroupClient, peer raftrpc.AuthorizePeer) *recordRepairService {
 	return &recordRepairService{runtime: runtime, client: client, peer: peer, slots: make(chan struct{}, 1)}
+}
+
+// acquire waits for the per-Node repair slot instead of rejecting otherwise
+// valid repair work while another bounded Pack transfer is in progress. Geo
+// repair is initiated independently by several Nodes; immediate rejection
+// makes all of them retry the same busy destination and can keep durable repair
+// debt alive indefinitely. The caller's deadline still bounds queueing.
+func (s *recordRepairService) acquire(ctx context.Context) error {
+	select {
+	case s.slots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return status.FromContextError(ctx.Err()).Err()
+	}
 }
 
 func (s *recordRepairService) authorizeMember(ctx context.Context, caller uint64) (rootstate.Node, uint64, error) {
@@ -68,7 +85,10 @@ func (s *recordRepairService) authorizeMember(ctx context.Context, caller uint64
 	return registered, index, nil
 }
 
-func (s *recordRepairService) authorize(ctx context.Context, caller uint64) (rootstate.Node, uint64, error) {
+// authorizeRootLeader is reserved for Fill, which participates in a Root-led
+// membership handoff. Ordinary Repair only writes one destination Node's
+// local immutable-record store and is authorized by current Root membership.
+func (s *recordRepairService) authorizeRootLeader(ctx context.Context, caller uint64) (rootstate.Node, uint64, error) {
 	registered, index, err := s.authorizeMember(ctx, caller)
 	if err != nil {
 		return rootstate.Node{}, 0, err
@@ -89,27 +109,40 @@ func (s *recordRepairService) Fill(ctx context.Context, request *raftwire.FillRe
 	if err != nil || seal.Intent.Previous.Fence.GroupID != request.GroupId {
 		return nil, status.Error(codes.InvalidArgument, "invalid record repair seal")
 	}
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	default:
-		return nil, status.Error(codes.ResourceExhausted, "record repair already running")
+	operation := "candidate-fill"
+	if request.VerifyCandidate {
+		operation = "candidate-verify"
 	}
+	// Two bounded timings under the existing opt-in switch distinguish waiting
+	// for admission/authority from the sealed backfill or verification itself.
+	// No tenant key, seal, request ID or payload is logged.
+	ctx = withDataTrace(ctx, operation, "")
+	started := time.Now()
+	defer recordwrite.Trace(ctx, "repair.candidate_total", started)
+	if err := s.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer func() { <-s.slots }()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	before, _, err := s.authorize(ctx, request.FromRaftId)
+	before, _, err := s.authorizeRootLeader(ctx, request.FromRaftId)
 	if err != nil {
 		return nil, err
 	}
 	var report recordrepair.Report
+	// New data members may remain Root learners. All backfill/revalidation
+	// barriers must use the Runtime's authenticated Root-voter read path;
+	// a direct Host Root read can wait indefinitely on an admitted learner.
+	started = time.Now()
 	if request.VerifyCandidate {
-		report, err = recordrepair.VerifyPendingCandidateLocal(ctx, s.runtime.Host, s.runtime.Root, s.runtime.Identity.RaftID,
+		report, err = recordrepair.VerifyPendingCandidateLocal(ctx, s.runtime, s.runtime.Root, s.runtime.Identity.RaftID,
 			seal, s.runtime.Snapshots, s.runtime.Records, s.client)
 		report.AlreadyHeld = report.References // Verification only; no physical copy on this RPC.
 	} else {
-		report, err = recordrepair.FillPendingLocal(ctx, s.runtime.Host, s.runtime.Root, s.runtime.Identity.RaftID,
+		report, err = recordrepair.FillPendingLocal(ctx, s.runtime, s.runtime.Root, s.runtime.Identity.RaftID,
 			seal, s.runtime.Snapshots, s.runtime.Records, s.client)
 	}
+	recordwrite.Trace(ctx, "repair.candidate_work", started)
 	if err != nil {
 		return nil, err
 	}
@@ -154,12 +187,10 @@ func (s *recordRepairService) Repair(ctx context.Context, request *raftwire.Repa
 	if decoder.Decode(&descriptor) != nil || decoder.Decode(new(struct{})) != io.EOF || descriptor.Validate() != nil || descriptor.GroupID != request.GroupId {
 		return nil, status.Error(codes.InvalidArgument, "invalid record repair descriptor")
 	}
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	default:
-		return nil, status.Error(codes.ResourceExhausted, "record repair already running")
+	if err := s.acquire(ctx); err != nil {
+		return nil, err
 	}
+	defer func() { <-s.slots }()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	caller, _, err := s.authorizeMember(ctx, request.FromRaftId)
@@ -170,6 +201,7 @@ func (s *recordRepairService) Repair(ctx context.Context, request *raftwire.Repa
 	if err != nil || !member {
 		return nil, status.Error(codes.FailedPrecondition, "record repair source is not a current Root member")
 	}
+	ctx = resource.WithMaintenance(ctx, s.io)
 	var result raftrpc.RecordFetchResult
 	if request.ReplaceExisting {
 		result, err = s.client.RepairRecord(ctx, source, descriptor, s.runtime.Records)
@@ -179,7 +211,13 @@ func (s *recordRepairService) Repair(ctx context.Context, request *raftwire.Repa
 	if err != nil {
 		return nil, err
 	}
-	after, index, err := s.authorize(ctx, request.FromRaftId)
+	// Physical record repair is a node-local storage operation initiated by
+	// any authenticated Root member. Do not require the caller to remain the
+	// Root leader here: unlike Fill, Repair does not change cluster membership
+	// and Geo repair workers run on every Node. Reconfirm membership and identity
+	// after the destination write so a removed/replaced caller cannot complete
+	// an in-flight request.
+	after, index, err := s.authorizeMember(ctx, request.FromRaftId)
 	if err != nil {
 		return nil, err
 	}

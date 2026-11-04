@@ -256,6 +256,17 @@ message LocalRepairIssue {
   string group_id = 1;
   string error = 2;
 }
+// A bounded diagnostic of local scanning, never a data durability certificate.
+message RepairScanProgress {
+  string group_id = 1;
+  string phase = 2;
+  uint64 scanned = 3;
+  uint64 unresolved = 4;
+  bool needs_clean_sweep = 5;
+  int64 started_unix = 6;
+  int64 last_progress_unix = 7;
+  int64 last_clean_unix = 8;
+}
 message LocalRepairStatusResponse {
   bool worker_enabled = 1;
   int64 last_check_unix = 2;
@@ -270,6 +281,23 @@ message LocalRepairStatusResponse {
   uint64 raft_id = 11;
   ResourceBudgetStatus request_budget = 12;
   repeated VolumeHealthStatus volumes = 13;
+  repeated RepairScanProgress scan_progress = 14;
+  uint32 total_scan_groups = 15;
+  // Distinguishes an empty local scan set from an older server with no support.
+  bool scan_progress_supported = 16;
+  uint64 writable_bytes = 17;
+  bool capacity_supported = 18;
+  MaintenanceIOStatus maintenance_io = 19;
+  // Deduplicated healthy Active filesystems; observations, not reservations.
+  uint64 capacity_total_bytes = 20;
+  uint64 capacity_available_bytes = 21;
+}
+message MaintenanceIOStatus {
+ string active = 1;
+ uint64 foreground = 2;
+ uint64 bytes_per_second = 3;
+ uint64 accounted_bytes = 4;
+ uint64 deferred = 5;
 }
 message VolumeMigrationStatus {
   bool active = 1;
@@ -278,6 +306,8 @@ message VolumeMigrationStatus {
   uint64 migrated = 4;
   int64 started_unix = 5;
   string last_error = 6;
+  string target_volume_id = 7;
+  string source_pack_id = 8;
 }
 message VolumeWriteIssue {
   string volume_id = 1;

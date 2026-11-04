@@ -31,6 +31,7 @@ type LivePageReport struct {
 	AlreadyHeld uint64
 	Fetched     uint64
 	Unrepaired  uint64
+	Offloaded   uint64                        // Deliberately absent locally; fresh remote majority verified.
 	Failures    []error                       // Bounded by the page limit; debt is retried next sweep.
 	References  []enginestate.RecordReference // Bounded by the requested page limit.
 	Unresolved  []enginestate.RecordReference // Bounded references eligible for Geo repair retry.
@@ -64,7 +65,7 @@ var errRemoteRepairCompleted = errors.New("remote repair completed; local holdin
 func RepairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root placement.RootReader,
 	owner *enginestate.State, groupID string, localID uint64, localNodeID string,
 	destination *records.Store, client SourceClient) (LiveReport, error) {
-	page, err := repairCurrentLocal(ctx, barrier, root, owner, groupID, localID, localNodeID, destination, client, nil, 0)
+	page, err := repairCurrentLocal(ctx, barrier, root, owner, groupID, localID, localNodeID, destination, client, nil, 0, false)
 	if err != nil {
 		return LiveReport{}, err
 	}
@@ -83,13 +84,25 @@ func RepairCurrentLocalPage(ctx context.Context, barrier placement.ReadBarrier, 
 	if limit == 0 || limit > enginestate.MaxLiveReferencePage {
 		return LivePageReport{}, errors.New("invalid live repair page limit")
 	}
-	return repairCurrentLocal(ctx, barrier, root, owner, groupID, localID, localNodeID, destination, client, cursor, limit)
+	return repairCurrentLocal(ctx, barrier, root, owner, groupID, localID, localNodeID, destination, client, cursor, limit, false)
+}
+
+// RepairCurrentLocalPageWithRetry gives a bounded number of transiently failed
+// rows one extra attempt at the tail of the page before reporting durable debt.
+// All original cohort, publication, source identity and byte checks remain.
+func RepairCurrentLocalPageWithRetry(ctx context.Context, barrier placement.ReadBarrier, root placement.RootReader,
+	owner *enginestate.State, groupID string, localID uint64, localNodeID string,
+	destination *records.Store, client SourceClient, cursor []byte, limit uint32) (LivePageReport, error) {
+	if limit == 0 || limit > enginestate.MaxLiveReferencePage {
+		return LivePageReport{}, errors.New("invalid live repair page limit")
+	}
+	return repairCurrentLocal(ctx, barrier, root, owner, groupID, localID, localNodeID, destination, client, cursor, limit, true)
 }
 
 func repairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root placement.RootReader,
 	owner *enginestate.State, groupID string, localID uint64, localNodeID string,
 	destination *records.Store, client SourceClient, cursor []byte,
-	limit uint32) (LivePageReport, error) {
+	limit uint32, retry bool) (LivePageReport, error) {
 	if ctx == nil || barrier == nil || root == nil || owner == nil || localID == 0 ||
 		localNodeID == "" || destination == nil || client == nil || owner.GroupID() != groupID {
 		return LivePageReport{}, errors.New("live record repair requires Owner, Root, Store and authenticated client")
@@ -111,11 +124,20 @@ func repairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root
 		return LivePageReport{}, errors.New("repair destination is not in the confirmed cohort")
 	}
 	var report LivePageReport
+	_, batchSupported := client.(batchSourceClient)
+	var references []enginestate.RecordReference
 	visit := func(ref enginestate.RecordReference) error {
+		if limit != 0 && batchSupported {
+			references = append(references, ref)
+			return nil
+		}
 		return processRepairReference(ctx, plan, ref, localID, destination, client, limit, &report)
 	}
 	var page enginestate.LiveReferencePage
 	for {
+		if limit != 0 && batchSupported {
+			references = references[:0]
+		}
 		if limit == 0 {
 			var cut enginestate.LiveReferenceCut
 			cut, err = owner.WalkCurrentReferences(ctx, barrier, visit)
@@ -137,6 +159,37 @@ func repairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root
 	if err != nil {
 		return LivePageReport{}, err
 	}
+	if len(references) != 0 {
+		prefilled, err := prefillRepairPage(ctx, plan, references, localID, destination, client.(batchSourceClient))
+		if err != nil {
+			return LivePageReport{}, err
+		}
+		for len(references) != 0 {
+			count := offloadPageSize(references)
+			page := references[:count]
+			observe, err := observeOffloadPage(plan, page, destination, client)
+			if err != nil {
+				return LivePageReport{}, err
+			}
+			for _, ref := range page {
+				heldBefore := report.AlreadyHeld
+				if err := processRepairReferenceObserved(ctx, plan, ref, localID, destination, client, observe, limit, &report); err != nil {
+					return LivePageReport{}, err
+				}
+				id, _ := ref.Descriptor.ID()
+				if prefilled[id] && report.AlreadyHeld > heldBefore {
+					report.AlreadyHeld--
+					report.Fetched++
+				}
+			}
+			references = references[count:]
+		}
+	}
+	if retry && len(report.Unresolved) != 0 {
+		if err := retryTransientPage(ctx, barrier, owner, plan, localID, destination, client, &report); err != nil {
+			return LivePageReport{}, err
+		}
+	}
 	latest, err := placement.ReadLocalPlan(ctx, barrier, root, groupID)
 	if err != nil {
 		return LivePageReport{}, err
@@ -150,6 +203,20 @@ func repairCurrentLocal(ctx context.Context, barrier placement.ReadBarrier, root
 
 func processRepairReference(ctx context.Context, plan placement.LocalPlan, ref enginestate.RecordReference,
 	localID uint64, destination *records.Store, client SourceClient, limit uint32, report *LivePageReport) error {
+	return processRepairReferenceObserved(ctx, plan, ref, localID, destination, client, client.ObserveRecordHolding, limit, report)
+}
+
+func processRepairReferenceObserved(ctx context.Context, plan placement.LocalPlan, ref enginestate.RecordReference,
+	localID uint64, destination *records.Store, client SourceClient, observe offloadObserve, limit uint32, report *LivePageReport) error {
+	if offloaded, err := keepCapacityOffloadObserved(ctx, plan, ref.Descriptor, localID, destination, observe); err != nil {
+		return err
+	} else if offloaded {
+		report.Offloaded++
+		if limit != 0 {
+			report.References = append(report.References, ref)
+		}
+		return nil
+	}
 	fetched, err := repairReference(ctx, plan, ref, localID, destination, client)
 	if err != nil {
 		if limit == 0 || ctx.Err() != nil {
@@ -176,6 +243,7 @@ func repairReference(ctx context.Context, plan placement.LocalPlan, ref enginest
 	d := ref.Descriptor
 	relocate := false
 	localUnavailable := false
+	var localFailure error
 	if _, err := destination.Verify(ctx, d); err == nil {
 		return false, nil
 	} else if !errors.Is(err, records.ErrNotHeld) {
@@ -185,6 +253,7 @@ func repairReference(ctx context.Context, plan placement.LocalPlan, ref enginest
 		if checkErr != nil {
 			if errors.Is(checkErr, records.ErrUnavailable) {
 				localUnavailable = true
+				localFailure = checkErr
 				// A closed or otherwise unusable local Store cannot be repaired
 				// through the ordinary source-fetch path.  Do not even probe
 				// cohort sources unless the caller supplied the explicit remote
@@ -250,26 +319,49 @@ func repairReference(ctx context.Context, plan placement.LocalPlan, ref enginest
 		if localUnavailable {
 			transferErr = remoteRepair(ctx, plan, localID, source, d.GroupID, d, client)
 			remotePublished = transferErr == nil
-		} else if relocate {
-			_, transferErr = client.RepairRecord(attempt, source, d, destination)
-			if transferErr != nil {
-				if remoteErr := remoteRepair(ctx, plan, localID, source, d.GroupID, d, client); remoteErr == nil {
-					transferErr, remotePublished = nil, true
-				}
-			}
 		} else {
-			_, transferErr = client.FetchRecord(attempt, source, d, destination)
+			if relocate {
+				_, transferErr = client.RepairRecord(attempt, source, d, destination)
+			} else {
+				_, transferErr = client.FetchRecord(attempt, source, d, destination)
+			}
 			if transferErr != nil {
+				// Revocation, identity/registration changes and malformed requests
+				// are hard failures even if a different destination could accept
+				// the bytes. A remote write is not an authorization fallback.
+				switch status.Code(transferErr) {
+				case codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument, codes.FailedPrecondition:
+					cancel()
+					return false, transferErr
+				}
 				if remoteErr := remoteRepair(ctx, plan, localID, source, d.GroupID, d, client); remoteErr == nil {
+					localFailure = transferErr
 					transferErr, remotePublished = nil, true
 				}
 			}
 		}
 		if remotePublished {
-			// This worker is repairing one specific local Node. A successful
-			// remote target write must not make this local Node look healthy or
-			// advance its local confirmation; retain the local debt explicitly.
-			return false, errRemoteRepairCompleted
+			cancel()
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			// A lost transfer reply or another worker may have completed the
+			// local write. Only verified local bytes can clear this Node's debt;
+			// a successful write at a different destination is insufficient.
+			if _, err := destination.Verify(ctx, d); err == nil {
+				return true, nil
+			}
+			debt := errRemoteRepairCompleted
+			if localFailure != nil {
+				debt = fmt.Errorf("%w: local repair failed: %w", errRemoteRepairCompleted, localFailure)
+			}
+			if localUnavailable {
+				return false, debt
+			}
+			// The local Store was usable. Keep trying the other confirmed
+			// sources instead of ending this local repair after a remote fallback.
+			failures = append(failures, fmt.Errorf("source Node %d: %w", source.RaftID, debt))
+			continue
 		}
 		if err := transferErr; err != nil {
 			cancel()
@@ -288,7 +380,15 @@ func repairReference(ctx context.Context, plan placement.LocalPlan, ref enginest
 		}
 		return true, nil
 	}
-	return false, errors.Join(append([]error{errors.New("no confirmed cohort Node supplied referenced bytes")}, failures...)...)
+	err = errors.Join(append([]error{errors.New("no confirmed cohort Node supplied referenced bytes")}, failures...)...)
+	transient := len(failures) != 0
+	for _, failure := range failures {
+		transient = transient && transientSourceError(failure)
+	}
+	if transient {
+		err = &transientSourceFailure{err}
+	}
+	return false, err
 }
 
 func remoteRepair(ctx context.Context, plan placement.LocalPlan, localID uint64, source rootstate.Node,

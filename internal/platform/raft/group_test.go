@@ -585,6 +585,92 @@ func TestRootReadIndexHeartbeatSkipsLearnersOnly(t *testing.T) {
 	}
 }
 
+func TestRootLearnerRestartReceivesPeriodicHeartbeatDuringPendingReads(t *testing.T) {
+	transport := &queuedTransport{groups: make(map[uint64]*Group), blocked: make(map[uint64]bool), groupID: RootGroupID}
+	for _, id := range []uint64{31, 32} {
+		root := t.TempDir()
+		group, err := OpenGroup(GroupOptions{StoreRoot: root, GroupID: RootGroupID, RaftID: id,
+			BootstrapPeers: []uint64{31, 32}, State: openTestState(t, root), Transport: transport})
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport.groups[id] = group
+		t.Cleanup(func() { _ = group.Close() })
+	}
+	transport.deliver(t)
+	leader := transport.groups[31]
+	if err := leader.Campaign(); err != nil {
+		t.Fatal(err)
+	}
+	transport.deliver(t)
+	root := t.TempDir()
+	learner, err := OpenGroup(GroupOptions{StoreRoot: root, GroupID: RootGroupID, RaftID: 33,
+		Joining: true, State: openTestState(t, root), Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = learner.Close() })
+	transport.groups[33] = learner
+	if err := leader.AddLearner(33); err != nil {
+		t.Fatal(err)
+	}
+	transport.deliver(t)
+	if conf, err := learner.Membership(); err != nil || !containsLearner(conf, 33) {
+		t.Fatal("learner did not catch up before restart", conf, err)
+	}
+	if err := learner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	learner, err = OpenGroup(GroupOptions{StoreRoot: root, GroupID: RootGroupID, RaftID: 33,
+		State: openTestState(t, root), Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.groups[33] = learner
+	before, err := learner.Status()
+	if err != nil || before.LeaderID != 0 {
+		t.Fatal("restart unexpectedly retained a volatile leader hint", before, err)
+	}
+	// Leave voter acknowledgements queued so every periodic heartbeat carries
+	// the pending ReadIndex context. Per-read traffic should still skip learners.
+	for i := byte(1); i <= 8; i++ {
+		if err := leader.mutate(func() error { leader.raw.ReadIndex([]byte{i}); return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, item := range transport.queue {
+		if item.message.GetTo() == 33 && item.message.GetType() == raftpb.MessageType_MsgHeartbeat {
+			t.Fatal("per-request Root read traffic reached a learner")
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if err := leader.Tick(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	heartbeats := 0
+	for _, item := range transport.queue {
+		if item.message.GetTo() == 33 && item.message.GetType() == raftpb.MessageType_MsgHeartbeat {
+			heartbeats++
+			if len(item.message.GetContext()) != 0 {
+				t.Fatal("learner keepalive retained a voter read acknowledgement context")
+			}
+		}
+	}
+	if heartbeats != 1 {
+		t.Fatalf("periodic learner heartbeats = %d, want 1 despite pending reads", heartbeats)
+	}
+	transport.deliver(t)
+	after, err := learner.Status()
+	if err != nil || after.LeaderID != 31 || after.AppliedIndex != before.AppliedIndex {
+		t.Fatal("restart did not learn the leader from a heartbeat without new log entries", before, after, err)
+	}
+	conf, err := learner.Membership()
+	if err != nil || !containsLearner(conf, 33) || containsVoter(conf, 33) {
+		t.Fatal("heartbeat changed learner membership", conf, err)
+	}
+}
+
 func TestGroupTransfersLeadershipToLaggingVoter(t *testing.T) {
 	transport := &queuedTransport{groups: make(map[uint64]*Group), blocked: make(map[uint64]bool)}
 	states := make(map[uint64]*testState)

@@ -45,6 +45,10 @@ type Host struct {
 	tickWG        sync.WaitGroup
 	closeDone     chan struct{}
 	closeErr      error
+	catchupBusy   bool
+	catchupCursor string
+	catchupWG     sync.WaitGroup
+	catchupErrors map[string]error
 }
 
 func OpenHost(options HostOptions) (*Host, error) {
@@ -72,7 +76,8 @@ func OpenHost(options HostOptions) (*Host, error) {
 	host := &Host{root: options.StoreRoot, identity: id, transport: options.Transport,
 		lock: lock, groups: make(map[string]*Group), errors: make(map[string]error),
 		stop: make(chan struct{}), done: make(chan struct{}), disk: disk,
-		opening: make(map[string]bool), ticking: make(map[string]bool), closeDone: make(chan struct{})}
+		opening: make(map[string]bool), ticking: make(map[string]bool), closeDone: make(chan struct{}),
+		catchupErrors: make(map[string]error)}
 	host.proposalGuard = func() error {
 		if err := disk.Check(); err != nil {
 			return err
@@ -297,17 +302,21 @@ func (h *Host) TickAll() error {
 func (h *Host) GroupError(groupID string) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.errors[groupID]
+	return errors.Join(h.errors[groupID], h.catchupErrors[groupID])
 }
 
 func (h *Host) run(interval time.Duration) {
 	defer close(h.done)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	catchup := time.NewTicker(catchupSnapshotInterval)
+	defer catchup.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			h.scheduleTicks()
+		case <-catchup.C:
+			h.scheduleCatchupSnapshots(catchupSnapshotEntries)
 		case <-h.stop:
 			return
 		}
@@ -370,6 +379,9 @@ func (h *Host) Close() error {
 			failures = append(failures, fmt.Errorf("close Raft Group %q: %w", id, err))
 		}
 	}
+	// Group.Close cancels an in-flight prepared build. Join its Host worker
+	// afterwards, before releasing the disk guard and process lock.
+	h.catchupWG.Wait()
 	failures = append(failures, h.disk.Close(), h.lock.Release())
 	h.mu.Lock()
 	h.closeErr = errors.Join(failures...)

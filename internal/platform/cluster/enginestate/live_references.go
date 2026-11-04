@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -35,7 +36,7 @@ const MaxLiveReferencePage = 1024
 // State.Close waits for this walk to release its snapshot.
 func (s *State) WalkCurrentReferences(ctx context.Context, barrier ReadBarrier,
 	visit func(RecordReference) error) (cut LiveReferenceCut, returnErr error) {
-	page, err := s.walkCurrentReferences(ctx, barrier, nil, 0, visit)
+	page, err := s.walkCurrentReferences(ctx, barrier, nil, 0, visit, nil)
 	return page.Cut, err
 }
 
@@ -45,12 +46,29 @@ func (s *State) WalkCurrentReferences(ctx context.Context, barrier ReadBarrier,
 // complete if its returned error is nil.
 func (s *State) WalkCurrentReferencesPage(ctx context.Context, barrier ReadBarrier,
 	cursor []byte, limit uint32, visit func(RecordReference) error) (LiveReferencePage, error) {
+	return s.walkReferencePage(ctx, barrier, cursor, limit, visit, nil)
+}
+
+// WalkCurrentReferencesWithGeoCoveragePage reads references and their coverage
+// receipts from the same bounded, quorum-confirmed Owner snapshot. Discovery
+// needs only one Owner barrier per page, not another barrier for every record.
+// Receipts are historical metadata; physical repair still verifies fresh bytes.
+// A visitor returning false ends a successful page after the current reference,
+// allowing discovery to bound queued repairs separately from metadata rows.
+func (s *State) WalkCurrentReferencesWithGeoCoveragePage(ctx context.Context, barrier ReadBarrier,
+	cursor []byte, limit uint32, visit func(RecordReference, GeoCoverageRecord, bool) (bool, error)) (LiveReferencePage, error) {
+	return s.walkReferencePage(ctx, barrier, cursor, limit, nil, visit)
+}
+
+func (s *State) walkReferencePage(ctx context.Context, barrier ReadBarrier,
+	cursor []byte, limit uint32, visit func(RecordReference) error,
+	visitGeo func(RecordReference, GeoCoverageRecord, bool) (bool, error)) (LiveReferencePage, error) {
 	if limit == 0 || limit > MaxLiveReferencePage ||
 		(len(cursor) != 0 && (!bytes.HasPrefix(cursor, recordReferencePrefix) ||
 			len(cursor) > maxLiveReferenceKeyBytes())) {
 		return LiveReferencePage{}, errors.New("invalid current reference page limit or cursor")
 	}
-	return s.walkCurrentReferences(ctx, barrier, cursor, limit, visit)
+	return s.walkCurrentReferences(ctx, barrier, cursor, limit, visit, visitGeo)
 }
 
 func maxLiveReferenceKeyBytes() int {
@@ -58,8 +76,9 @@ func maxLiveReferenceKeyBytes() int {
 }
 
 func (s *State) walkCurrentReferences(ctx context.Context, barrier ReadBarrier,
-	cursor []byte, limit uint32, visit func(RecordReference) error) (page LiveReferencePage, returnErr error) {
-	if s == nil || ctx == nil || barrier == nil || visit == nil {
+	cursor []byte, limit uint32, visit func(RecordReference) error,
+	visitGeo func(RecordReference, GeoCoverageRecord, bool) (bool, error)) (page LiveReferencePage, returnErr error) {
+	if s == nil || ctx == nil || barrier == nil || (visit == nil && visitGeo == nil) {
 		return page, errors.New("live record walk requires a context, Owner barrier and callback")
 	}
 	index, err := barrier.ReadIndex(ctx, s.groupID)
@@ -111,13 +130,23 @@ func (s *State) walkCurrentReferences(ctx context.Context, barrier ReadBarrier,
 		if err := validateCutReference(view, ref); err != nil {
 			return LiveReferencePage{}, fmt.Errorf("validate current record reference: %w", err)
 		}
-		if err := visit(ref); err != nil {
+		more := true
+		if visitGeo != nil {
+			coverage, found, err := cutGeoCoverage(view, ref, page.Cut.Index)
+			if err != nil {
+				return LiveReferencePage{}, fmt.Errorf("validate current Geo coverage: %w", err)
+			}
+			more, err = visitGeo(ref, coverage, found)
+			if err != nil {
+				return LiveReferencePage{}, err
+			}
+		} else if err := visit(ref); err != nil {
 			return LiveReferencePage{}, err
 		}
 		page.Cut.Count++
 		page.Cursor = key
 		iterator.Next()
-		if limit != 0 && page.Cut.Count == uint64(limit) {
+		if !more || (limit != 0 && page.Cut.Count == uint64(limit)) {
 			break
 		}
 	}
@@ -126,4 +155,46 @@ func (s *State) walkCurrentReferences(ctx context.Context, barrier ReadBarrier,
 	}
 	page.Done = !iterator.Valid()
 	return page, nil
+}
+
+func cutGeoCoverage(view *pebble.Snapshot, ref RecordReference, applied uint64) (_ GeoCoverageRecord, _ bool, returnErr error) {
+	var closers []io.Closer
+	defer func() {
+		for _, closer := range closers {
+			returnErr = errors.Join(returnErr, closer.Close())
+		}
+	}()
+	lookup := func(key []byte) ([]byte, bool, error) {
+		value, closer, err := view.Get(key)
+		if errors.Is(err, pebble.ErrNotFound) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		closers = append(closers, closer)
+		limit := maxRecordReferenceBytes
+		if bytes.HasPrefix(key, geoCoveragePrefix) {
+			limit = maxGeoCoverageBytes
+		} else if bytes.HasPrefix(key, []byte("result/")) {
+			limit = MaxResultBytes
+		}
+		if len(value) > limit {
+			return nil, false, errors.New("Geo discovery metadata exceeds bound")
+		}
+		return value, true, nil
+	}
+	key := geoCoverageKey(ref.Descriptor.Keyspace, ref.Descriptor.Key)
+	encoded, found, err := lookup(key)
+	if err != nil || !found {
+		return GeoCoverageRecord{}, false, err
+	}
+	receipt, err := decodeGeoCoverage(key, encoded, ref.OwnerGroupID, applied)
+	if err != nil {
+		return GeoCoverageRecord{}, false, err
+	}
+	if err := validateGeoCoverageLinks(receipt, lookup, ref.OwnerGroupID, applied); err != nil {
+		return GeoCoverageRecord{}, false, err
+	}
+	return receipt, true, nil
 }

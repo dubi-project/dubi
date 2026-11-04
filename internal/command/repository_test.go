@@ -22,6 +22,7 @@ func TestRepositoryCommandRejectsInvalidConfigurationBeforeConnect(t *testing.T)
 }
 
 func TestRepositoryCommandRecognizesDefaultAlias(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{"repository", "default"}, &stdout, &stderr)
 	if code == 0 || !strings.Contains(stderr.String(), "usage: dubi repository set-default") || strings.Contains(stderr.String(), "unknown repository command") {

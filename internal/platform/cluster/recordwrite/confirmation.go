@@ -15,6 +15,11 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 )
 
+// errStaleLocalCohort is refreshable only after a fresh physical majority has
+// proved the same publication under the current cohort. Other read failures
+// must not initiate confirmation work.
+var errStaleLocalCohort = errors.New("committed local confirmation is for an obsolete Region plan or publication")
+
 // ConfirmationClaim converts a fresh post-publication physical observation
 // into a deterministic Owner Group command. It does not submit or claim that
 // the command was applied; the caller must check the persisted result and
@@ -49,32 +54,20 @@ func ConfirmationClaim(target router.Target, observed PublishedObservation) (rou
 	return claim, nil
 }
 
-// CheckCommittedLocal is the final internal durability gate after a local
-// confirmation command has committed. It rechecks physical majority, the
-// exact current reference, the persisted confirmation Result, and the Root
-// cohort. The result describes this check, not a lease against future disk
-// loss or a public Tenant read/write endpoint.
+// CheckCommittedLocal revalidates a previously committed local confirmation
+// before a retry reuses it. It checks physical majority, the exact current
+// reference, the persisted confirmation Result, and the Root cohort. A new
+// foreground write returns from its just-committed Owner confirmation without
+// repeating this cross-node observation. Neither result is a lease against
+// future disk loss or a public Tenant read/write endpoint.
 func CheckCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
 	localID uint64, localNodeID string, store Verifier, observer Observer, target router.Target,
 	descriptor records.Descriptor, referenceRequestID string, referenceIndex uint64,
 	confirmationRequestID string, claim routedstate.LocalConfirmation) (PublishedObservation, error) {
-	if claim.Validate() != nil || rootstate.ValidateRequestID(confirmationRequestID) != nil ||
-		claim.ReferenceRequestID != referenceRequestID || claim.ReferenceIndex != referenceIndex {
-		return PublishedObservation{}, errors.New("invalid committed local confirmation identity")
-	}
-	observed, err := ObservePublishedLocal(ctx, barrier, root, owner, localID, localNodeID,
-		store, observer, target, descriptor, referenceRequestID, referenceIndex)
+	observed, err := observeCommittedLocal(ctx, barrier, root, owner, localID, localNodeID,
+		store, observer, target, descriptor, referenceRequestID, referenceIndex, confirmationRequestID, claim)
 	if err != nil {
 		return PublishedObservation{}, err
-	}
-	fresh, err := ConfirmationClaim(target, observed)
-	if err != nil {
-		return PublishedObservation{}, err
-	}
-	if claim.RegionID != fresh.RegionID || claim.Generation != fresh.Generation ||
-		claim.GroupEpoch != fresh.GroupEpoch || claim.FenceIndex != fresh.FenceIndex ||
-		!slices.Equal(claim.Nodes, fresh.Nodes) || claim.RecordID != fresh.RecordID {
-		return PublishedObservation{}, errors.New("committed local confirmation is for an obsolete Region plan or publication")
 	}
 	err = readOwner(ctx, barrier, owner, target, func(view enginestate.ReadView) error {
 		receipt, found, readErr := view.LocalConfirmation(descriptor.Key)
@@ -99,11 +92,44 @@ func CheckCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner 
 	return observed, nil
 }
 
+// observeCommittedLocal establishes a fresh physical majority and verifies
+// that the persisted claim still describes that exact publication and plan.
+// Reader uses this before reading bytes, then defers the receipt's final
+// currentness check to CheckReadCurrent after the bytes have been verified.
+func observeCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
+	localID uint64, localNodeID string, store Verifier, observer Observer, target router.Target,
+	descriptor records.Descriptor, referenceRequestID string, referenceIndex uint64,
+	confirmationRequestID string, claim routedstate.LocalConfirmation) (PublishedObservation, error) {
+	if claim.Validate() != nil || rootstate.ValidateRequestID(confirmationRequestID) != nil ||
+		claim.ReferenceRequestID != referenceRequestID || claim.ReferenceIndex != referenceIndex {
+		return PublishedObservation{}, errors.New("invalid committed local confirmation identity")
+	}
+	observed, err := ObservePublishedLocal(ctx, barrier, root, owner, localID, localNodeID,
+		store, observer, target, descriptor, referenceRequestID, referenceIndex)
+	if err != nil {
+		return PublishedObservation{}, err
+	}
+	fresh, err := ConfirmationClaim(target, observed)
+	if err != nil {
+		return PublishedObservation{}, err
+	}
+	if claim.RegionID != fresh.RegionID || claim.Generation != fresh.Generation ||
+		claim.GroupEpoch != fresh.GroupEpoch || claim.FenceIndex != fresh.FenceIndex ||
+		!slices.Equal(claim.Nodes, fresh.Nodes) || claim.RecordID != fresh.RecordID {
+		if claim.RegionID == fresh.RegionID && claim.RecordID == fresh.RecordID &&
+			reflect.DeepEqual(claim.Target, fresh.Target) && bytes.Equal(claim.Key, fresh.Key) {
+			return PublishedObservation{}, errStaleLocalCohort
+		}
+		return PublishedObservation{}, errors.New("committed local confirmation is for an obsolete Region plan or publication")
+	}
+	return observed, nil
+}
+
 // CheckReadCurrent rechecks the logical publication and its Root cohort after
-// a read has already passed CheckCommittedLocal and the immutable bytes have
-// been read and verified. The first check establishes physical majority; this
-// final check prevents returning bytes after a concurrent Owner overwrite or
-// Region transition without repeating the same remote holding scan.
+// the immutable bytes have been read and verified. The earlier physical
+// majority check establishes the expected plan; this final check prevents
+// returning bytes after a concurrent Owner overwrite or Region transition
+// without repeating the same remote holding scan.
 func CheckReadCurrent(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
 	target router.Target, expected enginestate.RecordReference, confirmationRequestID string,
 	claim routedstate.LocalConfirmation, expectedPlan placement.LocalPlan) (placement.LocalPlan, error) {

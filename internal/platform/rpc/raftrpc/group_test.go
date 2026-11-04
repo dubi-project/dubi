@@ -27,6 +27,43 @@ import (
 
 type groupRPCHandler struct{}
 
+type rootHintClient struct {
+	raftwire.GroupServiceClient
+	response *raftwire.GroupReadIndexResponse
+}
+
+func (c rootHintClient) ReadIndex(context.Context, *raftwire.GroupReadIndexRequest, ...grpc.CallOption) (*raftwire.GroupReadIndexResponse, error) {
+	return c.response, nil
+}
+
+func TestRootReadClientRetriesLeaderHintButRejectsUnconfirmedResponses(t *testing.T) {
+	directory := NewStaticDirectory()
+	if err := directory.Update(2, "127.0.0.1:12345"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, group string
+		hint, index uint64
+		want        codes.Code
+	}{
+		{"Root leader hint", raft.RootGroupID, 3, 0, codes.Unavailable},
+		{"malformed Root reply", raft.RootGroupID, 0, 0, codes.Unknown},
+		{"unconfirmed data reply", "data-1", 3, 0, codes.Unknown},
+		{"confirmed Root reply", raft.RootGroupID, 3, 9, codes.OK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rpc := rootHintClient{response: &raftwire.GroupReadIndexResponse{LeaderRaftId: tc.hint, ConfirmedIndex: tc.index}}
+			client := &GroupClient{options: GroupClientOptions{RaftID: 1, Directory: directory}, peers: map[uint64]*groupPeer{
+				2: {address: "127.0.0.1:12345", client: rpc, rootClient: rpc},
+			}}
+			index, err := client.ReadIndex(context.Background(), 2, tc.group)
+			if status.Code(err) != tc.want || index != tc.index {
+				t.Fatal("routing hint was accepted as a read or classified incorrectly", index, err)
+			}
+		})
+	}
+}
+
 func (groupRPCHandler) Apply(transaction *enginestate.Transaction, _ router.Target, payload []byte) (enginestate.Outcome, error) {
 	separator := bytes.IndexByte(payload, '=')
 	if separator <= 0 {
@@ -329,6 +366,32 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	readOutcome, readIndex, err := remoteEngine.Read(ctx, target, []byte("item"))
 	if err != nil || readIndex < mutationResult.Index || readOutcome.Rejection != "" || string(readOutcome.Value) != "value" {
 		t.Fatalf("remote engine read = %+v, index %d, %v", readOutcome, readIndex, err)
+	}
+	// Exercise the batch wire method over the same real mTLS connection. This
+	// Group has no Region fence: each row must return a durable rejection,
+	// never a successful metadata checkpoint merely because it was submitted.
+	commands := mirrorBatchCommands(t, 8)
+	var batchRows []GeoMirrorBatchResult
+	for attempt := 0; attempt < 8; attempt++ {
+		batchRows, err = client.MirrorGeoBatch(ctx, serverID.RaftID, "data-1", commands)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending := false
+		for _, row := range batchRows {
+			if row.Err != nil {
+				pending = true
+			}
+		}
+		if !pending {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for _, row := range batchRows {
+		if row.Err != nil || row.Result.Applied || row.Result.Error == "" || row.Result.Index == 0 {
+			t.Fatal("batch wire lost a durable fence rejection", row)
+		}
 	}
 	stale := target
 	stale.Epoch++

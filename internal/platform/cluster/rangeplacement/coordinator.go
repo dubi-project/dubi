@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/raft"
@@ -26,6 +27,11 @@ type Coordinator struct {
 	host Host
 	root *rootstate.State
 }
+
+// A Region generation change invalidates every placement that references it.
+// Publish a bounded batch per round instead of making each Range wait for a
+// separate background timer. The caller's deadline bounds the entire round.
+const placementPublicationsPerRound = 16
 
 func New(host Host, root *rootstate.State) (*Coordinator, error) {
 	if host == nil || root == nil {
@@ -89,7 +95,11 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	published := 0
 	for _, r := range ranges {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		prior, found, err := c.root.RangePlacement(r.RangeID)
 		if err != nil {
 			return err
@@ -107,7 +117,12 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 				progress = append(progress, view)
 			}
 		}
-		placement, err := PlanRange(r, progress)
+		var placement rootstate.RangePlacement
+		if found {
+			placement, err = refreshPlacement(r, prior, progress)
+		} else {
+			placement, err = PlanRange(r, progress)
+		}
 		if err != nil {
 			// A Range can exist before all Region cohorts are confirmed. Leave it
 			// pending for the next reconciliation round rather than publishing a
@@ -117,9 +132,45 @@ func (c *Coordinator) Reconcile(ctx context.Context) error {
 		if found && rangePlacementEqual(prior, placement) {
 			continue
 		}
-		return c.publish(ctx, placement)
+		if err := c.publish(ctx, placement); err != nil {
+			return err
+		}
+		published++
+		if published >= placementPublicationsPerRound {
+			return nil
+		}
 	}
 	return nil
+}
+
+// Refresh only the generations of the fixed Region/Group set. Later Regions
+// must not expand old placements, and an unavailable/pending member must not
+// silently shrink them. Root's existing SetRangePlacement independently
+// validates every generation against the current confirmed cohort.
+func refreshPlacement(r rootstate.Range, prior rootstate.RangePlacement, progress []rootstate.RegionProgress) (rootstate.RangePlacement, error) {
+	if prior.Validate() != nil || prior.RangeID != r.RangeID || prior.RangeEpoch != r.Epoch || prior.OwnerGroupID != r.OwnerGroupID {
+		return rootstate.RangePlacement{}, errors.New("placement refresh differs from the active Range")
+	}
+	selected := make([]rootstate.RegionProgress, 0, len(prior.Regions))
+	for _, region := range prior.Regions {
+		for _, view := range progress {
+			if view.Current.RegionID == region.RegionID && view.Current.GroupID == region.GroupID {
+				selected = append(selected, view)
+				break
+			}
+		}
+	}
+	updated, err := PlanRange(r, selected)
+	if err != nil || len(updated.Regions) != len(prior.Regions) {
+		return rootstate.RangePlacement{}, errors.Join(err, errors.New("placement refresh lacks its complete fixed Region set"))
+	}
+	for i, region := range updated.Regions {
+		old := prior.Regions[i]
+		if region.RegionID != old.RegionID || region.GroupID != old.GroupID || region.Generation < old.Generation {
+			return rootstate.RangePlacement{}, errors.New("placement refresh changes or regresses its Region set")
+		}
+	}
+	return updated, nil
 }
 
 func rangePlacementEqual(a, b rootstate.RangePlacement) bool {
@@ -135,6 +186,14 @@ func rangePlacementEqual(a, b rootstate.RangePlacement) bool {
 }
 
 func (c *Coordinator) publish(ctx context.Context, placement rootstate.RangePlacement) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 	command := rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.SetRangePlacement,
 		RequestID: "range-placement-intent", RangePlacement: &placement}
 	encoded, err := rootstate.EncodeCommand(command)
@@ -150,18 +209,28 @@ func (c *Coordinator) publish(ctx context.Context, placement rootstate.RangePlac
 	if err := c.host.Submit(raft.RootGroupID, encoded); err != nil {
 		return err
 	}
-	if _, err := c.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
-		return err
+	// An admitted proposal can commit after the first following ReadIndex.
+	// Wait for this exact durable result without resubmitting the mutation.
+	for {
+		if _, err := c.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+			return fmt.Errorf("confirm Range placement: %w", err)
+		}
+		result, found, err := c.root.ResultForCommand(encoded)
+		if err != nil {
+			return err
+		}
+		if found {
+			if result.Error != "" {
+				return errors.New(result.Error)
+			}
+			return nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
-	result, found, err := c.root.ResultForCommand(encoded)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return fmt.Errorf("Range placement command not yet applied")
-	}
-	if result.Error != "" {
-		return errors.New(result.Error)
-	}
-	return nil
 }

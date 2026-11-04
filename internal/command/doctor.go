@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 // doctorResult is deliberately stricter than status: unknown observations are
@@ -91,6 +92,9 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if _, err := fmt.Fprintf(stdout, "DUBI doctor: %s\ncluster: %s\nnode: %s\n", result.State, report.Cluster.State, report.Health.State); err != nil {
 		return err
 	}
+	if err := writeRepairScanProgress(stdout, report.LocalRepair); err != nil {
+		return err
+	}
 	if len(result.Reasons) == 0 {
 		_, err := io.WriteString(stdout, "no actionable issues observed\n")
 		return err
@@ -101,6 +105,35 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		}
 	}
 	return doctorExitError(result)
+}
+
+func writeRepairScanProgress(out io.Writer, repair *localRepairView) error {
+	if repair == nil || !repair.ScanProgressSupported {
+		_, err := fmt.Fprintln(out, "repair scan progress: unavailable")
+		return err
+	}
+	formatTime := func(unix int64) string {
+		if unix == 0 {
+			return "never"
+		}
+		return time.Unix(unix, 0).UTC().Format(time.RFC3339)
+	}
+	if len(repair.ScanProgress) == 0 {
+		_, err := fmt.Fprintln(out, "repair scan progress: no eligible local Groups")
+		return err
+	}
+	for _, progress := range repair.ScanProgress {
+		if _, err := fmt.Fprintf(out, "repair %s: %s; scanned=%d; unresolved=%d; needs-clean-sweep=%t; last-progress=%s; last-clean=%s\n",
+			progress.GroupID, progress.Phase, progress.Scanned, progress.Unresolved, progress.NeedsCleanSweep,
+			formatTime(progress.LastProgressUnix), formatTime(progress.LastCleanUnix)); err != nil {
+			return err
+		}
+	}
+	if repair.TotalScanGroups > uint32(len(repair.ScanProgress)) {
+		_, err := fmt.Fprintf(out, "repair scan progress: showing %d of %d Groups\n", len(repair.ScanProgress), repair.TotalScanGroups)
+		return err
+	}
+	return nil
 }
 
 func doctorExitError(result doctorResult) error {

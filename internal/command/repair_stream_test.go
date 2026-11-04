@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,31 +29,38 @@ type interruptedRecordListener struct {
 	net.Listener
 	armed atomic.Bool
 	fired chan struct{}
+	deny  atomic.Bool
 }
 
 type interruptedRecordConn struct {
 	net.Conn
 	listener *interruptedRecordListener
-	eligible bool
 	mu       sync.Mutex
 	written  int
 }
 
 func (l *interruptedRecordListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if l.deny.Load() {
+			_ = conn.Close()
+			continue
+		}
+		return &interruptedRecordConn{Conn: conn, listener: l}, nil
 	}
-	return &interruptedRecordConn{Conn: conn, listener: l, eligible: l.armed.Load()}, nil
 }
 
 func (c *interruptedRecordConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	n, err := c.Conn.Write(p)
-	if c.eligible && c.listener.armed.Load() {
+	if c.listener.armed.Load() {
 		c.written += n
 		if c.written >= 2<<20 && c.listener.armed.CompareAndSwap(true, false) {
+			c.listener.deny.Store(true)
 			_ = c.Conn.Close()
 			close(c.listener.fired)
 		}
@@ -63,6 +69,7 @@ func (c *interruptedRecordConn) Write(p []byte) (int, error) {
 }
 
 func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	mux := referenceTestMux(t)
@@ -199,14 +206,29 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 	}
 	stopFirst()
 	// The second source is still unavailable. A partial TLS stream must not
-	// become a holding, and the managed worker must retain this exact debt.
+	// become a holding. Check the authoritative reference directly rather
+	// than depending on which background worker reports the debt first.
 	if _, err := nodes[2].Runtime.Records.Verify(ctx, d); !errors.Is(err, records.ErrNotHeld) {
 		t.Fatal("partial stream published a destination record", err)
 	}
-	for !strings.Contains(reports.String(), requestID) {
+	targetOwner, found := nodes[2].Runtime.Engines.Resolve(group)
+	if !found {
+		t.Fatal("repair target Owner Group is not open")
+	}
+	for {
+		result, found, err := targetOwner.ResultForMutation(requestID, target, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found {
+			if !result.Applied || result.Error != "" {
+				t.Fatal("interrupted repair lost its authoritative reference", result)
+			}
+			break
+		}
 		select {
 		case <-ctx.Done():
-			t.Fatal("managed repair did not report the interrupted record debt", reports.String(), ctx.Err())
+			t.Fatal("target did not retain the interrupted record reference", reports.String(), ctx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -242,7 +264,7 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 	if !found {
 		t.Fatal("target Owner Group is not open")
 	}
-	reader := recordwrite.Reader{Barrier: nodes[2].Runtime.Host, Root: nodes[2].Runtime.Root,
+	reader := recordwrite.Reader{Barrier: nodes[2].Runtime, Root: nodes[2].Runtime.Root,
 		Owner: readerOwner, LocalID: nodes[2].Runtime.Identity.RaftID,
 		LocalNodeID: nodes[2].Runtime.Identity.NodeID, Store: nodes[2].Runtime.Records,
 		Observer: nodes[2].GroupClient, Fetcher: nodes[2].GroupClient}

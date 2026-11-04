@@ -18,6 +18,9 @@ var (
 	ErrCatalogBehind    = errors.New("Root catalog is behind the confirmed read index")
 	ErrWrongOwner       = errors.New("route targets a different Owner Group")
 	ErrRouteFenced      = errors.New("route generation is fenced")
+	// ErrStaleTarget is emitted only by the execution preflight, before any
+	// mutation is submitted. It permits a gateway to refresh its Root route.
+	ErrStaleTarget = errors.New("route changed before execution")
 )
 
 // Target is the immutable routing generation carried from an entry Node to
@@ -75,6 +78,12 @@ func ConfirmedRootIndex(ctx context.Context) (uint64, bool) {
 	}
 	index, ok := ctx.Value(confirmedRootIndexContextKey{}).(uint64)
 	return index, ok && index != 0
+}
+
+// WithoutConfirmedRootIndex preserves cancellation/authentication while
+// discarding an admission cut which must not be reused during rerouting.
+func WithoutConfirmedRootIndex(ctx context.Context) context.Context {
+	return context.WithValue(ctx, confirmedRootIndexContextKey{}, uint64(0))
 }
 
 func New(barrier ReadBarrier, catalog Catalog) (*Router, error) {

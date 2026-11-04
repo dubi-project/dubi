@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,10 +38,16 @@ type repairSourceFake struct {
 type remoteRepairFake struct {
 	*repairSourceFake
 	remoteTargets []uint64
+	afterRemote   func(records.Descriptor) error
 }
 
 func (f *remoteRepairFake) RepairRecordOnNode(_ context.Context, target, _ rootstate.Node, _ string, d records.Descriptor) (records.Holding, error) {
 	f.remoteTargets = append(f.remoteTargets, target.RaftID)
+	if f.afterRemote != nil {
+		if err := f.afterRemote(d); err != nil {
+			return records.Holding{}, err
+		}
+	}
 	id, err := d.ID()
 	if err != nil {
 		return records.Holding{}, err
@@ -115,6 +122,102 @@ func TestRemoteRepairUsesAnotherCurrentCohortNode(t *testing.T) {
 	}
 	if !slices.Equal(fake.remoteTargets, []uint64{3}) {
 		t.Fatal("remote repair selected the wrong target", fake.remoteTargets)
+	}
+}
+
+func TestRepairReferenceRetainsLocalFailureAfterRemoteFallback(t *testing.T) {
+	plan := repairTestPlan(t)
+	store := repairTestStore(t)
+	body := []byte("remote fallback preserves the local destination failure")
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+		"origin-group", []byte("remote-fallback"), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localErr := errors.New("local Pack publication failed")
+	fake := &remoteRepairFake{repairSourceFake: &repairSourceFake{nodes: plan.Nodes(), body: body,
+		fetchErr: map[uint64]error{2: localErr, 3: localErr}}}
+	fetched, err := repairReference(context.Background(), plan,
+		enginestate.RecordReference{RequestID: "request-local-failure", Descriptor: d}, 1, store, fake)
+	if fetched || !errors.Is(err, errRemoteRepairCompleted) || !errors.Is(err, localErr) || !strings.Contains(err.Error(), localErr.Error()) {
+		t.Fatal("remote fallback hid the local repair failure", fetched, err)
+	}
+}
+
+func TestRepairReferenceRemoteFallbackDoesNotClearUnavailableLocalStore(t *testing.T) {
+	plan := repairTestPlan(t)
+	store := repairTestStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+		"origin-group", []byte("closed-local"), []byte("remote bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &remoteRepairFake{repairSourceFake: &repairSourceFake{nodes: plan.Nodes()}}
+	fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d}, 1, store, fake)
+	if fetched || !errors.Is(err, errRemoteRepairCompleted) || !errors.Is(err, records.ErrUnavailable) ||
+		!slices.Equal(fake.remoteTargets, []uint64{3}) || len(fake.fetchedFrom) != 0 {
+		t.Fatal("remote fallback erased local Store failure or attempted local publication", fetched, fake, err)
+	}
+}
+
+func TestRepairReferenceTriesOtherLocalSourceAfterRemoteFallback(t *testing.T) {
+	plan := repairTestPlan(t)
+	store := repairTestStore(t)
+	body := []byte("repair the actual local destination")
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+		"origin-group", []byte("retry-local"), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &remoteRepairFake{repairSourceFake: &repairSourceFake{nodes: plan.Nodes(), body: body,
+		fetchErr: map[uint64]error{2: status.Error(codes.Unavailable, "first source stream lost")}}}
+	fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d}, 1, store, fake)
+	if err != nil || !fetched || !slices.Equal(fake.fetchedFrom, []uint64{2, 3}) {
+		t.Fatal("remote fallback prevented local recovery from the other confirmed source", fetched, fake.fetchedFrom, err)
+	}
+	if _, err := store.Verify(context.Background(), d); err != nil {
+		t.Fatal("local recovery did not verify durable Pack bytes", err)
+	}
+}
+
+func TestRepairReferenceRechecksLocalHoldingAfterRemoteFallback(t *testing.T) {
+	plan := repairTestPlan(t)
+	store := repairTestStore(t)
+	body := []byte("another worker completed local publication")
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+		"origin-group", []byte("concurrent-local"), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &remoteRepairFake{repairSourceFake: &repairSourceFake{nodes: plan.Nodes(), body: body,
+		fetchErr: map[uint64]error{2: status.Error(codes.Unavailable, "reply lost")}},
+		afterRemote: func(d records.Descriptor) error { _, err := store.Put(context.Background(), d, body); return err }}
+	fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d}, 1, store, fake)
+	if err != nil || !fetched {
+		t.Fatal("verified local holding was incorrectly retained as repair debt", fetched, err)
+	}
+}
+
+func TestRepairReferenceDoesNotHideFetchAuthorityFailureBehindRemoteFallback(t *testing.T) {
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument, codes.FailedPrecondition} {
+		t.Run(code.String(), func(t *testing.T) {
+			plan, store := repairTestPlan(t), repairTestStore(t)
+			body := []byte("authority failure")
+			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+				"origin-group", []byte("fenced-fetch"), body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake := &remoteRepairFake{repairSourceFake: &repairSourceFake{nodes: plan.Nodes(), body: body,
+				fetchErr: map[uint64]error{2: status.Error(code, "source registration changed")}}}
+			fetched, err := repairReference(context.Background(), plan, enginestate.RecordReference{Descriptor: d}, 1, store, fake)
+			if fetched || status.Code(err) != code || len(fake.remoteTargets) != 0 {
+				t.Fatal("authority failure was hidden by repair at a different destination", fetched, fake.remoteTargets, err)
+			}
+		})
 	}
 }
 

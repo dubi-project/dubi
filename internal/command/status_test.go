@@ -12,6 +12,7 @@ import (
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootjoin"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
+	"github.com/dubi-project/dubi/internal/platform/rpc/datawire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 )
@@ -27,13 +28,14 @@ func TestRootStatusRequiresConfirmedIndexNotOnlyLeaderHint(t *testing.T) {
 
 func TestStatusQueriesLiveRootWithManagedNodeIdentity(t *testing.T) {
 	type statusResult struct {
-		ObservedNodeID    string           `json:"observed_node_id"`
-		Root              rootjoin.View    `json:"root"`
-		Health            localHealthView  `json:"health"`
-		LocalStorage      *volume.Report   `json:"local_storage"`
-		LocalStorageError string           `json:"local_storage_error"`
-		LocalRepair       *localRepairView `json:"local_repair"`
-		LocalRepairError  string           `json:"local_repair_error"`
+		ObservedNodeID    string            `json:"observed_node_id"`
+		Root              rootjoin.View     `json:"root"`
+		Cluster           clusterHealthView `json:"cluster"`
+		Health            localHealthView   `json:"health"`
+		LocalStorage      *volume.Report    `json:"local_storage"`
+		LocalStorageError string            `json:"local_storage_error"`
+		LocalRepair       *localRepairView  `json:"local_repair"`
+		LocalRepairError  string            `json:"local_repair_error"`
 	}
 	store := filepath.Join(t.TempDir(), "node")
 	if code := Run(context.Background(), []string{"init", "--store", store}, io.Discard, io.Discard); code != 0 {
@@ -73,8 +75,11 @@ func TestStatusQueriesLiveRootWithManagedNodeIdentity(t *testing.T) {
 		len(result.Root.Peers) != 1 || result.Root.Peers[0].RegionID != "west" ||
 		result.LocalStorage == nil || result.LocalStorage.NodeID != id.NodeID ||
 		len(result.LocalStorage.Volumes) != 1 || result.LocalStorage.Volumes[0].Health != "healthy" ||
+		len(result.Cluster.Repairs) != 1 || !result.Cluster.Repairs[0].Reachable ||
+		result.Cluster.Repairs[0].NodeID != id.NodeID || result.Cluster.Repairs[0].RegionID != "west" ||
+		!result.Cluster.Repairs[0].WorkerEnabled ||
 		result.LocalStorageError != "" || result.LocalRepair == nil ||
-		!result.LocalRepair.WorkerEnabled || result.LocalRepairError != "" {
+		!result.LocalRepair.WorkerEnabled || !result.LocalRepair.CapacitySupported || result.LocalRepair.MaintenanceIO == nil || result.LocalRepair.MaintenanceIO.BytesPerSecond == 0 || result.LocalRepairError != "" {
 		t.Fatal("status did not report the live confirmed Root view", result, err)
 	}
 	volumePath, offlinePath := filepath.Join(store, "volume"), filepath.Join(store, "volume.offline")
@@ -183,5 +188,48 @@ func TestApplyPeerRepairHealthSurfacesUnreachableAndDebt(t *testing.T) {
 	})
 	if got.State != "degraded" || len(got.Repairs) != 2 || len(got.Reasons) != 2 {
 		t.Fatalf("peer repair observations were not reflected: %+v", got)
+	}
+}
+
+func TestPeerRepairStatusPreservesSameObservationDetails(t *testing.T) {
+	node := rootstate.Node{RaftID: 3, NodeID: "node-c", Name: "sg03", RegionID: "sg"}
+	response := &datawire.LocalRepairStatusResponse{NodeId: node.NodeID, RaftId: node.RaftID,
+		WorkerEnabled: true, LastCheckUnix: 123, TotalIssues: 2,
+		Issues:        []*datawire.LocalRepairIssue{{GroupId: "region-sg", Error: "local Pack publication failed"}},
+		GeoRecordDebt: 4, VolumeWriteErrors: []*datawire.VolumeWriteIssue{{VolumeId: "volume-c", Error: "I/O error"}},
+		Volumes: []*datawire.VolumeHealthStatus{{VolumeId: "volume-old", State: "removed", Health: "removed"}}}
+	got := decodePeerRepairStatus(node, response)
+	// A later RPC may already be clean. The captured issue must remain intact.
+	response.Issues[0].Error = "cleared"
+	if !got.Reachable || got.Error != "" || got.Name != "sg03" || got.RegionID != "sg" ||
+		!got.WorkerEnabled || got.LastCheckUnix != 123 || got.RepairDebt != 2 || !got.IssuesTruncated ||
+		len(got.Issues) != 1 || got.Issues[0].GroupID != "region-sg" || got.Issues[0].Error != "local Pack publication failed" ||
+		got.GeoDebt != 4 || got.WriteQuarantines != 1 || len(got.VolumeWriteErrors) != 1 ||
+		got.VolumeWriteErrors[0].Error != "I/O error" {
+		t.Fatalf("peer issue details were dropped or changed: %+v", got)
+	}
+	encoded, err := json.Marshal(applyPeerRepairHealth(clusterHealthView{State: "available"}, []peerRepairView{got}))
+	if err != nil || !bytes.Contains(encoded, []byte(`"group_id":"region-sg"`)) ||
+		!bytes.Contains(encoded, []byte(`"issues_truncated":true`)) {
+		t.Fatalf("status JSON hid remote issue details: %s, %v", encoded, err)
+	}
+}
+
+func TestPeerRepairStatusRejectsMalformedIssueEvidence(t *testing.T) {
+	node := rootstate.Node{RaftID: 3, NodeID: "node-c"}
+	for name, response := range map[string]*datawire.LocalRepairStatusResponse{
+		"nil":               nil,
+		"wrong identity":    {NodeId: "foreign", RaftId: 3},
+		"understated count": {NodeId: node.NodeID, RaftId: 3, Issues: []*datawire.LocalRepairIssue{{Error: "failure"}}},
+		"nil issue":         {NodeId: node.NodeID, RaftId: 3, TotalIssues: 1, Issues: []*datawire.LocalRepairIssue{nil}},
+		"nil quarantine":    {NodeId: node.NodeID, RaftId: 3, VolumeWriteErrors: []*datawire.VolumeWriteIssue{nil}},
+		"oversized issues":  {NodeId: node.NodeID, RaftId: 3, TotalIssues: 65, Issues: make([]*datawire.LocalRepairIssue, 65)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := decodePeerRepairStatus(node, response)
+			if got.Reachable || got.Error == "" || len(got.Issues) != 0 {
+				t.Fatalf("malformed peer evidence accepted: %+v", got)
+			}
+		})
 	}
 }

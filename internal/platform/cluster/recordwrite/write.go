@@ -35,6 +35,9 @@ type Writer struct {
 	Sender      Sender
 	Observer    Observer
 	Submit      SubmitCommand
+	// SubmitBatch is optional and used only by bounded background Geo pages.
+	// Like Submit, it returns admission errors, not durable application proof.
+	SubmitBatch func(context.Context, string, [][]byte) ([]error, error)
 	// MirrorGeo is required by the explicit cross-Region WriteGeo path. Local
 	// callers may leave it nil; WriteGeo refuses to publish a cross-Region
 	// coverage result without durable metadata mirrors in every planned Region.
@@ -43,6 +46,9 @@ type Writer struct {
 	// temporarily unavailable. It is optional for callers that only need the
 	// synchronous primitive; production orchestration should provide it.
 	MirrorRetry *GeoMetadataRetryStore
+	// Set only by a bounded background page; it collects exact successful
+	// mirrors for synchronous cleanup after every page worker has returned.
+	mirrorCompleted func(routedstate.GeoMetadataMirror) error
 }
 
 type WriteRequest struct {
@@ -53,9 +59,11 @@ type WriteRequest struct {
 	Payload    []byte // Opaque engine mutation that publishes Descriptor.
 }
 
-// LocalWrite is returned only after a committed confirmation and a fresh
-// majority/Root/Owner recheck. It is a completed local durability event, not
-// GeoReady or an ongoing lease against later storage failures.
+// LocalWrite is returned after the physical local majority was verified and
+// the Owner Group committed a confirmation bound to that reference and the
+// current local Region fence. It is a completed local durability event, not
+// GeoReady or an ongoing lease against later storage failures. A retry of an
+// earlier confirmation performs a fresh physical/Root recheck before reuse.
 type LocalWrite struct {
 	Reference         enginestate.RecordReference
 	ConfirmationIndex uint64
@@ -208,10 +216,14 @@ func (w Writer) WriteLocal(ctx context.Context, request WriteRequest) (LocalWrit
 	if !confirmation.Applied || confirmation.Error != "" {
 		return LocalWrite{}, fmt.Errorf("local majority confirmation rejected: %s", confirmation.Error)
 	}
-	phaseStarted = time.Now()
-	result, err := w.finish(ctx, request, publication.Index, confirmID, confirmation.Index, claim)
-	Trace(ctx, "write.final_recheck", phaseStarted)
-	return result, err
+	// StageLocal verified the immutable bytes on a strict majority of the
+	// admission-time Root-confirmed cohort. The committed Owner confirmation
+	// binds that evidence to the current Range and Region fences in the Owner
+	// Raft state machine; this is the authoritative post-IO gate. A changed or
+	// pending cohort is rejected there without a post-write global Root barrier.
+	// Cross-Region coverage is repaired asynchronously.
+	return LocalWrite{Reference: observed.Reference, ConfirmationIndex: confirmation.Index,
+		RegionGeneration: staged.Plan.Generation}, nil
 }
 
 func stagedPublication(ctx context.Context, barrier Barrier, owner *enginestate.State, request WriteRequest,

@@ -1033,11 +1033,17 @@ func marshalPrivateKey(privateKey crypto.PrivateKey) []byte {
 }
 
 func writeExclusive(path string, data []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	if _, err = file.Write(data); err == nil {
+	// Service umasks may remove public read bits. The loader validates exact
+	// certificate/key modes, so establish them explicitly on this new inode.
+	err = file.Chmod(mode)
+	if err == nil {
+		_, err = file.Write(data)
+	}
+	if err == nil {
 		err = file.Sync()
 	}
 	return errors.Join(err, file.Close())

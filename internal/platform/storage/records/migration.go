@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/storage/pack"
 )
 
@@ -33,6 +34,8 @@ const (
 type VolumeMigrationStatus struct {
 	Active         bool      `json:"active"`
 	SourceVolumeID string    `json:"source_volume_id,omitempty"`
+	TargetVolumeID string    `json:"target_volume_id,omitempty"`
+	SourcePackID   string    `json:"source_pack_id,omitempty"`
 	Cursor         string    `json:"cursor,omitempty"`
 	Migrated       uint64    `json:"migrated"`
 	StartedAt      time.Time `json:"started_at,omitempty"`
@@ -42,10 +45,13 @@ type VolumeMigrationStatus struct {
 type volumeMigrationState struct {
 	Version        int       `json:"version"`
 	SourceVolumeID string    `json:"source_volume_id"`
+	TargetVolumeID string    `json:"target_volume_id,omitempty"`
+	SourcePackID   string    `json:"source_pack_id,omitempty"`
 	Cursor         string    `json:"cursor,omitempty"`
 	Migrated       uint64    `json:"migrated"`
 	StartedAt      time.Time `json:"started_at"`
 	LastError      string    `json:"last_error,omitempty"`
+	CopyDone       bool      `json:"copy_done,omitempty"`
 }
 
 type volumeAppender interface {
@@ -67,6 +73,9 @@ func (s *Store) BeginVolumeMigration(sourceVolume string) error {
 	state, found, err := s.loadMigrationLocked()
 	if err != nil {
 		return err
+	}
+	if found && state.TargetVolumeID != "" {
+		return s.saveMigrationLocked(volumeMigrationState{Version: volumeMigrationVer, SourceVolumeID: sourceVolume, StartedAt: time.Now().UTC()})
 	}
 	if found {
 		if state.SourceVolumeID != sourceVolume {
@@ -93,7 +102,7 @@ func (s *Store) VolumeMigration() (VolumeMigrationStatus, error) {
 		return VolumeMigrationStatus{}, nil
 	}
 	return VolumeMigrationStatus{Active: true, SourceVolumeID: state.SourceVolumeID,
-		Cursor: state.Cursor, Migrated: state.Migrated, StartedAt: state.StartedAt,
+		TargetVolumeID: state.TargetVolumeID, SourcePackID: state.SourcePackID, Cursor: state.Cursor, Migrated: state.Migrated, StartedAt: state.StartedAt,
 		LastError: state.LastError}, nil
 }
 
@@ -112,6 +121,9 @@ func (s *Store) AbandonVolumeMigration(sourceVolume string) error {
 	}
 	if !found {
 		return nil
+	}
+	if state.TargetVolumeID != "" && state.TargetVolumeID == sourceVolume {
+		return s.clearMigrationLocked()
 	}
 	if sourceVolume == "" || state.SourceVolumeID != sourceVolume {
 		return fmt.Errorf("Volume migration is for %s", state.SourceVolumeID)
@@ -132,6 +144,13 @@ func (s *Store) MigrateVolumeStep(ctx context.Context, sourceVolume string) (mov
 	}
 	if sourceVolume == "" {
 		return 0, false, errors.New("source Volume is required")
+	}
+	cost, costErr := s.migrationIOCost(sourceVolume)
+	if costErr != nil {
+		return 0, false, costErr
+	}
+	if err := resource.WaitIO(ctx, cost); err != nil {
+		return 0, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,6 +173,9 @@ func (s *Store) MigrateVolumeStep(ctx context.Context, sourceVolume string) (mov
 		if err := s.saveMigrationLocked(state); err != nil {
 			return 0, false, err
 		}
+	}
+	if state.CopyDone {
+		return 0, true, nil
 	}
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("record/"), UpperBound: []byte("record0")})
 	if err != nil {
@@ -184,7 +206,7 @@ func (s *Store) MigrateVolumeStep(ctx context.Context, sourceVolume string) (mov
 		if err := s.validateEntry(id, current); err != nil {
 			return moved, false, err
 		}
-		if current.Location.VolumeID != sourceVolume {
+		if current.Location.VolumeID != sourceVolume || (state.SourcePackID != "" && current.Location.PackID != state.SourcePackID) {
 			state.Cursor = key
 			processed++
 			if processed >= volumeMigrationLimit {
@@ -201,13 +223,24 @@ func (s *Store) MigrateVolumeStep(ctx context.Context, sourceVolume string) (mov
 			_ = s.saveMigrationLocked(state)
 			return moved, false, fmt.Errorf("read source Volume %s record %s: %w", sourceVolume, id, err)
 		}
-		location, err := appender.AppendAwayFromVolume(ctx, sourceVolume, physical)
+		var location pack.Location
+		if state.TargetVolumeID != "" {
+			targetAppender, ok := s.packs.(interface {
+				AppendToVolume(context.Context, string, pack.Record) (pack.Location, error)
+			})
+			if !ok {
+				return moved, false, errors.New("Pack backend does not support target Volume")
+			}
+			location, err = targetAppender.AppendToVolume(ctx, state.TargetVolumeID, physical)
+		} else {
+			location, err = appender.AppendAwayFromVolume(ctx, sourceVolume, physical)
+		}
 		if err != nil {
 			state.LastError = err.Error()
 			_ = s.saveMigrationLocked(state)
 			return moved, false, fmt.Errorf("append replacement for record %s: %w", id, err)
 		}
-		if location.VolumeID == sourceVolume {
+		if location.VolumeID == sourceVolume || (state.TargetVolumeID != "" && location.VolumeID != state.TargetVolumeID) {
 			return moved, false, errors.New("Volume migration appended to its source Volume")
 		}
 		replacement := entry{Version: current.Version, Descriptor: current.Descriptor.clone(), Location: location}
@@ -237,12 +270,16 @@ func (s *Store) MigrateVolumeStep(ctx context.Context, sourceVolume string) (mov
 		if err := s.saveMigrationLocked(state); err != nil {
 			return moved, false, err
 		}
-		if processed >= volumeMigrationLimit {
+		if processed >= volumeMigrationLimit || (moved >= 1 && (state.TargetVolumeID != "" || resource.IsMaintenance(ctx))) {
 			return moved, false, nil
 		}
 	}
 	if err := iter.Error(); err != nil {
 		return moved, false, classifyIndexRead(err)
+	}
+	if state.TargetVolumeID != "" {
+		state.CopyDone = true
+		return moved, true, s.saveMigrationLocked(state)
 	}
 	if err := s.clearMigrationLocked(); err != nil {
 		return moved, false, err
@@ -273,7 +310,7 @@ func (s *Store) loadMigrationLocked() (volumeMigrationState, bool, error) {
 	if err != nil {
 		return state, false, err
 	}
-	if len(data) > 16<<10 || strictJSON(data, &state) != nil || state.Version != volumeMigrationVer || state.SourceVolumeID == "" || state.StartedAt.IsZero() {
+	if len(data) > 16<<10 || strictJSON(data, &state) != nil || state.Version != volumeMigrationVer || state.SourceVolumeID == "" || state.StartedAt.IsZero() || (state.TargetVolumeID == "") != (state.SourcePackID == "") || state.TargetVolumeID == state.SourceVolumeID || (state.CopyDone && state.TargetVolumeID == "") {
 		return state, false, errors.New("invalid durable Volume migration state")
 	}
 	return state, true, nil
@@ -317,106 +354,4 @@ func (s *Store) clearMigrationLocked() error {
 		return err
 	}
 	return syncDirectory(s.root)
-}
-
-// RewriteCompaction relocates every live record to fresh Packs, then invokes
-// the conservative collector. This is intentionally an explicit maintenance
-// operation: it is bounded by ctx and never runs in the foreground write
-// path. A crash before an index Sync leaves the old locator authoritative.
-func (s *Store) RewriteCompaction(ctx context.Context) (CompactReport, error) {
-	if ctx == nil {
-		return CompactReport{}, errors.New("nil compaction context")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.usable(); err != nil {
-		return CompactReport{}, err
-	}
-	if sealer, ok := s.packs.(interface{ SealAll(context.Context) error }); ok {
-		if err := sealer.SealAll(ctx); err != nil {
-			return CompactReport{}, err
-		}
-	}
-	appender, ok := s.packs.(interface {
-		Append(context.Context, pack.Record) (pack.Location, error)
-	})
-	if !ok {
-		return CompactReport{}, errors.New("Pack backend does not support rewrite compaction")
-	}
-	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("record/"), UpperBound: []byte("record0")})
-	if err != nil {
-		return CompactReport{}, classifyIndexRead(err)
-	}
-	defer iter.Close()
-	for iter.First(); iter.Valid() && bytes.HasPrefix(iter.Key(), []byte("record/")); iter.Next() {
-		if err := ctx.Err(); err != nil {
-			return CompactReport{}, err
-		}
-		id := strings.TrimPrefix(string(iter.Key()), "record/")
-		var current entry
-		if len(iter.Value()) > 16<<10 || strictJSON(iter.Value(), &current) != nil {
-			return CompactReport{}, ErrCorrupt
-		}
-		if err := s.validateEntry(id, current); err != nil {
-			return CompactReport{}, err
-		}
-		physical, err := s.packs.Read(current.Location)
-		if err != nil {
-			return CompactReport{}, err
-		}
-		location, err := appender.Append(ctx, physical)
-		if err != nil {
-			return CompactReport{}, err
-		}
-		replacement := entry{Version: current.Version, Descriptor: current.Descriptor.clone(), Location: location}
-		if _, _, err := s.read(id, replacement.Descriptor, replacement); err != nil {
-			return CompactReport{}, err
-		}
-		encoded, err := json.Marshal(replacement)
-		if err != nil {
-			return CompactReport{}, err
-		}
-		batch := s.db.NewBatch()
-		if err := batch.Set(indexKey(id), encoded, nil); err != nil {
-			_ = batch.Close()
-			return CompactReport{}, err
-		}
-		err = batch.Commit(pebble.Sync)
-		_ = batch.Close()
-		if err != nil {
-			s.failed = fmt.Errorf("rewrite compaction index Sync uncertain; reopen required: %w", err)
-			return CompactReport{}, s.failed
-		}
-	}
-	if err := iter.Error(); err != nil {
-		return CompactReport{}, classifyIndexRead(err)
-	}
-	// Rebuild the live predicate from the now-authoritative index.
-	live := make(map[pack.Location]struct{})
-	iter2, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("record/"), UpperBound: []byte("record0")})
-	if err != nil {
-		return CompactReport{}, classifyIndexRead(err)
-	}
-	for iter2.First(); iter2.Valid() && bytes.HasPrefix(iter2.Key(), []byte("record/")); iter2.Next() {
-		var e entry
-		if len(iter2.Value()) > 16<<10 || strictJSON(iter2.Value(), &e) != nil {
-			_ = iter2.Close()
-			return CompactReport{}, ErrCorrupt
-		}
-		live[e.Location] = struct{}{}
-	}
-	if err := errors.Join(iter2.Error(), iter2.Close()); err != nil {
-		return CompactReport{}, classifyIndexRead(err)
-	}
-	compactor, ok := s.packs.(interface {
-		Compact(context.Context, func(pack.Location) bool) (pack.CompactReport, error)
-	})
-	if !ok {
-		return CompactReport{}, errors.New("Pack backend does not support compaction")
-	}
-	report, err := compactor.Compact(ctx, func(loc pack.Location) bool { _, ok := live[loc]; return ok })
-	if err != nil {
-		return CompactReport{}, err
-	}
-	return CompactReport{ScannedPacks: report.ScannedPacks, RemovedPacks: report.RemovedPacks, ReclaimedBytes: report.ReclaimedBytes}, nil
 }

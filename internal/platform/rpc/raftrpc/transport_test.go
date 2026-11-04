@@ -212,7 +212,15 @@ func testCertificates(t *testing.T, ids []uint64) (*x509.CertPool, map[uint64]tl
 }
 
 func TestThreeNodeRaftOverMutualTLS(t *testing.T) {
-	const groupID = "range-1"
+	testThreeNodeRaftOverMutualTLS(t, "range-1")
+}
+
+func TestThreeNodeRootRaftOverMutualTLS(t *testing.T) {
+	testThreeNodeRaftOverMutualTLS(t, raft.RootGroupID)
+}
+
+func testThreeNodeRaftOverMutualTLS(t *testing.T, groupID string) {
+	t.Helper()
 	base := t.TempDir()
 	var nodes [3]*testNode
 	if err := ensureDirectory(filepath.Join(base, "n0")); err != nil {
@@ -358,6 +366,16 @@ func TestThreeNodeRaftOverMutualTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitApplied(t, nodes[:], "first")
+	confirmRead := func(node *testNode) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		index, err := node.host.ReadIndex(ctx, groupID)
+		if err != nil || index == 0 || index > node.state.AppliedIndex() {
+			t.Fatalf("committed Group read: index=%d applied=%d err=%v", index, node.state.AppliedIndex(), err)
+		}
+	}
+	confirmRead(nodes[leader])
 	lagging := (leader + 2) % 3
 	for i := range nodes {
 		if i != lagging {
@@ -400,6 +418,7 @@ waitSnapshot:
 		t.Fatal(err)
 	}
 	awaitApplied(t, remaining, "second")
+	confirmRead(next)
 }
 
 func ensureDirectory(path string) error { return os.MkdirAll(path, 0o750) }

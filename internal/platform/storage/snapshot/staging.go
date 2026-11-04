@@ -88,7 +88,7 @@ func Stage(ctx context.Context, parent string, artifacts *Store, ref Reference, 
 	if err != nil || !staged.identity.IsDir() {
 		return nil, errors.Join(err, errors.New("snapshot staging directory cannot be verified"))
 	}
-	staged.db, err = pebbleutil.Open(path, &pebble.Options{Logger: pebbleutil.QuietLogger{}, Cache: staged.cache,
+	staged.db, err = pebbleutil.Open(path, &pebble.Options{Logger: pebbleutil.QuietLogger{}, Cache: staged.cache, FS: pebbleutil.DiscretionaryFS(nil),
 		MemTableSize: 8 << 20, MemTableStopWritesThreshold: 2, DisableWAL: true})
 	if err != nil {
 		return nil, err

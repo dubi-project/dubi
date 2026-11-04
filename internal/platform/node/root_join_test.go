@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/storage/storelock"
 	"go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // These model inputs isolate the startup fence; the Server integration test
@@ -117,6 +120,30 @@ func TestRootJoinStartupBarrierRetriesLostReplyAndElectionOnly(t *testing.T) {
 	err = confirmStartupRoot(stopping, func(context.Context) error { stop(); return raft.ErrNoLeader }, time.Millisecond)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("shutdown retried", err)
+	}
+}
+
+func TestRootStartupRetriesUnavailableVotersWithoutMaskingPermanentFailure(t *testing.T) {
+	unavailable := status.Error(codes.Unavailable, "Root follower has only a leader hint")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	calls := 0
+	if err := confirmStartupRoot(ctx, func(context.Context) error {
+		calls++
+		if calls == 1 {
+			return errors.Join(fmt.Errorf("voter one: %w", unavailable), fmt.Errorf("voter two: %w", raft.ErrNoLeader))
+		}
+		return nil
+	}, time.Millisecond); err != nil || calls != 2 {
+		t.Fatal("startup did not recover from temporarily unavailable voters", calls, err)
+	}
+	for _, permanent := range []error{errors.New("storage failure"), status.Error(codes.PermissionDenied, "removed identity"), errors.New("Group read response has no confirmed index")} {
+		calls = 0
+		fault := fmt.Errorf("Root voters: %w", errors.Join(unavailable, permanent))
+		err := confirmStartupRoot(ctx, func(context.Context) error { calls++; return fault }, time.Millisecond)
+		if !errors.Is(err, permanent) || calls != 1 {
+			t.Fatal("transient voter failure masked permanent startup failure", calls, err)
+		}
 	}
 }
 

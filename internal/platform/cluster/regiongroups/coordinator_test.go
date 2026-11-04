@@ -2,12 +2,17 @@ package regiongroups
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
+	"github.com/dubi-project/dubi/internal/platform/identity/enrollment"
+	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
@@ -126,6 +131,73 @@ func apply(t *testing.T, s *rootstate.State, command rootstate.Command) {
 	r, found, err := s.ResultForCommand(data)
 	if err != nil || !found || r.Error != "" {
 		t.Fatal(r, found, err)
+	}
+}
+
+// Actual enrollment produces admitted learners, unlike the legacy fixture's
+// directly registered learners. Stable Root topology keeps some of them as
+// learners permanently; this must not block regional formation.
+func TestRegionalFormationIncludesDurablyAdmittedRootLearners(t *testing.T) {
+	c, h, _, _ := fixture(t)
+	conf := h.root.ConfState()
+	_, request, err := enrollment.Prepare(t.TempDir(), nodepki.DefaultServerName, "west", "joining:7443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := rootstate.JoinGrant{GrantID: "join_00000000000000000000000000000001", IssuerRaftID: 1,
+		SecretSHA256: strings.Repeat("a", 64), EnrollmentKeySHA256: strings.Repeat("b", 64),
+		CreatedUnix: 100, ExpiresUnix: 1000, State: rootstate.JoinGrantActive}
+	apply(t, h.root, rootstate.Command{Type: rootstate.CreateJoinGrant, JoinGrant: &grant})
+	command, err := rootstate.NodeEnrollmentCommand(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Enrollment validates the CSR-bound request ID; preserve that ID rather
+	// than replacing it with the fixture's ordinary request sequence.
+	encodedCommand, err := rootstate.EncodeCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.root.Apply(h.root.AppliedIndex()+1, encodedCommand); err != nil {
+		t.Fatal(err)
+	}
+	if result, found, err := h.root.ResultForCommand(encodedCommand); err != nil || !found || result.Error != "" {
+		t.Fatal(result, found, err)
+	}
+	encoded, err := enrollment.EncodeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	apply(t, h.root, rootstate.Command{Type: rootstate.ConsumeJoinGrant, JoinConsumption: &rootstate.JoinGrantConsumption{
+		GrantID: grant.GrantID, RequestSHA256: hex.EncodeToString(digest[:]), AuthorizedUnix: 200}})
+	apply(t, h.root, rootstate.Command{Type: rootstate.BeginRootJoin, RootJoinStart: &rootstate.RootJoinStart{GrantID: grant.GrantID, Request: request}})
+	conf.Learners = append(conf.Learners, request.RaftID)
+	if err := h.root.ApplyMembership(h.root.AppliedIndex()+1, conf); err != nil {
+		t.Fatal(err)
+	}
+	// Pending admission remains a hard gate.
+	if err := c.plan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := h.root.RegionCohortHead("west"); found {
+		t.Fatal("formation captured an enrollment that is still pending")
+	}
+	apply(t, h.root, rootstate.Command{Type: rootstate.CompleteRootJoin, RootJoinFinish: &rootstate.RootJoinFinish{GrantID: grant.GrantID}})
+	if err := c.plan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cohort, found, err := h.root.GroupInitialCohort(GroupID("west"))
+	want := []uint64{1, 2, 3, request.RaftID}
+	slices.Sort(want)
+	if err != nil || !found || !slices.Equal(cohort.Nodes, want) {
+		t.Fatal("stable admitted Root learner blocked formation", cohort, found, err)
+	}
+	if !slices.Contains(h.root.ConfState().Learners, request.RaftID) {
+		t.Fatal("formation unnecessarily promoted a Root learner")
+	}
+	if group, found, err := h.root.Group(GroupID("west")); err != nil || !found || group.Epoch != 1 || len(group.Members) != 0 {
+		t.Fatal("planning bypassed participant confirmation", group, found, err)
 	}
 }
 

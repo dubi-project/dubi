@@ -124,7 +124,16 @@ func (s *RecordTransferServer) Put(stream raftwire.RecordTransferService_PutServ
 	}
 	recordID = traceRecordID(d.ID)
 	phaseStarted := time.Now()
-	before, _, err := s.auth.qualify(ctx, header.FromRaftId)
+	rootCut, hasRootCut, err := confirmedRootCutFromMetadata(ctx)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "invalid Root authorization cut")
+	}
+	var index uint64
+	if hasRootCut {
+		_, index, err = s.auth.qualifyAtRootCut(ctx, header.FromRaftId, rootCut)
+	} else {
+		_, index, err = s.auth.qualify(ctx, header.FromRaftId)
+	}
 	traceRecordRPC("transfer_put", recordID, "root_qualify_before_receive", phaseStarted)
 	if err != nil {
 		return err
@@ -160,29 +169,13 @@ func (s *RecordTransferServer) Put(stream raftwire.RecordTransferService_PutServ
 	if hex.EncodeToString(digest[:]) != d.SHA256 {
 		return status.Error(codes.DataLoss, "record payload digest mismatch")
 	}
-	// Receiving all bytes is not authorization to publish indefinitely. Recheck
-	// the two Node registrations immediately before and after synchronous IO.
-	phaseStarted = time.Now()
-	ready, _, err := s.auth.qualify(ctx, header.FromRaftId)
-	traceRecordRPC("transfer_put", recordID, "root_qualify_before_write", phaseStarted)
-	if err != nil {
-		return err
-	}
-	if ready != before {
-		return status.Error(codes.FailedPrecondition, "record transfer Node registration changed")
-	}
+	// Membership and TLS were checked before receiving any application bytes.
+	// Do not serialize a second global Root ReadIndex before Pack IO: the
+	// coordinator's Owner LocalConfirmation checks the current Region fence
+	// after staging and refuses LocalReady if membership changed meanwhile.
 	phaseStarted = time.Now()
 	holding, putErr := s.store.Put(ctx, d, payload)
 	traceRecordRPC("transfer_put", recordID, "pack_write", phaseStarted)
-	phaseStarted = time.Now()
-	after, index, err := s.auth.qualify(ctx, header.FromRaftId)
-	traceRecordRPC("transfer_put", recordID, "root_qualify_after_write", phaseStarted)
-	if err != nil {
-		return err
-	}
-	if after != before {
-		return status.Error(codes.FailedPrecondition, "record transfer Node registration changed")
-	}
 	if err := ctx.Err(); err != nil {
 		return status.FromContextError(err).Err()
 	}
@@ -295,6 +288,7 @@ func (c *GroupClient) PutRecord(ctx context.Context, target rootstate.Node, d re
 	if err != nil {
 		return HoldingObservation{}, err
 	}
+	ctx = appendConfirmedRootCut(ctx)
 	var transportPeer peer.Peer
 	stream, err := remote.Put(ctx, grpc.Peer(&transportPeer), grpc.MaxCallSendMsgSize(recordTransferFrameBytes+recordHoldingMessageBytes), grpc.MaxCallRecvMsgSize(recordHoldingMessageBytes))
 	if err != nil {

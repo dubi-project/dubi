@@ -26,12 +26,13 @@ func TestNodeRemoveByNameUsesManagedRPCAndRetainsMajorityCheck(t *testing.T) {
 	}
 	_, wait := startJoinTestServer(t, process)
 	wait()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	address := process.LocalAddress()
+	entryStore, entryAddress := store, address
 	invoke := func(args ...string) (string, error) {
 		var output bytes.Buffer
-		err := runNode(ctx, append([]string{"remove", "--store", store, "--server", address}, args...), &output, io.Discard)
+		err := runNode(ctx, append([]string{"remove", "--store", entryStore, "--server", entryAddress}, args...), &output, io.Discard)
 		return output.String(), err
 	}
 	if _, err := invoke("missing"); err == nil {
@@ -40,6 +41,21 @@ func TestNodeRemoveByNameUsesManagedRPCAndRetainsMajorityCheck(t *testing.T) {
 	if _, err := invoke("leader"); err == nil || !strings.Contains(err.Error(), "majority") {
 		t.Fatal("named removal bypassed majority check", err)
 	}
+	// The operator may use a follower entry. Exercise actual authenticated
+	// membership inspection and management forwarding, not direct Go removal.
+	_, ticket := joinTestTicket(t, store, address)
+	peerStore := t.TempDir()
+	joined, err := openJoiningServer(ctx, []string{"--store", peerStore, "--listen", "127.0.0.1:0", "--ticket-file", ticket}, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, peerReady := startJoinTestServer(t, joined)
+	peerReady()
+	leader, err := process.Runtime.Host.Status(raft.RootGroupID)
+	if err != nil || leader.LeaderID != process.Runtime.Identity.RaftID {
+		t.Fatal("forwarding fixture lost its expected leader", leader, err)
+	}
+	entryStore, entryAddress = peerStore, joined.LocalAddress()
 	// Register unused identities to exercise successful fencing without
 	// pretending a descriptor edit is a Raft membership change.
 	for i, name := range []string{"sh-01", "123"} {

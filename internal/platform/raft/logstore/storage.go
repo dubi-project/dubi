@@ -1,6 +1,7 @@
 package logstore
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -105,7 +106,7 @@ func (s *Storage) InitialState() (*raftpb.HardState, *raftpb.ConfState, error) {
 	return cloneHardState(s.hardState), cloneConfState(s.confState), nil
 }
 
-func (s *Storage) Entries(lo, hi, maxSize uint64) ([]*raftpb.Entry, error) {
+func (s *Storage) Entries(lo, hi, maxSize uint64) (entries []*raftpb.Entry, returnErr error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.closed {
@@ -122,15 +123,35 @@ func (s *Storage) Entries(lo, hi, maxSize uint64) ([]*raftpb.Entry, error) {
 	}
 	// A long persisted log with a tiny maxSize must not allocate a pointer for
 	// every entry in the requested range before the byte limit is considered.
-	entries := make([]*raftpb.Entry, 0, min(hi-lo, 64))
+	entries = make([]*raftpb.Entry, 0, min(hi-lo, 64))
+	// Catchup reads a contiguous range while the owning Raft Group is locked.
+	// Repeated point Gets reopen SST iterators and reread/decompress blocks for
+	// every entry. One bounded iterator reuses those blocks for the whole batch.
+	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: entryKey(lo), UpperBound: entryKey(hi)})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, iterator.Close())
+		if returnErr != nil {
+			entries = nil
+		}
+	}()
 	var size uint64
+	valid := iterator.First()
 	for index := lo; index < hi; index++ {
-		entry := new(raftpb.Entry)
-		if err := getProto(s.db, entryKey(index), entry); err != nil {
-			if errors.Is(err, pebble.ErrNotFound) {
-				return nil, raft.ErrUnavailable
+		if !valid {
+			if err := iterator.Error(); err != nil {
+				return nil, err
 			}
-			return nil, err
+			return nil, raft.ErrUnavailable
+		}
+		if !bytes.Equal(iterator.Key(), entryKey(index)) {
+			return nil, raft.ErrUnavailable
+		}
+		entry := new(raftpb.Entry)
+		if err := proto.Unmarshal(iterator.Value(), entry); err != nil {
+			return nil, fmt.Errorf("decode Raft record %q: %w", iterator.Key(), err)
 		}
 		entrySize := uint64(proto.Size(entry))
 		if len(entries) > 0 && (size >= maxSize || entrySize > maxSize-size) {
@@ -138,6 +159,9 @@ func (s *Storage) Entries(lo, hi, maxSize uint64) ([]*raftpb.Entry, error) {
 		}
 		entries = append(entries, entry)
 		size += entrySize
+		if index+1 < hi {
+			valid = iterator.Next()
+		}
 	}
 	return entries, nil
 }

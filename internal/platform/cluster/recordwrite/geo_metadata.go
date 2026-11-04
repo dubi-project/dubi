@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
@@ -38,24 +39,69 @@ type GeoMetadataReplicationError struct {
 // a fresh placement/publication retry explicitly supersedes it.
 func ReplicateGeoMetadataWithRetryStore(ctx context.Context, transport GeoMetadataMirrorTransport,
 	plan placement.GeoPlan, mirrors []routedstate.GeoMetadataMirror, retry *GeoMetadataRetryStore) ([]enginestate.Result, error) {
+	return replicateGeoMetadataWithCompletion(ctx, transport, plan, mirrors, retry, nil)
+}
+
+// A background page may defer deletion of a successful mirror until its
+// workers join. Debt stays durable meanwhile; an interrupted page can replay
+// it safely. Normal callers retain immediate per-mirror deletion.
+func replicateGeoMetadataWithCompletion(ctx context.Context, transport GeoMetadataMirrorTransport,
+	plan placement.GeoPlan, mirrors []routedstate.GeoMetadataMirror, retry *GeoMetadataRetryStore,
+	completed func(routedstate.GeoMetadataMirror) error) ([]enginestate.Result, error) {
 	if retry == nil {
 		return ReplicateGeoMetadata(ctx, transport, plan, mirrors)
 	}
+	if ctx == nil || transport == nil || len(mirrors) == 0 {
+		return nil, errors.New("Geo metadata replication requires a transport and mirrors")
+	}
+	known := make(map[string]placement.LocalPlan)
+	for _, region := range plan.Regions() {
+		known[region.RegionID] = region
+	}
+	seen := make(map[string]bool)
 	for _, mirror := range mirrors {
-		if err := retry.Save(mirror); err != nil {
-			return nil, fmt.Errorf("save Geo metadata retry: %w", err)
+		region, found := known[mirror.RegionID]
+		if !found || seen[mirror.RegionID] || !mirrorMatchesRegion(mirror, region) {
+			return nil, errors.New("Geo metadata mirrors differ from the current plan")
 		}
+		seen[mirror.RegionID] = true
 	}
-	results, err := ReplicateGeoMetadata(ctx, transport, plan, mirrors)
+	started := time.Now()
+	err := retry.saveMirrors(mirrors)
+	Trace(ctx, "repair.mirror_save", started)
 	if err != nil {
-		// Rejections remain debt too: they need fresh authority/placement, not
-		// silent deletion merely because this particular command cannot apply.
-		return nil, err
+		return nil, fmt.Errorf("save Geo metadata retry: %w", err)
 	}
+	var results []enginestate.Result
+	var failures []error
 	for _, mirror := range mirrors {
-		if err := retry.Delete(mirror); err != nil {
+		result, err := RetryGeoMetadata(ctx, transport, known[mirror.RegionID], mirror)
+		if err != nil {
+			// Keep only the unfinished item as durable debt and move the fair
+			// queue cursor past it. Rejection/exhaustion is never completion.
+			if markErr := retry.MarkAttempt(mirror); markErr != nil {
+				return nil, errors.Join(err, markErr)
+			}
+			failures = append(failures, err)
+			if ctx.Err() != nil {
+				return nil, errors.Join(failures...)
+			}
+			continue
+		}
+		results = append(results, result)
+		if completed != nil {
+			err = completed(mirror)
+		} else {
+			started := time.Now()
+			err = retry.Delete(mirror)
+			Trace(ctx, "repair.mirror_delete", started)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("delete completed Geo metadata retry: %w", err)
 		}
+	}
+	if len(failures) != 0 {
+		return nil, errors.Join(failures...)
 	}
 	return results, nil
 }
@@ -187,6 +233,18 @@ func RetryGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransport,
 	var applied enginestate.Result
 	var submitted bool
 	nodes := region.Nodes()
+	// A locally hosted Owner can submit its own checkpoint. Prefer it only if
+	// it is in this unchanged confirmed cohort; never add a candidate or reduce
+	// a majority. Other transports keep their original order and RPC behavior.
+	if local, ok := transport.(interface{ preferredGeoMirrorNode(string) uint64 }); ok {
+		preferred := local.preferredGeoMirrorNode(region.GroupID)
+		for i, node := range nodes {
+			if preferred != 0 && node.RaftID == preferred {
+				nodes[0], nodes[i] = nodes[i], nodes[0]
+				break
+			}
+		}
+	}
 	for i, node := range nodes {
 		if err := ctx.Err(); err != nil {
 			return enginestate.Result{}, err

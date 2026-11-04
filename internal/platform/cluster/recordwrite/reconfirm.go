@@ -14,6 +14,8 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/router"
 )
 
+var errReferenceChangedBeforeReconfirmation = errors.New("record reference changed before local reconfirmation")
+
 // EnsureCurrentLocalConfirmation refreshes a published reference after cohort
 // growth or delayed physical repair. It does not mutate module payloads. A
 // current receipt is left untouched; reads still recheck live physical data.
@@ -35,10 +37,6 @@ func (w Writer) EnsureCurrentLocalConfirmation(ctx context.Context, ref enginest
 	if err != nil {
 		return false, err
 	}
-	id, err := ref.Descriptor.ID()
-	if err != nil {
-		return false, err
-	}
 	var receipt enginestate.LocalConfirmationRecord
 	var found bool
 	err = readOwner(ctx, w.Barrier, w.Owner, target, func(view enginestate.ReadView) error {
@@ -49,19 +47,22 @@ func (w Writer) EnsureCurrentLocalConfirmation(ctx context.Context, ref enginest
 		if !exists || current.Index != ref.Index || current.RequestID != ref.RequestID ||
 			current.CommandHash != ref.CommandHash || !reflect.DeepEqual(current.Descriptor, ref.Descriptor) ||
 			!bytes.Equal(current.RoutingKey, ref.RoutingKey) {
-			return errors.New("record reference changed before local reconfirmation")
+			return errReferenceChangedBeforeReconfirmation
 		}
 		receipt, found, readErr = view.LocalConfirmation(ref.Descriptor.Key)
 		return readErr
 	})
+	// A live repair page is a fixed Owner cut. If a later write replaced this
+	// reference before reconfirmation, the old entry is no longer current work;
+	// the next sweep will see and evaluate the replacement. Do not turn this
+	// normal overwrite race into persistent repair debt.
+	if errors.Is(err, errReferenceChangedBeforeReconfirmation) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	if found && receipt.Claim.ReferenceRequestID == ref.RequestID &&
-		receipt.Claim.ReferenceIndex == ref.Index && receipt.Claim.RecordID == id &&
-		receipt.Claim.RegionID == plan.RegionID && receipt.Claim.Generation == plan.Generation &&
-		receipt.Claim.GroupEpoch == plan.GroupEpoch && receipt.Claim.FenceIndex == plan.FenceIndex &&
-		matchingPlanNodes(plan, receipt.Claim.Nodes) {
+	if found && localReceiptMatchesPlan(receipt, ref, plan) {
 		return false, nil
 	}
 	observed, err := ObservePublishedLocal(ctx, w.Barrier, w.Root, w.Owner, w.LocalID, w.LocalNodeID,
@@ -102,6 +103,15 @@ func (w Writer) EnsureCurrentLocalConfirmation(ctx context.Context, ref enginest
 	_, err = CheckCommittedLocal(ctx, w.Barrier, w.Root, w.Owner, w.LocalID, w.LocalNodeID,
 		w.Store, w.Observer, target, ref.Descriptor, ref.RequestID, ref.Index, confirmID, claim)
 	return err == nil, err
+}
+
+func localReceiptMatchesPlan(receipt enginestate.LocalConfirmationRecord, ref enginestate.RecordReference, plan placement.LocalPlan) bool {
+	id, err := ref.Descriptor.ID()
+	return err == nil && receipt.ReferenceCommandHash == ref.CommandHash &&
+		receipt.Claim.ReferenceRequestID == ref.RequestID && receipt.Claim.ReferenceIndex == ref.Index && receipt.Claim.RecordID == id &&
+		receipt.Claim.RegionID == plan.RegionID && receipt.Claim.Generation == plan.Generation &&
+		receipt.Claim.GroupEpoch == plan.GroupEpoch && receipt.Claim.FenceIndex == plan.FenceIndex &&
+		matchingPlanNodes(plan, receipt.Claim.Nodes)
 }
 
 func matchingPlanNodes(plan placement.LocalPlan, ids []uint64) bool {

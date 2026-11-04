@@ -4,6 +4,8 @@ DUBI 是一个独立的分布式数据系统：一个 `dubi` 二进制、一个�
 
 当前首要目标是把独立的集群底座跑通；文件、缓存、消息、搜索等模块在此之后接入。现阶段先用内置 `record` 验证底座，不把它当成正式业务模块。按 [底座可用推进清单](docs/foundation-roadmap.md) 逐阶段验收；实现细节见 [底座架构文档](docs/architecture/immutable-records.md)，更远期的生产验收差距另见 [清单](docs/production-readiness.md)。
 
+开发新的 Engine、Module 或 Gateway 前，先阅读 [开发规范](docs/development/engine-module-gateway.md)，并按规范核对现有代码、接口和测试环境。该文档包含新线程启动说明模板。
+
 集群底座的概念以 [`spec.md`](spec.md) 为准；详细规划见 [`../dubi.md`](../dubi.md)，目录职责见 [`docs/architecture/layout.md`](docs/architecture/layout.md)。
 
 Byfile 提供经验证的底座代码与实现经验；DUBI 不依赖 Byfile 的模块、服务、协议或数据格式。

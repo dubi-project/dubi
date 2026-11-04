@@ -18,8 +18,10 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/recovery"
 	"github.com/dubi-project/dubi/internal/platform/recovery/repository"
+	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/nodeadminrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
+	"github.com/dubi-project/dubi/internal/platform/storage/pack"
 )
 
 const (
@@ -35,6 +37,7 @@ type backupWorker struct {
 	client    *raftrpc.GroupClient
 	storeRoot string
 	report    func(error)
+	io        *resource.Maintenance
 }
 
 func (w *backupWorker) run(ctx context.Context) {
@@ -187,11 +190,30 @@ func (w *backupWorker) processJob(ctx context.Context, job rootstate.BackupJob) 
 	if _, err := w.runtime.ReadRootIndex(ctx); err != nil {
 		return fmt.Errorf("confirm Root checkpoint before backup: %w", err)
 	}
+	maintenanceCtx, finish, admissionErr := w.io.TryStart(ctx, "backup")
+	if admissionErr != nil {
+		return nil
+	}
+	defer finish()
+	ctx = maintenanceCtx
 	sources, release, err := w.sources(ctx)
 	if err != nil {
 		return err
 	}
+	// The stable inode checkpoint is pinned now. Long uploads share the IO
+	// bucket but must not hold the job slot and starve Repair for hours.
+	finish()
 	defer release()
+	for i := range sources {
+		open := sources[i].Open
+		sources[i].Open = func(call context.Context) (io.ReadCloser, error) {
+			reader, err := open(call)
+			if err != nil {
+				return nil, err
+			}
+			return resource.LimitReader(call, reader), nil
+		}
+	}
 	result, err := recovery.RunBackup(ctx, store, recovery.Plan{Repository: repositoryConfig,
 		ClusterID: job.ClusterID, Epoch: job.Epoch}, sources)
 	if err != nil {
@@ -309,48 +331,13 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 	if w.runtime.Packs == nil {
 		return nil, func() {}, errors.New("Pack pool is not available")
 	}
-	packs, err := w.runtime.Packs.SnapshotPacks(ctx)
-	if err != nil {
-		return nil, func() {}, err
-	}
+	var packs []pack.SnapshotPack
 	release := func() {
-		for index := range packs {
-			_ = packs[index].Close()
+		for i := range packs {
+			_ = packs[i].Close()
 		}
 	}
-	sources := make([]recovery.Source, 0, len(packs)+3)
-	for _, item := range packs {
-		item := item
-		source := recovery.Source{Name: fmt.Sprintf("volume/%s/pack/%s", item.VolumeID, item.PackID), Kind: "pack",
-			NodeID: w.runtime.Identity.NodeID, StoreID: item.StoreID, Format: "DUBIPK02", Size: item.Size,
-			Open: func(openContext context.Context) (io.ReadCloser, error) {
-				if openContext != nil {
-					if err := openContext.Err(); err != nil {
-						return nil, err
-					}
-				}
-				return item.Open()
-			}}
-		sources = append(sources, source)
-	}
-	if w.runtime.Records != nil {
-		indexImage, snapshotErr := w.runtime.Records.SnapshotIndex(ctx)
-		if snapshotErr != nil {
-			release()
-			return nil, func() {}, fmt.Errorf("snapshot immutable record index: %w", snapshotErr)
-		}
-		indexImage = append([]byte(nil), indexImage...)
-		sources = append(sources, recovery.Source{Name: "records/index", Kind: "records-index",
-			NodeID: w.runtime.Identity.NodeID, StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_RECORD_INDEX_V1", Size: int64(len(indexImage)),
-			Open: func(openContext context.Context) (io.ReadCloser, error) {
-				if openContext != nil {
-					if err := openContext.Err(); err != nil {
-						return nil, err
-					}
-				}
-				return io.NopCloser(bytes.NewReader(indexImage)), nil
-			}})
-	}
+	var sources []recovery.Source
 	if w.runtime.Root != nil {
 		image, index, _, err := w.runtime.Root.Snapshot()
 		if err != nil {
@@ -414,6 +401,37 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 				return nil, func() {}, fmt.Errorf("Engine Group %q is expected on this Node but is not open", group.GroupID)
 			}
 		}
+	}
+	var indexImage []byte
+	var err error
+	if w.runtime.Records != nil {
+		packs, indexImage, err = w.runtime.Records.SnapshotWithPacks(ctx)
+	} else {
+		packs, err = w.runtime.Packs.SnapshotPacks(ctx)
+	}
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("capture Pack/index checkpoint: %w", err)
+	}
+	for _, item := range packs {
+		item := item
+		sources = append(sources, recovery.Source{Name: fmt.Sprintf("volume/%s/pack/%s", item.VolumeID, item.PackID), Kind: "pack",
+			NodeID: w.runtime.Identity.NodeID, StoreID: item.StoreID, Format: "DUBIPK02", Size: item.Size,
+			Open: func(call context.Context) (io.ReadCloser, error) {
+				if err := call.Err(); err != nil {
+					return nil, err
+				}
+				return item.Open()
+			}})
+	}
+	if indexImage != nil {
+		sources = append(sources, recovery.Source{Name: "records/index", Kind: "records-index", NodeID: w.runtime.Identity.NodeID,
+			StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_RECORD_INDEX_V1", Size: int64(len(indexImage)),
+			Open: func(call context.Context) (io.ReadCloser, error) {
+				if err := call.Err(); err != nil {
+					return nil, err
+				}
+				return io.NopCloser(bytes.NewReader(indexImage)), nil
+			}})
 	}
 	return sources, release, nil
 }

@@ -62,3 +62,34 @@ func TestRepairSelectedTargetsWritesOnlyConfirmedGeoTargets(t *testing.T) {
 		t.Fatal("foreign Geo target was accepted")
 	}
 }
+
+func TestRepairSelectedTargetsUsesLocalStoreForSelfTarget(t *testing.T) {
+	plan := geoRepairPlan(t)
+	regions := plan.Regions()
+	var west, east placement.LocalPlan
+	for _, region := range regions {
+		if region.RegionID == "west" {
+			west = region
+		} else if region.RegionID == "east" {
+			east = region
+		}
+	}
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+		"origin-group", []byte("geo-local-key"), []byte("geo-local-body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &remoteRepairFake{repairSourceFake: &repairSourceFake{nodes: append(west.Nodes(), east.Nodes()...)}}
+	localCalled := false
+	holdings, err := RepairSelectedTargetsWithLocal(context.Background(), plan,
+		placement.RepairTarget{Scope: placement.RepairInRegion, RegionID: "west", Nodes: []rootstate.Node{west.Nodes()[0]}},
+		east.Nodes()[0], d.GroupID, d, fake, west.Nodes()[0].RaftID,
+		func(_ context.Context, source rootstate.Node, group string, descriptor records.Descriptor) (records.Holding, error) {
+			localCalled = source.RaftID == east.Nodes()[0].RaftID && group == d.GroupID && descriptor.Keyspace == d.Keyspace
+			id, _ := descriptor.ID()
+			return records.Holding{RecordID: id, Descriptor: descriptor, StoreID: "store-local", VolumeID: "volume-local"}, nil
+		})
+	if err != nil || len(holdings) != 1 || !localCalled || len(fake.remoteTargets) != 0 {
+		t.Fatal(holdings, localCalled, fake.remoteTargets, err)
+	}
+}

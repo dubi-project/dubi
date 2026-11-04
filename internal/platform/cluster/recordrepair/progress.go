@@ -33,6 +33,13 @@ type Progress struct {
 	Unresolved uint64   `json:"unresolved,omitempty"`
 	FirstError string   `json:"first_error,omitempty"`
 	Done       bool     `json:"done"`
+	// NeedsCleanSweep survives the next sweep's clean pages and restarts.
+	// Unresolved counts failures in the current sweep only.
+	NeedsCleanSweep  bool   `json:"needs_clean_sweep,omitempty"`
+	Scanned          uint64 `json:"scanned,omitempty"`
+	StartedUnix      int64  `json:"started_unix,omitempty"`
+	LastProgressUnix int64  `json:"last_progress_unix,omitempty"`
+	LastCleanUnix    int64  `json:"last_clean_unix,omitempty"`
 }
 
 func (p Progress) validate() error {
@@ -40,6 +47,9 @@ func (p Progress) validate() error {
 		p.Generation == 0 || p.GroupEpoch == 0 || p.FenceIndex == 0 || len(p.Nodes) == 0 || len(p.Nodes) > 4096 ||
 		len(p.Cursor) > maxRepairProgressCursorBytes || len(p.FirstError) > 4096 {
 		return errors.New("invalid repair progress")
+	}
+	if p.StartedUnix < 0 || p.LastProgressUnix < 0 || p.LastCleanUnix < 0 {
+		return errors.New("repair progress has a negative timestamp")
 	}
 	for i, node := range p.Nodes {
 		if node == 0 || (i > 0 && p.Nodes[i-1] >= node) {

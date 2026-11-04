@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/dubi-project/dubi/internal/platform/storage/diskbudget"
 )
 
 func reservationRegistry(t *testing.T) (*Registry, []Record) {
@@ -224,5 +226,40 @@ func TestReservationShutdownAndRealProbe(t *testing.T) {
 	}
 	if _, err := r.Reserve(1, nil); !errors.Is(err, ErrInvalidReservation) {
 		t.Fatal(err)
+	}
+}
+
+func TestIndependentVolumeRegistriesShareMetadataAndPackBudget(t *testing.T) {
+	a, _ := reservationRegistry(t)
+	b, _ := reservationRegistry(t)
+	const device = 876543
+	sample := diskSample{Device: device, Total: 10 << 30, Available: MinFreeBytes + 100}
+	a.probe = func(*os.Root) (diskSample, error) { return sample, nil }
+	b.probe = a.probe
+	pack, err := a.Reserve(60, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pack.Release()
+	if _, err := b.Reserve(41, nil); !errors.Is(err, ErrInsufficientSpace) {
+		t.Fatal("separate Registry double-counted the filesystem", err)
+	}
+	metadata, err := diskbudget.Shared.Reserve(diskbudget.Capacity{Device: device, Total: sample.Total, Available: sample.Available}, 30, diskbudget.Discretionary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Release()
+	if _, err := b.Reserve(11, nil); !errors.Is(err, ErrInsufficientSpace) {
+		t.Fatal("Pack ignored the metadata reservation", err)
+	}
+	second, err := b.Reserve(10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.Release()
+	metadata.Release()
+	pack.Release()
+	if diskbudget.Shared.Reserved(device) != 0 {
+		t.Fatal("cross-component reservation leaked")
 	}
 }

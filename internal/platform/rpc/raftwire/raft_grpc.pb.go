@@ -626,8 +626,9 @@ var RangeControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	EngineService_Mutate_FullMethodName = "/dubi.internal.raft.v1.EngineService/Mutate"
-	EngineService_Read_FullMethodName   = "/dubi.internal.raft.v1.EngineService/Read"
+	EngineService_Mutate_FullMethodName         = "/dubi.internal.raft.v1.EngineService/Mutate"
+	EngineService_Read_FullMethodName           = "/dubi.internal.raft.v1.EngineService/Read"
+	EngineService_MirrorGeoBatch_FullMethodName = "/dubi.internal.raft.v1.EngineService/MirrorGeoBatch"
 )
 
 // EngineServiceClient is the client API for EngineService service.
@@ -636,6 +637,8 @@ const (
 type EngineServiceClient interface {
 	Mutate(ctx context.Context, in *EngineMutateRequest, opts ...grpc.CallOption) (*EngineResult, error)
 	Read(ctx context.Context, in *EngineReadRequest, opts ...grpc.CallOption) (*EngineReadResponse, error)
+	// Bounded platform metadata only; each row has its own durable result.
+	MirrorGeoBatch(ctx context.Context, in *EngineMirrorBatchRequest, opts ...grpc.CallOption) (*EngineMirrorBatchResponse, error)
 }
 
 type engineServiceClient struct {
@@ -666,12 +669,24 @@ func (c *engineServiceClient) Read(ctx context.Context, in *EngineReadRequest, o
 	return out, nil
 }
 
+func (c *engineServiceClient) MirrorGeoBatch(ctx context.Context, in *EngineMirrorBatchRequest, opts ...grpc.CallOption) (*EngineMirrorBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EngineMirrorBatchResponse)
+	err := c.cc.Invoke(ctx, EngineService_MirrorGeoBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngineServiceServer is the server API for EngineService service.
 // All implementations must embed UnimplementedEngineServiceServer
 // for forward compatibility.
 type EngineServiceServer interface {
 	Mutate(context.Context, *EngineMutateRequest) (*EngineResult, error)
 	Read(context.Context, *EngineReadRequest) (*EngineReadResponse, error)
+	// Bounded platform metadata only; each row has its own durable result.
+	MirrorGeoBatch(context.Context, *EngineMirrorBatchRequest) (*EngineMirrorBatchResponse, error)
 	mustEmbedUnimplementedEngineServiceServer()
 }
 
@@ -687,6 +702,9 @@ func (UnimplementedEngineServiceServer) Mutate(context.Context, *EngineMutateReq
 }
 func (UnimplementedEngineServiceServer) Read(context.Context, *EngineReadRequest) (*EngineReadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Read not implemented")
+}
+func (UnimplementedEngineServiceServer) MirrorGeoBatch(context.Context, *EngineMirrorBatchRequest) (*EngineMirrorBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MirrorGeoBatch not implemented")
 }
 func (UnimplementedEngineServiceServer) mustEmbedUnimplementedEngineServiceServer() {}
 func (UnimplementedEngineServiceServer) testEmbeddedByValue()                       {}
@@ -745,6 +763,24 @@ func _EngineService_Read_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngineService_MirrorGeoBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EngineMirrorBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServiceServer).MirrorGeoBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngineService_MirrorGeoBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServiceServer).MirrorGeoBatch(ctx, req.(*EngineMirrorBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EngineService_ServiceDesc is the grpc.ServiceDesc for EngineService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -759,6 +795,10 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Read",
 			Handler:    _EngineService_Read_Handler,
+		},
+		{
+			MethodName: "MirrorGeoBatch",
+			Handler:    _EngineService_MirrorGeoBatch_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -1004,7 +1044,8 @@ var RegionFenceService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	RecordHoldingService_Observe_FullMethodName = "/dubi.internal.raft.v1.RecordHoldingService/Observe"
+	RecordHoldingService_Observe_FullMethodName      = "/dubi.internal.raft.v1.RecordHoldingService/Observe"
+	RecordHoldingService_ObserveBatch_FullMethodName = "/dubi.internal.raft.v1.RecordHoldingService/ObserveBatch"
 )
 
 // RecordHoldingServiceClient is the client API for RecordHoldingService service.
@@ -1012,6 +1053,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RecordHoldingServiceClient interface {
 	Observe(ctx context.Context, in *ObserveRecordHoldingRequest, opts ...grpc.CallOption) (*ObserveRecordHoldingResponse, error)
+	ObserveBatch(ctx context.Context, in *ObserveRecordHoldingsRequest, opts ...grpc.CallOption) (*ObserveRecordHoldingsResponse, error)
 }
 
 type recordHoldingServiceClient struct {
@@ -1032,11 +1074,22 @@ func (c *recordHoldingServiceClient) Observe(ctx context.Context, in *ObserveRec
 	return out, nil
 }
 
+func (c *recordHoldingServiceClient) ObserveBatch(ctx context.Context, in *ObserveRecordHoldingsRequest, opts ...grpc.CallOption) (*ObserveRecordHoldingsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ObserveRecordHoldingsResponse)
+	err := c.cc.Invoke(ctx, RecordHoldingService_ObserveBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RecordHoldingServiceServer is the server API for RecordHoldingService service.
 // All implementations must embed UnimplementedRecordHoldingServiceServer
 // for forward compatibility.
 type RecordHoldingServiceServer interface {
 	Observe(context.Context, *ObserveRecordHoldingRequest) (*ObserveRecordHoldingResponse, error)
+	ObserveBatch(context.Context, *ObserveRecordHoldingsRequest) (*ObserveRecordHoldingsResponse, error)
 	mustEmbedUnimplementedRecordHoldingServiceServer()
 }
 
@@ -1049,6 +1102,9 @@ type UnimplementedRecordHoldingServiceServer struct{}
 
 func (UnimplementedRecordHoldingServiceServer) Observe(context.Context, *ObserveRecordHoldingRequest) (*ObserveRecordHoldingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Observe not implemented")
+}
+func (UnimplementedRecordHoldingServiceServer) ObserveBatch(context.Context, *ObserveRecordHoldingsRequest) (*ObserveRecordHoldingsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ObserveBatch not implemented")
 }
 func (UnimplementedRecordHoldingServiceServer) mustEmbedUnimplementedRecordHoldingServiceServer() {}
 func (UnimplementedRecordHoldingServiceServer) testEmbeddedByValue()                              {}
@@ -1089,6 +1145,24 @@ func _RecordHoldingService_Observe_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RecordHoldingService_ObserveBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ObserveRecordHoldingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RecordHoldingServiceServer).ObserveBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RecordHoldingService_ObserveBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RecordHoldingServiceServer).ObserveBatch(ctx, req.(*ObserveRecordHoldingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RecordHoldingService_ServiceDesc is the grpc.ServiceDesc for RecordHoldingService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1100,14 +1174,19 @@ var RecordHoldingService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Observe",
 			Handler:    _RecordHoldingService_Observe_Handler,
 		},
+		{
+			MethodName: "ObserveBatch",
+			Handler:    _RecordHoldingService_ObserveBatch_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "internal/platform/rpc/raftwire/raft.proto",
 }
 
 const (
-	RecordTransferService_Put_FullMethodName = "/dubi.internal.raft.v1.RecordTransferService/Put"
-	RecordTransferService_Get_FullMethodName = "/dubi.internal.raft.v1.RecordTransferService/Get"
+	RecordTransferService_Put_FullMethodName      = "/dubi.internal.raft.v1.RecordTransferService/Put"
+	RecordTransferService_Get_FullMethodName      = "/dubi.internal.raft.v1.RecordTransferService/Get"
+	RecordTransferService_GetBatch_FullMethodName = "/dubi.internal.raft.v1.RecordTransferService/GetBatch"
 )
 
 // RecordTransferServiceClient is the client API for RecordTransferService service.
@@ -1116,6 +1195,7 @@ const (
 type RecordTransferServiceClient interface {
 	Put(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutRecordRequest, ObserveRecordHoldingResponse], error)
 	Get(ctx context.Context, in *ObserveRecordHoldingRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetRecordResponse], error)
+	GetBatch(ctx context.Context, in *GetRecordBatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetRecordResponse], error)
 }
 
 type recordTransferServiceClient struct {
@@ -1158,12 +1238,32 @@ func (c *recordTransferServiceClient) Get(ctx context.Context, in *ObserveRecord
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RecordTransferService_GetClient = grpc.ServerStreamingClient[GetRecordResponse]
 
+func (c *recordTransferServiceClient) GetBatch(ctx context.Context, in *GetRecordBatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetRecordResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RecordTransferService_ServiceDesc.Streams[2], RecordTransferService_GetBatch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetRecordBatchRequest, GetRecordResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordTransferService_GetBatchClient = grpc.ServerStreamingClient[GetRecordResponse]
+
 // RecordTransferServiceServer is the server API for RecordTransferService service.
 // All implementations must embed UnimplementedRecordTransferServiceServer
 // for forward compatibility.
 type RecordTransferServiceServer interface {
 	Put(grpc.ClientStreamingServer[PutRecordRequest, ObserveRecordHoldingResponse]) error
 	Get(*ObserveRecordHoldingRequest, grpc.ServerStreamingServer[GetRecordResponse]) error
+	GetBatch(*GetRecordBatchRequest, grpc.ServerStreamingServer[GetRecordResponse]) error
 	mustEmbedUnimplementedRecordTransferServiceServer()
 }
 
@@ -1179,6 +1279,9 @@ func (UnimplementedRecordTransferServiceServer) Put(grpc.ClientStreamingServer[P
 }
 func (UnimplementedRecordTransferServiceServer) Get(*ObserveRecordHoldingRequest, grpc.ServerStreamingServer[GetRecordResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedRecordTransferServiceServer) GetBatch(*GetRecordBatchRequest, grpc.ServerStreamingServer[GetRecordResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method GetBatch not implemented")
 }
 func (UnimplementedRecordTransferServiceServer) mustEmbedUnimplementedRecordTransferServiceServer() {}
 func (UnimplementedRecordTransferServiceServer) testEmbeddedByValue()                               {}
@@ -1219,6 +1322,17 @@ func _RecordTransferService_Get_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RecordTransferService_GetServer = grpc.ServerStreamingServer[GetRecordResponse]
 
+func _RecordTransferService_GetBatch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetRecordBatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(RecordTransferServiceServer).GetBatch(m, &grpc.GenericServerStream[GetRecordBatchRequest, GetRecordResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type RecordTransferService_GetBatchServer = grpc.ServerStreamingServer[GetRecordResponse]
+
 // RecordTransferService_ServiceDesc is the grpc.ServiceDesc for RecordTransferService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1235,6 +1349,11 @@ var RecordTransferService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Get",
 			Handler:       _RecordTransferService_Get_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "GetBatch",
+			Handler:       _RecordTransferService_GetBatch_Handler,
 			ServerStreams: true,
 		},
 	},
@@ -1347,8 +1466,10 @@ var RecordCutService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	RecordRepairService_Fill_FullMethodName   = "/dubi.internal.raft.v1.RecordRepairService/Fill"
-	RecordRepairService_Repair_FullMethodName = "/dubi.internal.raft.v1.RecordRepairService/Repair"
+	RecordRepairService_Fill_FullMethodName             = "/dubi.internal.raft.v1.RecordRepairService/Fill"
+	RecordRepairService_Repair_FullMethodName           = "/dubi.internal.raft.v1.RecordRepairService/Repair"
+	RecordRepairService_Retain_FullMethodName           = "/dubi.internal.raft.v1.RecordRepairService/Retain"
+	RecordRepairService_ReleaseRetention_FullMethodName = "/dubi.internal.raft.v1.RecordRepairService/ReleaseRetention"
 )
 
 // RecordRepairServiceClient is the client API for RecordRepairService service.
@@ -1357,6 +1478,8 @@ const (
 type RecordRepairServiceClient interface {
 	Fill(ctx context.Context, in *FillRecordCutRequest, opts ...grpc.CallOption) (*FillRecordCutResponse, error)
 	Repair(ctx context.Context, in *RepairRecordRequest, opts ...grpc.CallOption) (*RepairRecordResponse, error)
+	Retain(ctx context.Context, in *RetainRecordRequest, opts ...grpc.CallOption) (*RepairRecordResponse, error)
+	ReleaseRetention(ctx context.Context, in *ReleaseRecordRetentionRequest, opts ...grpc.CallOption) (*ReleaseRecordRetentionResponse, error)
 }
 
 type recordRepairServiceClient struct {
@@ -1387,12 +1510,34 @@ func (c *recordRepairServiceClient) Repair(ctx context.Context, in *RepairRecord
 	return out, nil
 }
 
+func (c *recordRepairServiceClient) Retain(ctx context.Context, in *RetainRecordRequest, opts ...grpc.CallOption) (*RepairRecordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepairRecordResponse)
+	err := c.cc.Invoke(ctx, RecordRepairService_Retain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *recordRepairServiceClient) ReleaseRetention(ctx context.Context, in *ReleaseRecordRetentionRequest, opts ...grpc.CallOption) (*ReleaseRecordRetentionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseRecordRetentionResponse)
+	err := c.cc.Invoke(ctx, RecordRepairService_ReleaseRetention_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RecordRepairServiceServer is the server API for RecordRepairService service.
 // All implementations must embed UnimplementedRecordRepairServiceServer
 // for forward compatibility.
 type RecordRepairServiceServer interface {
 	Fill(context.Context, *FillRecordCutRequest) (*FillRecordCutResponse, error)
 	Repair(context.Context, *RepairRecordRequest) (*RepairRecordResponse, error)
+	Retain(context.Context, *RetainRecordRequest) (*RepairRecordResponse, error)
+	ReleaseRetention(context.Context, *ReleaseRecordRetentionRequest) (*ReleaseRecordRetentionResponse, error)
 	mustEmbedUnimplementedRecordRepairServiceServer()
 }
 
@@ -1408,6 +1553,12 @@ func (UnimplementedRecordRepairServiceServer) Fill(context.Context, *FillRecordC
 }
 func (UnimplementedRecordRepairServiceServer) Repair(context.Context, *RepairRecordRequest) (*RepairRecordResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Repair not implemented")
+}
+func (UnimplementedRecordRepairServiceServer) Retain(context.Context, *RetainRecordRequest) (*RepairRecordResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Retain not implemented")
+}
+func (UnimplementedRecordRepairServiceServer) ReleaseRetention(context.Context, *ReleaseRecordRetentionRequest) (*ReleaseRecordRetentionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseRetention not implemented")
 }
 func (UnimplementedRecordRepairServiceServer) mustEmbedUnimplementedRecordRepairServiceServer() {}
 func (UnimplementedRecordRepairServiceServer) testEmbeddedByValue()                             {}
@@ -1466,6 +1617,42 @@ func _RecordRepairService_Repair_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RecordRepairService_Retain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetainRecordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RecordRepairServiceServer).Retain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RecordRepairService_Retain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RecordRepairServiceServer).Retain(ctx, req.(*RetainRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RecordRepairService_ReleaseRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseRecordRetentionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RecordRepairServiceServer).ReleaseRetention(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RecordRepairService_ReleaseRetention_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RecordRepairServiceServer).ReleaseRetention(ctx, req.(*ReleaseRecordRetentionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RecordRepairService_ServiceDesc is the grpc.ServiceDesc for RecordRepairService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1480,6 +1667,14 @@ var RecordRepairService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Repair",
 			Handler:    _RecordRepairService_Repair_Handler,
+		},
+		{
+			MethodName: "Retain",
+			Handler:    _RecordRepairService_Retain_Handler,
+		},
+		{
+			MethodName: "ReleaseRetention",
+			Handler:    _RecordRepairService_ReleaseRetention_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

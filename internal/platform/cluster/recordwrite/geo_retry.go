@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
@@ -30,6 +31,8 @@ type GeoMetadataRetryStore struct {
 	mu     sync.Mutex
 	db     *pebble.DB
 	closed bool
+	failed error
+	count  int
 }
 
 // GeoMirrorPlanResolver must derive a fresh current Region plan from Root. A
@@ -54,34 +57,94 @@ func RetryPendingGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTra
 	if ctx == nil || transport == nil || store == nil || resolve == nil {
 		return GeoMirrorRetryReport{}, errors.New("geo metadata retry requires context, transport, store and resolver")
 	}
-	mirrors, err := store.List()
+	mirrors, pending, err := store.NextPage(8)
 	if err != nil {
 		return GeoMirrorRetryReport{}, err
 	}
-	report := GeoMirrorRetryReport{Pending: uint64(len(mirrors))}
+	report := GeoMirrorRetryReport{Pending: uint64(pending)}
+	if _, ok := transport.(GeoMetadataMirrorBatchTransport); ok {
+		return retryGeoMetadataPage(ctx, transport, store, resolve, mirrors, report)
+	}
 	for _, mirror := range mirrors {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		report.Attempted++
-		plan, err := resolve(ctx, mirror)
-		if err != nil {
-			continue
-		}
-		current, ok := rebindGeoMetadataMirror(mirror, plan)
-		if !ok {
-			continue
-		}
-		if _, err := RetryGeoMetadata(ctx, transport, plan, current); err != nil {
-			continue
-		}
-		if err := store.Delete(mirror); err != nil {
+		if err := store.MarkAttempt(mirror); err != nil {
 			return report, err
+		}
+		report.Attempted++
+		taskCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		completed, err := retryOneGeoMetadata(taskCtx, transport, store, resolve, mirror)
+		cancel()
+		if err != nil {
+			return report, err
+		}
+		if !completed {
+			continue
 		}
 		report.Completed++
 	}
 	report.Pending -= report.Completed
 	return report, nil
+}
+
+// Resolve each row against fresh authority and share transport only once its
+// destination is known. The persisted cursor advances in admission order;
+// completion order never puts a failed row back at the queue head.
+func retryGeoMetadataPage(ctx context.Context, transport GeoMetadataMirrorTransport, store *GeoMetadataRetryStore,
+	resolve GeoMirrorPlanResolver, mirrors []routedstate.GeoMetadataMirror, report GeoMirrorRetryReport) (GeoMirrorRetryReport, error) {
+	if len(mirrors) == 0 {
+		return report, nil
+	}
+	for _, mirror := range mirrors {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
+		if err := store.MarkAttempt(mirror); err != nil {
+			return report, err
+		}
+	}
+	work, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	pooled, closePool := newGeoMirrorPagePool(work, transport)
+	defer closePool()
+	completed := make([]bool, len(mirrors))
+	failures := make([]error, len(mirrors))
+	var workers sync.WaitGroup
+	for i, mirror := range mirrors {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			completed[i], failures[i] = retryOneGeoMetadata(work, pooled, store, resolve, mirror)
+		}()
+	}
+	workers.Wait()
+	report.Attempted += uint64(len(mirrors))
+	for _, done := range completed {
+		if done {
+			report.Completed++
+		}
+	}
+	report.Pending -= report.Completed
+	return report, errors.Join(append(failures, ctx.Err())...)
+}
+
+func retryOneGeoMetadata(ctx context.Context, transport GeoMetadataMirrorTransport, store *GeoMetadataRetryStore, resolve GeoMirrorPlanResolver, mirror routedstate.GeoMetadataMirror) (bool, error) {
+	plan, err := resolve(ctx, mirror)
+	if err != nil {
+		return false, nil
+	}
+	current, ok := rebindGeoMetadataMirror(mirror, plan)
+	if !ok {
+		return false, nil
+	}
+	if _, err := RetryGeoMetadata(ctx, transport, plan, current); err != nil {
+		return false, nil
+	}
+	if err := store.Delete(mirror); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func rebindGeoMetadataMirror(mirror routedstate.GeoMetadataMirror, plan placement.LocalPlan) (routedstate.GeoMetadataMirror, bool) {
@@ -123,44 +186,20 @@ func OpenGeoMetadataRetryStore(root string) (*GeoMetadataRetryStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &GeoMetadataRetryStore{db: db}, nil
+	store := &GeoMetadataRetryStore{db: db}
+	count, err := store.countLocked()
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	store.count = count
+	return store, nil
 }
 
 func geoRetryKey(requestID string) []byte { return []byte("geo-mirror/" + requestID) }
 
 func (s *GeoMetadataRetryStore) Save(mirror routedstate.GeoMetadataMirror) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.usable(); err != nil {
-		return err
-	}
-	if mirror.Validate() != nil {
-		return errors.New("invalid geo metadata retry mirror")
-	}
-	requestID, err := mirrorRequestID(mirror)
-	if err != nil {
-		return err
-	}
-	entry := geoRetryEntry{Version: geoRetryVersion, Mirror: mirror}
-	encoded, err := json.Marshal(entry)
-	if err != nil {
-		return err
-	}
-	if len(encoded) > geoRetryMaxBytes {
-		return errors.New("geo metadata retry entry exceeds size bound")
-	}
-	count, err := s.countLocked()
-	if err != nil {
-		return err
-	}
-	if _, closer, getErr := s.db.Get(geoRetryKey(requestID)); getErr == nil {
-		_ = closer.Close()
-	} else if !errors.Is(getErr, pebble.ErrNotFound) {
-		return getErr
-	} else if count >= geoRetryMaxEntries {
-		return errors.New("geo metadata retry ledger is full")
-	}
-	return s.db.Set(geoRetryKey(requestID), encoded, pebble.Sync)
+	return s.saveMirrors([]routedstate.GeoMetadataMirror{mirror})
 }
 
 func (s *GeoMetadataRetryStore) List() ([]routedstate.GeoMetadataMirror, error) {
@@ -203,19 +242,7 @@ func (s *GeoMetadataRetryStore) List() ([]routedstate.GeoMetadataMirror, error) 
 }
 
 func (s *GeoMetadataRetryStore) Delete(mirror routedstate.GeoMetadataMirror) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.usable(); err != nil {
-		return err
-	}
-	if mirror.Validate() != nil {
-		return errors.New("invalid geo metadata retry mirror")
-	}
-	requestID, err := mirrorRequestID(mirror)
-	if err != nil {
-		return err
-	}
-	return s.db.Delete(geoRetryKey(requestID), pebble.Sync)
+	return s.deleteMirrors([]routedstate.GeoMetadataMirror{mirror})
 }
 
 func (s *GeoMetadataRetryStore) countLocked() (int, error) {
@@ -227,9 +254,6 @@ func (s *GeoMetadataRetryStore) countLocked() (int, error) {
 	count := 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		count++
-		if count > geoRetryMaxEntries {
-			break
-		}
 	}
 	return count, iter.Error()
 }
@@ -237,6 +261,9 @@ func (s *GeoMetadataRetryStore) countLocked() (int, error) {
 func (s *GeoMetadataRetryStore) usable() error {
 	if s == nil || s.db == nil || s.closed {
 		return errors.New("geo metadata retry store is closed")
+	}
+	if s.failed != nil {
+		return s.failed
 	}
 	return nil
 }

@@ -20,6 +20,7 @@ import (
 	identityenrollment "github.com/dubi-project/dubi/internal/platform/identity/enrollment"
 	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/resource"
 	"github.com/dubi-project/dubi/internal/platform/rpc/datawire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
@@ -46,17 +47,34 @@ const (
 // status is an operator view of one quorum-confirmed Root cut. It uses the
 // Node's managed TLS identity and does not claim that listed data is ready.
 type localRepairView struct {
-	WorkerEnabled     bool                   `json:"worker_enabled"`
-	LastCheckUnix     int64                  `json:"last_check_unix"`
-	Issues            []localRepairIssue     `json:"issues"`
-	TotalIssues       uint32                 `json:"total_issues"`
-	RepairDebt        uint32                 `json:"repair_debt"`
-	VolumeMigration   *volumeMigrationView   `json:"volume_migration,omitempty"`
-	VolumeWriteErrors []volumeWriteIssueView `json:"volume_write_errors,omitempty"`
-	MaintenanceBudget *resourceBudgetView    `json:"maintenance_budget,omitempty"`
-	RequestBudget     *resourceBudgetView    `json:"request_budget,omitempty"`
-	GeoMetadataDebt   uint64                 `json:"geo_metadata_debt"`
-	GeoRecordDebt     uint64                 `json:"geo_record_debt"`
+	WorkerEnabled         bool                        `json:"worker_enabled"`
+	LastCheckUnix         int64                       `json:"last_check_unix"`
+	Issues                []localRepairIssue          `json:"issues"`
+	TotalIssues           uint32                      `json:"total_issues"`
+	RepairDebt            uint32                      `json:"repair_debt"`
+	VolumeMigration       *volumeMigrationView        `json:"volume_migration,omitempty"`
+	VolumeWriteErrors     []volumeWriteIssueView      `json:"volume_write_errors,omitempty"`
+	MaintenanceBudget     *resourceBudgetView         `json:"maintenance_budget,omitempty"`
+	RequestBudget         *resourceBudgetView         `json:"request_budget,omitempty"`
+	GeoMetadataDebt       uint64                      `json:"geo_metadata_debt"`
+	GeoRecordDebt         uint64                      `json:"geo_record_debt"`
+	ScanProgressSupported bool                        `json:"scan_progress_supported"`
+	ScanProgress          []repairScanView            `json:"scan_progress,omitempty"`
+	TotalScanGroups       uint32                      `json:"total_scan_groups"`
+	MaintenanceIO         *resource.MaintenanceStatus `json:"maintenance_io,omitempty"`
+	WritableBytes         uint64                      `json:"writable_bytes"`
+	CapacitySupported     bool                        `json:"capacity_supported"`
+}
+
+type repairScanView struct {
+	GroupID          string `json:"group_id"`
+	Phase            string `json:"phase"`
+	Scanned          uint64 `json:"scanned"`
+	Unresolved       uint64 `json:"unresolved"`
+	NeedsCleanSweep  bool   `json:"needs_clean_sweep"`
+	StartedUnix      int64  `json:"started_unix"`
+	LastProgressUnix int64  `json:"last_progress_unix"`
+	LastCleanUnix    int64  `json:"last_clean_unix"`
 }
 
 type volumeMigrationView struct {
@@ -66,6 +84,8 @@ type volumeMigrationView struct {
 	Migrated       uint64 `json:"migrated"`
 	StartedUnix    int64  `json:"started_unix,omitempty"`
 	LastError      string `json:"last_error,omitempty"`
+	TargetVolumeID string `json:"target_volume_id,omitempty"`
+	SourcePackID   string `json:"source_pack_id,omitempty"`
 }
 
 type volumeWriteIssueView struct {
@@ -114,14 +134,26 @@ type regionHealthView struct {
 }
 
 type peerRepairView struct {
-	RaftID           uint64           `json:"raft_id"`
-	NodeID           string           `json:"node_id"`
-	Reachable        bool             `json:"reachable"`
-	Error            string           `json:"error,omitempty"`
-	RepairDebt       uint32           `json:"repair_debt,omitempty"`
-	GeoDebt          uint64           `json:"geo_debt,omitempty"`
-	WriteQuarantines uint32           `json:"write_quarantines,omitempty"`
-	Volumes          []peerVolumeView `json:"volumes,omitempty"`
+	RaftID                uint64                 `json:"raft_id"`
+	NodeID                string                 `json:"node_id"`
+	Name                  string                 `json:"name,omitempty"`
+	RegionID              string                 `json:"region_id,omitempty"`
+	Reachable             bool                   `json:"reachable"`
+	Error                 string                 `json:"error,omitempty"`
+	WorkerEnabled         bool                   `json:"worker_enabled"`
+	LastCheckUnix         int64                  `json:"last_check_unix"`
+	RepairDebt            uint32                 `json:"repair_debt,omitempty"`
+	Issues                []localRepairIssue     `json:"issues,omitempty"`
+	IssuesTruncated       bool                   `json:"issues_truncated,omitempty"`
+	GeoDebt               uint64                 `json:"geo_debt,omitempty"`
+	WriteQuarantines      uint32                 `json:"write_quarantines,omitempty"`
+	VolumeWriteErrors     []volumeWriteIssueView `json:"volume_write_errors,omitempty"`
+	Volumes               []peerVolumeView       `json:"volumes,omitempty"`
+	ScanProgressSupported bool                   `json:"scan_progress_supported"`
+	ScanProgress          []repairScanView       `json:"scan_progress,omitempty"`
+	TotalScanGroups       uint32                 `json:"total_scan_groups"`
+	WritableBytes         uint64                 `json:"writable_bytes"`
+	CapacitySupported     bool                   `json:"capacity_supported"`
 }
 
 type peerVolumeView struct {
@@ -198,6 +230,14 @@ func applyPeerRepairHealth(cluster clusterHealthView, observations []peerRepairV
 			cluster.State = "degraded"
 			cluster.Reasons = append(cluster.Reasons, fmt.Sprintf("Node %s has %d repair/maintenance debt item(s)", observation.NodeID, debt))
 		}
+		if observation.RepairDebt == 0 {
+			for _, progress := range observation.ScanProgress {
+				if progress.NeedsCleanSweep {
+					cluster.State = "degraded"
+					cluster.Reasons = append(cluster.Reasons, fmt.Sprintf("Node %s Group %s awaits a full clean repair sweep", observation.NodeID, progress.GroupID))
+				}
+			}
+		}
 	}
 	return cluster
 }
@@ -233,7 +273,7 @@ func probePeerRepairs(ctx context.Context, id identity.Identity, clientTLS *tls.
 }
 
 func probePeerRepair(ctx context.Context, id identity.Identity, clientTLS *tls.Config, peerNode rootstate.Node) peerRepairView {
-	observation := peerRepairView{RaftID: peerNode.RaftID, NodeID: peerNode.NodeID}
+	observation := peerRepairView{RaftID: peerNode.RaftID, NodeID: peerNode.NodeID, Name: peerNode.Name, RegionID: peerNode.RegionID}
 	if identityenrollment.ValidateNodeAddress(peerNode.Address) != nil {
 		observation.Error = "Root member has no valid address"
 		return observation
@@ -265,15 +305,48 @@ func probePeerRepair(ctx context.Context, id identity.Identity, clientTLS *tls.C
 		observation.Error = "peer response certificate differs from Root membership"
 		return observation
 	}
-	if response == nil || response.GetNodeId() != peerNode.NodeID || response.GetRaftId() != peerNode.RaftID ||
-		len(response.GetIssues()) > 64 || len(response.GetVolumeWriteErrors()) > 64 {
-		observation.Error = "peer returned invalid repair status"
-		return observation
+	return decodePeerRepairStatus(peerNode, response)
+}
+
+// Called only after the probe has verified the peer's managed TLS identity.
+// Keep the issue details from that same observation: a second probe may run
+// after a transient repair issue has already cleared.
+func decodePeerRepairStatus(peerNode rootstate.Node, response *datawire.LocalRepairStatusResponse) peerRepairView {
+	observation := peerRepairView{RaftID: peerNode.RaftID, NodeID: peerNode.NodeID, Name: peerNode.Name, RegionID: peerNode.RegionID}
+	invalid := func() peerRepairView {
+		return peerRepairView{RaftID: peerNode.RaftID, NodeID: peerNode.NodeID, Name: peerNode.Name,
+			RegionID: peerNode.RegionID, Error: "peer returned invalid repair status"}
 	}
+	if response == nil || response.GetNodeId() != peerNode.NodeID || response.GetRaftId() != peerNode.RaftID ||
+		len(response.GetIssues()) > 64 || len(response.GetVolumeWriteErrors()) > 64 ||
+		response.GetTotalIssues() < uint32(len(response.GetIssues())) {
+		return invalid()
+	}
+	progress, err := decodeScanProgress(response)
+	if err != nil {
+		return invalid()
+	}
+	observation.ScanProgress, observation.ScanProgressSupported, observation.TotalScanGroups = progress, response.GetScanProgressSupported(), response.GetTotalScanGroups()
+	observation.WritableBytes, observation.CapacitySupported = response.GetWritableBytes(), response.GetCapacitySupported()
 	observation.Reachable = true
+	observation.WorkerEnabled = response.GetWorkerEnabled()
+	observation.LastCheckUnix = response.GetLastCheckUnix()
 	observation.RepairDebt = response.GetTotalIssues()
+	observation.IssuesTruncated = observation.RepairDebt > uint32(len(response.GetIssues()))
+	for _, issue := range response.GetIssues() {
+		if issue == nil {
+			return invalid()
+		}
+		observation.Issues = append(observation.Issues, localRepairIssue{GroupID: issue.GetGroupId(), Error: issue.GetError()})
+	}
 	observation.GeoDebt = response.GetGeoMetadataDebt() + response.GetGeoRecordDebt()
 	observation.WriteQuarantines = uint32(len(response.GetVolumeWriteErrors()))
+	for _, issue := range response.GetVolumeWriteErrors() {
+		if issue == nil {
+			return invalid()
+		}
+		observation.VolumeWriteErrors = append(observation.VolumeWriteErrors, volumeWriteIssueView{VolumeID: issue.GetVolumeId(), Error: issue.GetError()})
+	}
 	for _, item := range response.GetVolumes() {
 		if item == nil {
 			observation.Error = "peer returned an invalid Volume status"
@@ -289,6 +362,35 @@ func probePeerRepair(ctx context.Context, id identity.Identity, clientTLS *tls.C
 		}
 	}
 	return observation
+}
+
+// Keep diagnostics bounded and reject ambiguous/invalid pages from peers.
+// Absent support is distinct from a supported server with zero local Groups.
+func decodeScanProgress(response *datawire.LocalRepairStatusResponse) ([]repairScanView, error) {
+	items := response.GetScanProgress()
+	if len(items) > 64 || response.GetTotalScanGroups() < uint32(len(items)) ||
+		(!response.GetScanProgressSupported() && (len(items) != 0 || response.GetTotalScanGroups() != 0)) {
+		return nil, errors.New("invalid repair scan progress")
+	}
+	seen := make(map[string]bool, len(items))
+	var result []repairScanView
+	for _, item := range items {
+		if item == nil || raft.ValidateGroupID(item.GetGroupId()) != nil || seen[item.GetGroupId()] ||
+			item.GetStartedUnix() < 0 || item.GetLastProgressUnix() < 0 || item.GetLastCleanUnix() < 0 ||
+			(item.GetUnresolved() != 0 && !item.GetNeedsCleanSweep()) {
+			return nil, errors.New("invalid repair scan progress")
+		}
+		switch item.GetPhase() {
+		case "pending", "waiting_root", "waiting_owner", "repairing", "confirming", "idle":
+		default:
+			return nil, errors.New("invalid repair scan phase")
+		}
+		seen[item.GetGroupId()] = true
+		result = append(result, repairScanView{GroupID: item.GetGroupId(), Phase: item.GetPhase(), Scanned: item.GetScanned(),
+			Unresolved: item.GetUnresolved(), NeedsCleanSweep: item.GetNeedsCleanSweep(), StartedUnix: item.GetStartedUnix(),
+			LastProgressUnix: item.GetLastProgressUnix(), LastCleanUnix: item.GetLastCleanUnix()})
+	}
+	return result, nil
 }
 
 func deriveLocalHealth(storage *volume.Report, storageErr string, repair *localRepairView, repairErr string) localHealthView {
@@ -321,7 +423,15 @@ func deriveLocalHealth(storage *volume.Report, storageErr string, repair *localR
 		health.State = "degraded"
 		health.Reasons = append(health.Reasons, fmt.Sprintf("Geo repair has %d pending item(s)", repair.GeoMetadataDebt+repair.GeoRecordDebt))
 	}
-	if repair != nil && repair.VolumeMigration != nil && repair.VolumeMigration.Active {
+	if repair != nil && repair.TotalIssues == 0 {
+		for _, progress := range repair.ScanProgress {
+			if progress.NeedsCleanSweep {
+				health.State = "degraded"
+				health.Reasons = append(health.Reasons, fmt.Sprintf("Group %s awaits a full clean repair sweep", progress.GroupID))
+			}
+		}
+	}
+	if repair != nil && repair.VolumeMigration != nil && repair.VolumeMigration.Active && (repair.VolumeMigration.TargetVolumeID == "" || repair.VolumeMigration.LastError != "") {
 		health.State = "degraded"
 		reason := "Volume migration is in progress"
 		if repair.VolumeMigration.LastError != "" {
@@ -555,11 +665,20 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 				LastCheckUnix: response.GetLastCheckUnix(), TotalIssues: response.GetTotalIssues(),
 				RepairDebt: response.GetTotalIssues(),
 				Issues:     make([]localRepairIssue, 0, len(response.GetIssues()))}
+			progress, progressErr := decodeScanProgress(response)
+			if progressErr != nil {
+				repairError = progressErr.Error()
+			}
+			repair.ScanProgress, repair.ScanProgressSupported, repair.TotalScanGroups = progress, response.GetScanProgressSupported(), response.GetTotalScanGroups()
+			repair.WritableBytes, repair.CapacitySupported = response.GetWritableBytes(), response.GetCapacitySupported()
+			if ioStatus := response.GetMaintenanceIo(); ioStatus != nil {
+				repair.MaintenanceIO = &resource.MaintenanceStatus{Active: ioStatus.Active, Foreground: ioStatus.Foreground, BytesPerSecond: ioStatus.BytesPerSecond, AccountedBytes: ioStatus.AccountedBytes, Deferred: ioStatus.Deferred}
+			}
 			if migration := response.GetVolumeMigration(); migration != nil {
 				repair.VolumeMigration = &volumeMigrationView{Active: migration.GetActive(),
 					SourceVolumeID: migration.GetSourceVolumeId(), Cursor: migration.GetCursor(),
 					Migrated: migration.GetMigrated(), StartedUnix: migration.GetStartedUnix(),
-					LastError: migration.GetLastError()}
+					LastError: migration.GetLastError(), TargetVolumeID: migration.GetTargetVolumeId(), SourcePackID: migration.GetSourcePackId()}
 			}
 			for _, issue := range response.GetVolumeWriteErrors() {
 				if issue != nil {

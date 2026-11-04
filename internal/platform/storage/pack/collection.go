@@ -625,8 +625,12 @@ func (m *Collection) Seal() error {
 // unlinked; an interruption therefore leaves either the old catalog or safe
 // orphan files, never a catalog pointing at deleted data.
 func (m *Collection) Compact(ctx context.Context, live func(Location) bool) (CompactReport, error) {
+	return m.compact(ctx, live, nil)
+}
+
+func (m *Collection) compact(ctx context.Context, live func(Location) bool, livePack func(Scope) bool) (CompactReport, error) {
 	var report CompactReport
-	if live == nil {
+	if live == nil && livePack == nil {
 		return report, errors.New("nil live Pack record predicate")
 	}
 	m.mu.Lock()
@@ -667,16 +671,21 @@ func (m *Collection) Compact(ctx context.Context, live func(Location) bool) (Com
 		}
 		reachable := false
 		var total int64
-		err = records.Scan(func(loc Location, _ Record) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			total += loc.Length
-			if live(loc) {
-				reachable = true
-			}
-			return nil
-		})
+		if livePack != nil {
+			reachable = livePack(records.Scope())
+			total = records.state.End
+		} else {
+			err = records.Scan(func(loc Location, _ Record) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				total += loc.Length
+				if live(loc) {
+					reachable = true
+				}
+				return nil
+			})
+		}
 		err = errors.Join(err, records.Close())
 		if err != nil {
 			return report, err

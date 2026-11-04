@@ -77,10 +77,8 @@ func (c *Coordinator) plan(ctx context.Context) error {
 	if _, err := c.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
 		return err
 	}
-	// Root learners are not yet ready to host a regional Group.  Wait for the
-	// join workflow to publish durable admission before capturing a cohort;
-	// otherwise formation can race the learner's startup and publish a plan
-	// containing a Node that cannot observe or confirm it.
+	// Wait for durable admission before capturing a cohort. An admitted Node
+	// can host a regional Group while remaining a learner in the Root Group.
 	pending, err := c.root.PendingRootJoins()
 	if err != nil {
 		return err
@@ -97,20 +95,9 @@ func (c *Coordinator) plan(ctx context.Context) error {
 	if len(cut.Membership.GetVotersOutgoing()) != 0 || len(cut.Membership.GetLearnersNext()) != 0 || cut.Membership.GetAutoLeave() {
 		return nil
 	}
-	// An admitted enrollment learner has completed the join protocol but may
-	// still be replaying Root.  Do not freeze that transitional membership into
-	// an initial Region cohort; wait for Root topology to promote it.  Legacy
-	// learners have no durable enrollment task and remain eligible, preserving
-	// recovery of clusters created before the join workflow.
-	for _, learner := range cut.Membership.GetLearners() {
-		task, found, err := c.root.RootJoinForNode(learner)
-		if err != nil {
-			return err
-		}
-		if found && task.State == rootstate.RootJoinAdmitted {
-			return nil
-		}
-	}
+	// Completed admission is independent of the final Root voting role.
+	// Stable topology deliberately retains Root learners; data Group members
+	// still recover their own plan and pass all-participant confirmation.
 	regions := map[string][]uint64{}
 	for _, node := range cut.Nodes {
 		regions[node.RegionID] = append(regions[node.RegionID], node.RaftID)

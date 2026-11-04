@@ -35,13 +35,17 @@ type Reconciler struct {
 	rootControl  RootControl
 	groupControl GroupControl
 	root         *rootstate.State
+	// Explicit maintenance and the scheduler share this reconciler. A waiter
+	// must read its Root task only after the preceding pass has finished, or
+	// both can propose the same membership change from the same old cut.
+	active chan struct{}
 }
 
 func New(rootControl RootControl, groupControl GroupControl, root *rootstate.State) (*Reconciler, error) {
 	if rootControl == nil || groupControl == nil || root == nil {
 		return nil, errors.New("Group membership reconciler requires Root control, Group control, and Root state")
 	}
-	return &Reconciler{rootControl: rootControl, groupControl: groupControl, root: root}, nil
+	return &Reconciler{rootControl: rootControl, groupControl: groupControl, root: root, active: make(chan struct{}, 1)}, nil
 }
 
 // Plan persists desired membership before any Raft ConfState mutation. Calling
@@ -80,6 +84,15 @@ func (reconciler *Reconciler) CheckAvailable(ctx context.Context, groupID string
 // Reconcile is restart-safe: each invocation derives the next action from the
 // persistent Root task and the target Group's durably applied ConfState.
 func (reconciler *Reconciler) Reconcile(ctx context.Context, changeID string) error {
+	if ctx == nil {
+		return errors.New("Group membership reconciliation requires a context")
+	}
+	select {
+	case reconciler.active <- struct{}{}:
+		defer func() { <-reconciler.active }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -220,6 +233,17 @@ func taskReference(task rootstate.GroupChange) rootstate.GroupTaskReference {
 }
 
 func (reconciler *Reconciler) submitRoot(ctx context.Context, command rootstate.Command) error {
+	if ctx == nil {
+		return errors.New("Root membership command requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 	encoded, err := rootstate.EncodeCommand(command)
 	if err != nil {
 		return err
@@ -227,17 +251,31 @@ func (reconciler *Reconciler) submitRoot(ctx context.Context, command rootstate.
 	if err := reconciler.rootControl.Submit(raft.RootGroupID, encoded); err != nil {
 		return fmt.Errorf("submit Root membership command: %w", err)
 	}
-	if _, err := reconciler.rootControl.ReadIndex(ctx, raft.RootGroupID); err != nil {
-		return fmt.Errorf("confirm Root membership command: %w", err)
+	// Submit admits a proposal; its first subsequent ReadIndex can still
+	// precede that proposal's commit. Observe the exact durable command result
+	// within the caller's deadline, without proposing the mutation again.
+	for {
+		if _, err := reconciler.rootControl.ReadIndex(ctx, raft.RootGroupID); err != nil {
+			return fmt.Errorf("confirm Root membership command: %w", err)
+		}
+		result, found, err := reconciler.root.ResultForCommand(encoded)
+		if err != nil {
+			return err
+		}
+		if found {
+			if result.Error != "" {
+				return fmt.Errorf("Root membership command failed: error=%q", result.Error)
+			}
+			return nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
-	result, found, err := reconciler.root.ResultForCommand(encoded)
-	if err != nil {
-		return err
-	}
-	if !found || result.Error != "" {
-		return fmt.Errorf("Root membership command failed: found=%v error=%q", found, result.Error)
-	}
-	return nil
 }
 
 func stableMembers(conf *raftpb.ConfState) (map[uint64]string, error) {

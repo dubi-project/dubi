@@ -231,7 +231,11 @@ func openGroup(options GroupOptions, hook func(string) error) (*Group, error) {
 		Storage: storage, Applied: options.State.AppliedIndex(),
 		MaxSizePerMsg: 1 << 20, MaxCommittedSizePerReady: 4 << 20,
 		MaxUncommittedEntriesSize: 16 << 20, MaxInflightMsgs: 256,
-		CheckQuorum: true, PreVote: true,
+		// Bound catchup by bytes as well as message count. A full 256-message
+		// window can otherwise build hundreds of MiB under the Group lock before
+		// transport dispatch, delaying voter heartbeats behind a slow learner.
+		MaxInflightBytes: 8 << 20,
+		CheckQuorum:      true, PreVote: true,
 	})
 	if err != nil {
 		return closeOnError(err)
@@ -445,7 +449,7 @@ func (g *Group) ReadIndex(ctx context.Context) (uint64, error) {
 	}
 	g.pendingReads[key] = request
 	g.raw.ReadIndex(token[:])
-	messages, err := g.processLocked()
+	messages, err := g.processLocked(false)
 	g.mu.Unlock()
 	if err != nil {
 		return 0, err
@@ -634,9 +638,15 @@ func (g *Group) proposeMembershipExpected(raftID uint64, changeType raftpb.ConfC
 		switch changeType {
 		case raftpb.ConfChangeType_ConfChangeAddLearnerNode:
 			if containsMember(conf, raftID) {
+				if expected != nil {
+					return nil // This authorized step was already applied.
+				}
 				return fmt.Errorf("RaftID %d is already a Group member", raftID)
 			}
 		case raftpb.ConfChangeType_ConfChangeAddNode:
+			if expected != nil && containsVoter(conf, raftID) {
+				return nil
+			}
 			if !containsLearner(conf, raftID) {
 				return fmt.Errorf("RaftID %d must first join as a learner", raftID)
 			}
@@ -649,6 +659,9 @@ func (g *Group) proposeMembershipExpected(raftID uint64, changeType raftpb.ConfC
 			}
 		case raftpb.ConfChangeType_ConfChangeRemoveNode:
 			if !containsMember(conf, raftID) {
+				if expected != nil {
+					return nil
+				}
 				return fmt.Errorf("RaftID %d is not a Group member", raftID)
 			}
 			if raftID == g.id {
@@ -667,7 +680,7 @@ func (g *Group) proposeMembershipExpected(raftID uint64, changeType raftpb.ConfC
 }
 
 func (g *Group) Tick() error {
-	return g.mutate(func() error { g.raw.Tick(); return nil })
+	return g.mutateAndProcess(func() error { g.raw.Tick(); return nil }, true)
 }
 
 func (g *Group) Step(message *raftpb.Message) error {
@@ -874,6 +887,10 @@ func (g *Group) TermAt(index uint64) (uint64, error) {
 }
 
 func (g *Group) mutate(operation func() error) error {
+	return g.mutateAndProcess(operation, false)
+}
+
+func (g *Group) mutateAndProcess(operation func() error, periodic bool) error {
 	g.mu.Lock()
 	if err := g.checkLocked(); err != nil {
 		g.mu.Unlock()
@@ -883,7 +900,7 @@ func (g *Group) mutate(operation func() error) error {
 		g.mu.Unlock()
 		return err
 	}
-	messages, err := g.processLocked()
+	messages, err := g.processLocked(periodic)
 	g.mu.Unlock()
 	if err != nil {
 		return err
@@ -901,7 +918,7 @@ func (g *Group) admitProposal() error {
 
 func (g *Group) process() error {
 	g.mu.Lock()
-	messages, err := g.processLocked()
+	messages, err := g.processLocked(false)
 	g.mu.Unlock()
 	if err != nil {
 		return err
@@ -910,7 +927,7 @@ func (g *Group) process() error {
 	return nil
 }
 
-func (g *Group) processLocked() ([]*raftpb.Message, error) {
+func (g *Group) processLocked(periodic bool) ([]*raftpb.Message, error) {
 	var outbound []*raftpb.Message
 	for pass := 0; g.raw.HasReady(); pass++ {
 		if pass >= 1024 {
@@ -952,6 +969,16 @@ func (g *Group) processLocked() ([]*raftpb.Message, error) {
 				// linearizable read to all of them saturates the per-peer control
 				// queues and delays the voter quorum itself.
 				if isRootReadHeartbeatToLearner(g.groupID, message, rootProgress) {
+					if !periodic {
+						continue
+					}
+					// A timed heartbeat can also carry the last pending read
+					// context. Suppressing it starves restarted learners while
+					// Root reads remain busy. Keep the periodic leader/commit
+					// signal without asking a learner to acknowledge a read cut.
+					keepalive := proto.Clone(message).(*raftpb.Message)
+					keepalive.Context = nil
+					outbound = append(outbound, keepalive)
 					continue
 				}
 				outbound = append(outbound, proto.Clone(message).(*raftpb.Message))

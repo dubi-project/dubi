@@ -35,3 +35,46 @@ func TestPlanRangeUsesOnlyStableConfirmedRegions(t *testing.T) {
 		t.Fatal("Range with missing Owner cohort was accepted")
 	}
 }
+
+func TestRefreshPlacementAdvancesOnlyTheCompleteExistingRegionSet(t *testing.T) {
+	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items", OwnerGroupID: "region-east", Epoch: 3, State: rootstate.RangeStateActive}
+	prior, err := PlanRange(r, []rootstate.RegionProgress{progressFixture("east", "region-east", 2), progressFixture("west", "region-west", 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"advance", "new-region", "unchanged", "missing", "pending", "unconfirmed", "other-group", "backwards", "other-owner", "other-epoch"} {
+		t.Run(mode, func(t *testing.T) {
+			current := r
+			views := []rootstate.RegionProgress{progressFixture("east", "region-east", 3), progressFixture("west", "region-west", 2)}
+			pass := mode == "advance" || mode == "new-region" || mode == "unchanged"
+			switch mode {
+			case "new-region":
+				views = append(views, progressFixture("north", "region-north", 1))
+			case "unchanged":
+				views[0].Current.Generation = 2
+				views[1].Current.Generation = 1
+			case "missing":
+				views = views[:1]
+			case "pending":
+				views[1].Pending = &rootstate.RegionCohort{Generation: 3}
+			case "unconfirmed":
+				views[1].Current.State = rootstate.RegionCohortPlanned
+			case "other-group":
+				views[1] = progressFixture("west", "region-new-west", 2)
+			case "backwards":
+				views[0].Current.Generation = 1
+			case "other-owner":
+				current.OwnerGroupID = "region-west"
+			case "other-epoch":
+				current.Epoch++
+			}
+			updated, err := refreshPlacement(current, prior, views)
+			if (err == nil) != pass {
+				t.Fatal(updated, err)
+			}
+			if pass && (len(updated.Regions) != 2 || updated.RangeEpoch != prior.RangeEpoch || updated.OwnerGroupID != prior.OwnerGroupID || updated.Regions[0].RegionID != "east" || updated.Regions[1].RegionID != "west") {
+				t.Fatal("changed placement identity", updated)
+			}
+		})
+	}
+}

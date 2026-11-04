@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
@@ -28,6 +29,9 @@ const routeAttemptTimeout = 8 * time.Second
 const routeRetryDelay = 100 * time.Millisecond
 const readAttemptTimeout = 60 * time.Second
 const writeAttemptTimeout = 90 * time.Second
+const writeForwardAttemptTimeout = 10 * time.Second
+const remoteRegionProbeTimeout = 2 * time.Second
+const remoteRegionProbeConcurrency = 16
 
 // Publication encodes a engine mutation which must publish exactly the
 // supplied immutable descriptor with Transaction.SetRecordReference. The
@@ -66,9 +70,22 @@ type WriteResult struct {
 // application authentication belongs to a separate external boundary: the
 // in-process caller must already be authorized to use its Keyspace.
 type Service struct {
-	runtime  *node.Runtime
-	client   *raftrpc.GroupClient
-	geoRetry *recordwrite.GeoMetadataRetryStore
+	runtime     *node.Runtime
+	client      *raftrpc.GroupClient
+	geoRetry    *recordwrite.GeoMetadataRetryStore
+	geoRecords  GeoRecordRetrySink
+	readRefresh readConfirmationRefresh
+}
+
+// GeoRecordRetrySink persists an opaque publication hint, not a new quorum.
+type GeoRecordRetrySink interface {
+	Save(enginestate.RecordReference) error
+}
+
+// SetGeoRetryStores configures the managed background queues before this
+// Service is exposed to callers. It must not race with requests.
+func (service *Service) SetGeoRetryStores(metadata *recordwrite.GeoMetadataRetryStore, records GeoRecordRetrySink) {
+	service.geoRetry, service.geoRecords = metadata, records
 }
 
 func New(runtime *node.Runtime, client *raftrpc.GroupClient) (*Service, error) {
@@ -87,7 +104,31 @@ func NewWithGeoRetry(runtime *node.Runtime, client *raftrpc.GroupClient, geoRetr
 // RequestID and opaque mutation to each candidate; only the Owner executes
 // the physical-majority protocol. This method does not expose an external API.
 func (service *Service) Write(ctx context.Context, request WriteRequest) (WriteResult, error) {
-	return service.write(ctx, request, true)
+	if ctx == nil {
+		return WriteResult{State: WriteUnknown}, errors.New("write context is required")
+	}
+	request.Key, request.Body = bytes.Clone(request.Key), bytes.Clone(request.Body)
+	publisher := request.Publish
+	var cachedID string
+	var cachedPayload []byte
+	if publisher != nil {
+		request.Publish = func(descriptor records.Descriptor) ([]byte, error) {
+			id, err := descriptor.ID()
+			if err != nil {
+				return nil, err
+			}
+			if id == cachedID {
+				return bytes.Clone(cachedPayload), nil
+			}
+			payload, err := publisher(descriptor)
+			if err == nil {
+				cachedID, cachedPayload = id, bytes.Clone(payload)
+			}
+			return payload, err
+		}
+	}
+	return retryStaleRoute(ctx, func(call context.Context) (WriteResult, error) { return service.write(call, request, true) },
+		func(result WriteResult, err error) bool { return result.State == WriteUnknown && safeWriteReroute(err) })
 }
 
 // WriteLocal is retained for Owner-local callers that must not relay.
@@ -152,6 +193,9 @@ func (service *Service) write(ctx context.Context, request WriteRequest, allowRe
 	if err == nil || !allowRemote || ctx.Err() != nil {
 		return local, err
 	}
+	if safeWriteReroute(err) {
+		return local, err
+	}
 	// A timed-out attempt can still have published the exact command. All
 	// candidates receive the same RequestID, descriptor, body and mutation;
 	// only a fresh Owner confirmation may turn this into LocalReady.
@@ -177,6 +221,7 @@ func fromWrite(result raftrpc.EngineDataWriteResult) WriteResult {
 func (service *Service) forwardWrite(ctx context.Context, request raftrpc.EngineDataWrite) (WriteResult, error) {
 	result := WriteResult{State: WriteUnknown}
 	var last error
+	var failures []error
 	candidates := service.client.GroupCandidates(request.Target.OwnerGroupID)
 	remaining := 0
 	for _, id := range candidates {
@@ -202,7 +247,7 @@ func (service *Service) forwardWrite(ctx context.Context, request raftrpc.Engine
 		if !found {
 			continue
 		}
-		attempt, done := writeCandidateContext(ctx, attemptsLeft)
+		attempt, done := forwardWriteCandidateContext(ctx, attemptsLeft)
 		phaseStarted = time.Now()
 		response, err := service.client.WriteEngineData(attempt, node, request)
 		recordwrite.Trace(ctx, fmt.Sprintf("engine.write.forward.rpc.node_%d", id), phaseStarted)
@@ -214,6 +259,12 @@ func (service *Service) forwardWrite(ctx context.Context, request raftrpc.Engine
 			result.State = WritePublishedUnconfirmed
 		}
 		last = err
+		failures = append(failures, err)
+		if safeWriteReroute(err) {
+			// Do not send a known obsolete route to more old candidates.
+			// Preserve any earlier uncertain attempt in the returned error.
+			return result, fmt.Errorf("refresh Owner route: %w", errors.Join(failures...))
+		}
 	}
 	if last == nil {
 		last = ErrOwnerNotLocal
@@ -248,7 +299,16 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Engine
 	}
 	owner, found := service.runtime.Engines.Resolve(request.Target.OwnerGroupID)
 	if !found || owner == nil {
-		return result, ErrOwnerNotLocal
+		return result, fmt.Errorf("%w: %v", router.ErrStaleTarget, ErrOwnerNotLocal)
+	}
+	if err := service.checkExecutionRoute(request.Target); err != nil {
+		return result, err
+	}
+	phaseStarted := time.Now()
+	queueGeo, quorumErr := service.requireRemoteRegionQuorumForLocalWrite(ctx, request.Target)
+	recordwrite.Trace(ctx, "owner.remote_region_quorum", phaseStarted)
+	if quorumErr != nil {
+		return result, quorumErr
 	}
 	writer := recordwrite.Writer{Barrier: service.runtime, Root: service.runtime.Root,
 		Owner: owner, LocalID: service.runtime.Identity.RaftID, LocalNodeID: service.runtime.Identity.NodeID,
@@ -259,7 +319,7 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Engine
 			}
 			return service.runtime.Host.Submit(groupID, command)
 		}, MirrorGeo: service.client, MirrorRetry: service.geoRetry}
-	phaseStarted := time.Now()
+	phaseStarted = time.Now()
 	geo, geoErr := service.geoPlan(ctx, request.Target)
 	recordwrite.Trace(ctx, "owner.geo_plan", phaseStarted)
 	if geoErr != nil {
@@ -287,9 +347,174 @@ func (service *Service) ExecuteWrite(ctx context.Context, request raftrpc.Engine
 		}
 		return result, err
 	}
-	result.State, result.Reference, result.ConfirmationIndex, result.RegionGeneration =
-		string(WriteLocalReady), ready.Reference, ready.ConfirmationIndex, ready.RegionGeneration
+	return service.completeLocalWrite(ready, queueGeo)
+}
+
+func (service *Service) completeLocalWrite(ready recordwrite.LocalWrite, queueGeo bool) (raftrpc.EngineDataWriteResult, error) {
+	result := raftrpc.EngineDataWriteResult{State: string(WriteLocalReady), Reference: ready.Reference,
+		ConfirmationIndex: ready.ConfirmationIndex, RegionGeneration: ready.RegionGeneration}
+	if queueGeo && service.geoRecords != nil {
+		if err := service.geoRecords.Save(ready.Reference); err != nil {
+			return result, fmt.Errorf("persist Geo repair hint after local commit; retry the same RequestID: %w", err)
+		}
+	}
 	return result, nil
+}
+
+// A confirmed multi-Region topology may use a local data majority for the
+// foreground write, but must not continue doing so after every other Region
+// has lost its own Raft quorum. This probe checks only that another confirmed
+// Region is currently available; it deliberately does not wait for remote
+// data replication. A single-Region topology has no remote Region to probe and
+// retains the local-majority behavior.
+func (service *Service) requireRemoteRegionQuorumForLocalWrite(ctx context.Context, target router.Target) (bool, error) {
+	index, found := router.ConfirmedRootIndex(ctx)
+	var err error
+	if !found {
+		index, err = service.runtime.ReadRootIndex(ctx)
+		if err != nil {
+			return false, fmt.Errorf("confirm Root before checking remote Region availability: %w", err)
+		}
+	}
+	groups, err := service.runtime.Root.Groups()
+	if err != nil {
+		return false, fmt.Errorf("list confirmed cluster Regions before write: %w", err)
+	}
+	localNodes, remote, _, err := confirmedClusterRegionTargets(groups, target.OwnerGroupID,
+		index, service.runtime.Root.RegionProgress)
+	if err != nil {
+		return false, err
+	}
+	if localNodes < 3 || len(remote) == 0 {
+		// Small Regions use the synchronous GeoReady path; a genuinely single-
+		// Region Cluster retains local-majority writes.
+		return false, nil
+	}
+	if err := probeRemoteRegionQuorum(ctx, remote, service.runtime.Identity.RaftID,
+		service.client.ReadIndex); err != nil {
+		return false, fmt.Errorf("refusing local-only write in a multi-Region topology: %w", err)
+	}
+	return true, nil
+}
+
+type regionProgressReader func(string) (rootstate.RegionProgress, bool, error)
+
+func confirmedClusterRegionTargets(groups []rootstate.Group, ownerGroup string, rootIndex uint64,
+	readProgress regionProgressReader,
+) (int, []regionProbeTarget, []string, error) {
+	if rootIndex == 0 || readProgress == nil || len(groups) > 256 {
+		return 0, nil, nil, errors.New("cluster Region probe has invalid bounds or Root cut")
+	}
+	var remote []regionProbeTarget
+	var regionIDs []string
+	localFound := false
+	localNodes := 0
+	seenRegions := make(map[string]bool)
+	for _, group := range groups {
+		if group.StateKind != rootstate.GroupStateEngine || group.GroupID == raft.RootGroupID {
+			continue
+		}
+		progress, confirmed, err := readProgress(group.GroupID)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("read confirmed Region %s before write: %w", group.GroupID, err)
+		}
+		if !confirmed {
+			continue
+		}
+		if progress.AppliedIndex < rootIndex {
+			return 0, nil, nil, errors.New("confirmed Region topology is behind the Root read cut")
+		}
+		if progress.Current.GroupID != group.GroupID || seenRegions[progress.Current.RegionID] {
+			return 0, nil, nil, errors.New("confirmed cluster Region topology is inconsistent")
+		}
+		seenRegions[progress.Current.RegionID] = true
+		regionIDs = append(regionIDs, progress.Current.RegionID)
+		if group.GroupID == ownerGroup {
+			localFound = true
+			localNodes = len(progress.Current.Nodes)
+			continue
+		}
+		remote = append(remote, regionProbeTarget{groupID: group.GroupID,
+			raftIDs: append([]uint64(nil), progress.Current.Nodes...)})
+	}
+	if !localFound {
+		return 0, nil, nil, errors.New("local Owner Region is not in the confirmed cluster topology")
+	}
+	return localNodes, remote, regionIDs, nil
+}
+
+type regionReadIndex func(context.Context, uint64, string) (uint64, error)
+
+type regionProbeTarget struct {
+	groupID string
+	raftIDs []uint64
+}
+
+// probeRemoteRegionQuorum succeeds when any one remote confirmed Region can
+// establish its own Group ReadIndex. Probes are bounded and concurrent across
+// nodes, so a stale/offline first member does not hide a healthy regional
+// majority or add one WAN timeout per member.
+func probeRemoteRegionQuorum(ctx context.Context, regions []regionProbeTarget, localRaftID uint64,
+	readIndex regionReadIndex,
+) error {
+	if ctx == nil || readIndex == nil || localRaftID == 0 {
+		return errors.New("remote Region probe is incomplete")
+	}
+	type candidate struct {
+		raftID  uint64
+		groupID string
+	}
+	var candidates []candidate
+	for _, region := range regions {
+		for _, raftID := range region.raftIDs {
+			if raftID != localRaftID {
+				candidates = append(candidates, candidate{raftID: raftID, groupID: region.groupID})
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return errors.New("multi-Region placement has no remote members")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, remoteRegionProbeTimeout)
+	defer cancel()
+	jobs := make(chan candidate, len(candidates))
+	for _, item := range candidates {
+		jobs <- item
+	}
+	close(jobs)
+	workers := min(remoteRegionProbeConcurrency, len(candidates))
+	var wg sync.WaitGroup
+	var once sync.Once
+	confirmed := make(chan struct{})
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-probeCtx.Done():
+					return
+				case item, ok := <-jobs:
+					if !ok {
+						return
+					}
+					if _, err := readIndex(probeCtx, item.raftID, item.groupID); err == nil {
+						once.Do(func() { close(confirmed) })
+						return
+					}
+				}
+			}
+		}()
+	}
+	select {
+	case <-confirmed:
+		cancel()
+		wg.Wait()
+		return nil
+	case <-probeCtx.Done():
+		wg.Wait()
+		return errors.New("no remote Region confirmed a Raft majority before the probe deadline")
+	}
 }
 
 // geoPlan returns a plan only when the confirmed local Region is too small to
@@ -318,7 +543,14 @@ func (service *Service) geoPlan(ctx context.Context, target router.Target) (*pla
 }
 
 func (service *Service) Read(ctx context.Context, keyspace rootstate.Keyspace, key []byte) (recordwrite.LocalRead, error) {
-	return service.read(ctx, keyspace, key, true)
+	if ctx == nil {
+		return recordwrite.LocalRead{}, errors.New("read context is required")
+	}
+	key = bytes.Clone(key)
+	return retryStaleRoute(ctx, func(call context.Context) (recordwrite.LocalRead, error) {
+		return service.read(call, keyspace, key, true)
+	},
+		func(_ recordwrite.LocalRead, err error) bool { return safeReadReroute(err) })
 }
 
 func (service *Service) ReadLocal(ctx context.Context, keyspace rootstate.Keyspace, key []byte) (recordwrite.LocalRead, error) {
@@ -366,6 +598,9 @@ func (service *Service) read(ctx context.Context, keyspace rootstate.Keyspace, k
 		if !allowRemote || ctx.Err() != nil {
 			return recordwrite.LocalRead{}, err
 		}
+		if safeReadReroute(err) {
+			return recordwrite.LocalRead{}, err
+		}
 		// Hosting the Owner Group does not mean this Node's physical Store is
 		// healthy. Another current Owner member may still have a verified data
 		// majority; it runs the same read gate before returning any bytes.
@@ -380,6 +615,7 @@ func (service *Service) read(ctx context.Context, keyspace rootstate.Keyspace, k
 
 func (service *Service) forwardRead(ctx context.Context, target router.Target, key []byte) (recordwrite.LocalRead, error) {
 	var last error
+	var failures []error
 	candidates := service.client.GroupCandidates(target.OwnerGroupID)
 	remaining := 0
 	for _, id := range candidates {
@@ -411,9 +647,15 @@ func (service *Service) forwardRead(ctx context.Context, target router.Target, k
 				RegionGeneration: response.RegionGeneration, State: response.State}, nil
 		}
 		last = err
+		failures = append(failures, err)
+		if safeReadReroute(errors.Join(failures...)) {
+			return recordwrite.LocalRead{}, fmt.Errorf("refresh Owner read route: %w", errors.Join(failures...))
+		}
 	}
 	if last == nil {
 		last = ErrOwnerNotLocal
+	} else {
+		last = errors.Join(failures...)
 	}
 	return recordwrite.LocalRead{}, fmt.Errorf("route engine read to Owner Group %s: %w", target.OwnerGroupID, last)
 }
@@ -427,6 +669,13 @@ func readCandidateContext(ctx context.Context, remaining int) (context.Context, 
 
 func writeCandidateContext(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
 	return candidateContext(ctx, remaining, writeAttemptTimeout)
+}
+
+// Forwarding should move to another current Owner member promptly when one
+// candidate is unavailable. Keep this separate from local Owner execution,
+// which may need the longer write budget for a large immutable payload.
+func forwardWriteCandidateContext(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
+	return candidateContext(ctx, remaining, writeForwardAttemptTimeout)
 }
 
 func candidateContext(ctx context.Context, remaining int, maximum time.Duration) (context.Context, context.CancelFunc) {
@@ -452,11 +701,15 @@ func (service *Service) ExecuteRead(ctx context.Context, target router.Target, k
 	}
 	owner, found := service.runtime.Engines.Resolve(target.OwnerGroupID)
 	if !found || owner == nil {
-		return raftrpc.EngineDataReadResult{}, ErrOwnerNotLocal
+		return raftrpc.EngineDataReadResult{}, fmt.Errorf("%w: %v", router.ErrStaleTarget, ErrOwnerNotLocal)
+	}
+	if err := service.checkExecutionRoute(target); err != nil {
+		return raftrpc.EngineDataReadResult{}, err
 	}
 	reader := recordwrite.Reader{Barrier: engineReadBarrier{runtime: service.runtime, client: service.client}, Root: service.runtime.Root,
 		Owner: owner, LocalID: service.runtime.Identity.RaftID, LocalNodeID: service.runtime.Identity.NodeID,
-		Store: service.runtime.Records, Observer: service.client, Fetcher: service.client}
+		Store: service.runtime.Records, Observer: service.client, Fetcher: service.client,
+		RefreshLocal: service.refreshReadConfirmation}
 	got, err := reader.ReadLocal(ctx, target, key)
 	if err != nil {
 		geo, geoErr := reader.ReadGeo(ctx, target, key, 16, 256)
@@ -513,8 +766,7 @@ func retryRoute(ctx context.Context, attemptTimeout time.Duration,
 		if ctx.Err() != nil {
 			return router.Target{}, ctx.Err()
 		}
-		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, raft.ErrNoLeader) &&
-			!errors.Is(err, router.ErrCatalogBehind) {
+		if !retryableRouteRead(err) {
 			return router.Target{}, err
 		}
 		timer := time.NewTimer(routeRetryDelay)

@@ -229,8 +229,23 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	if err := runtime.RegisterInternalRPC(grpcServer, func(context.Context, uint64) error { return nil }, 0); err != nil {
 		t.Fatal(err)
 	}
-	if services := grpcServer.GetServiceInfo(); len(services) != 9 || len(services["dubi.internal.raft.v1.RecordHoldingService"].Methods) != 1 || len(services["dubi.internal.raft.v1.RecordTransferService"].Methods) != 2 || len(services["dubi.internal.raft.v1.RecordCutService"].Methods) != 1 {
+	services := grpcServer.GetServiceInfo()
+	if len(services) != 9 || len(services["dubi.internal.raft.v1.RecordHoldingService"].Methods) != 1 || len(services["dubi.internal.raft.v1.RecordTransferService"].Methods) != 3 || len(services["dubi.internal.raft.v1.RecordCutService"].Methods) != 1 {
 		t.Fatalf("registered internal RPC services = %v", services)
+	}
+	transfers := map[string]grpc.MethodInfo{
+		"Put":      {Name: "Put", IsClientStream: true},
+		"Get":      {Name: "Get", IsServerStream: true},
+		"GetBatch": {Name: "GetBatch", IsServerStream: true},
+	}
+	for _, method := range services["dubi.internal.raft.v1.RecordTransferService"].Methods {
+		if expected, found := transfers[method.Name]; !found || expected != method {
+			t.Fatalf("unexpected RecordTransfer method: %+v", method)
+		}
+		delete(transfers, method.Name)
+	}
+	if len(transfers) != 0 {
+		t.Fatal("missing RecordTransfer methods", transfers)
 	}
 	if err := runtime.RegisterInternalRPC(grpcServer, func(context.Context, uint64) error { return nil }, 0); err == nil {
 		t.Fatal("duplicate internal RPC registration was accepted")

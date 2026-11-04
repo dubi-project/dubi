@@ -3,12 +3,132 @@ package enginestate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 )
+
+type discoveryReadBarrier struct {
+	index uint64
+	calls int
+}
+
+func (b *discoveryReadBarrier) ReadIndex(context.Context, string) (uint64, error) {
+	b.calls++
+	return b.index, nil
+}
+
+func TestGeoReferencePageKeepsReceiptsAndReferencesAtOneOwnerCut(t *testing.T) {
+	state, target, claim := geoCoverageFixture(t)
+	if err := state.ApplyGeoConfirmation(state.AppliedIndex()+1, "geo-item", claim); err != nil {
+		t.Fatal(err)
+	}
+	handler := state.handler.(*packedHandler)
+	handler.action = func(tx *Transaction, payload []byte) (Outcome, error) {
+		key := payload[1:]
+		if payload[0] == '-' {
+			return Outcome{}, tx.DeleteRecordReference(key)
+		}
+		d, err := records.Describe(tx.keyspace, "origin-group", key, payload)
+		if err != nil {
+			return Outcome{}, err
+		}
+		return Outcome{}, tx.SetRecordReference(key, d)
+	}
+	if err := state.ApplyRouted(state.AppliedIndex()+1, "publish-b", target, []byte("+item-b")); err != nil {
+		t.Fatal(err)
+	}
+	barrier := &discoveryReadBarrier{index: state.AppliedIndex()}
+	visited := []string{}
+	page, err := state.WalkCurrentReferencesWithGeoCoveragePage(context.Background(), barrier, nil, 8,
+		func(ref RecordReference, receipt GeoCoverageRecord, found bool) (bool, error) {
+			key := string(ref.Descriptor.Key)
+			visited = append(visited, key)
+			if key == "item" {
+				if !found || receipt.RequestID != "geo-item" || receipt.Claim.ReferenceIndex != ref.Index {
+					t.Fatal("receipt was not read with its publication", receipt, found)
+				}
+				// A concurrent unlink must neither remove the second snapshot row
+				// nor invalidate its backlinks while this page is being visited.
+				return true, state.ApplyRouted(state.AppliedIndex()+1, "unlink-b", target, []byte("-item-b"))
+			}
+			if key != "item-b" || found {
+				t.Fatal("missing coverage was not distinguished from a valid receipt", ref, found)
+			}
+			return true, nil
+		})
+	if err != nil || !page.Done || page.Cut.Count != 2 || page.Cut.Index != barrier.index || barrier.calls != 1 ||
+		!slices.Equal(visited, []string{"item", "item-b"}) {
+		t.Fatal("Geo discovery repeated barriers or mixed Owner cuts", page, visited, barrier.calls, err)
+	}
+}
+
+func TestGeoReferencePageRejectsCorruptCoverageBeforeVisit(t *testing.T) {
+	for _, corrupt := range []string{"result", "receipt"} {
+		t.Run(corrupt, func(t *testing.T) {
+			state, target, claim := geoCoverageFixture(t)
+			if err := state.ApplyGeoConfirmation(state.AppliedIndex()+1, "geo-item", claim); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			if corrupt == "result" {
+				err = state.db.Delete(resultKey("geo-item"), pebble.Sync)
+			} else {
+				err = state.db.Set(geoCoverageKey(target.Keyspace, claim.Key), []byte("{}"), pebble.Sync)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			visited := 0
+			_, err = state.WalkCurrentReferencesWithGeoCoveragePage(context.Background(),
+				&discoveryReadBarrier{index: state.AppliedIndex()}, nil, 8,
+				func(RecordReference, GeoCoverageRecord, bool) (bool, error) {
+					visited++
+					return false, fmt.Errorf("corrupt receipt reached discovery")
+				})
+			if err == nil || visited != 0 {
+				t.Fatal("corrupt coverage was used as a valid discovery hint", visited, err)
+			}
+		})
+	}
+}
+
+func TestGeoReferencePageStopsAtRepairBudgetAndResumesWithoutSkipping(t *testing.T) {
+	state, target, _, handler := confirmationFixture(t)
+	handler.action = func(tx *Transaction, payload []byte) (Outcome, error) {
+		d, err := records.Describe(tx.keyspace, "origin-group", payload, payload)
+		if err != nil {
+			return Outcome{}, err
+		}
+		return Outcome{}, tx.SetRecordReference(payload, d)
+	}
+	for _, key := range []string{"item-b", "item-c"} {
+		if err := state.ApplyRouted(state.AppliedIndex()+1, "publish-"+key, target, []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	barrier := &discoveryReadBarrier{index: state.AppliedIndex()}
+	visited := []string{}
+	visit := func(ref RecordReference, _ GeoCoverageRecord, found bool) (bool, error) {
+		if found {
+			t.Fatal("fixture unexpectedly has coverage")
+		}
+		visited = append(visited, string(ref.Descriptor.Key))
+		return len(visited)%2 != 0, nil
+	}
+	first, err := state.WalkCurrentReferencesWithGeoCoveragePage(context.Background(), barrier, nil, 256, visit)
+	if err != nil || first.Done || first.Cut.Count != 2 || len(first.Cursor) == 0 {
+		t.Fatal("repair budget did not end a valid bounded metadata page", first, err)
+	}
+	second, err := state.WalkCurrentReferencesWithGeoCoveragePage(context.Background(), barrier, first.Cursor, 256, visit)
+	if err != nil || !second.Done || second.Cut.Count != 1 || barrier.calls != 2 ||
+		!slices.Equal(visited, []string{"item", "item-b", "item-c"}) {
+		t.Fatal("early-stop cursor skipped or repeated references", second, visited, barrier.calls, err)
+	}
+}
 
 func TestWalkCurrentReferencesUsesFixedOwnerCutWithoutBlockingMutations(t *testing.T) {
 	state, target, claim, _ := confirmationFixture(t)

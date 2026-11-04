@@ -1,6 +1,6 @@
 # 区域数据参与集合与自动初始建组
 
-本阶段实现 Root 中的区域集合记录、代际发布、恢复校验，以及由持久计划驱动的**自动初始区域 Group 建立与全员应用确认**。正式后台流程会提交数据 Group 栅栏，逐节点检查实际应用后才调用 `ConfirmRegionCohort`，将初始 head 从 current=0/pending=1 转为 current=1/pending=0。`confirmed` 是内部协调器发布的历史断言，不是业务数据已经耐久、更不是生产资格；严格增加节点的自动交接已接通，数据写入确认和修复仍未实现。
+本阶段实现 Root 中的区域集合记录、代际发布、恢复校验，以及由持久计划驱动的**自动初始区域 Group 建立与全员应用确认**。正式后台流程会提交数据 Group 栅栏，逐节点检查实际应用后才调用 `ConfirmRegionCohort`，将初始 head 从 current=0/pending=1 转为 current=1/pending=0。`confirmed` 是内部协调器发布的历史断言，不是业务数据已经耐久、更不是生产资格；数据写入确认和物理修复由各自路径另行验证。
 
 后继代际由独立增长协调器消费 Root 授权：全体旧参与者的相同 seal 观察、精确计划和成员任务原子发布，旧成员角色保持不变，完成该任务后才能经全体新参与者观察、用晚于 seal 的候选确认新代际，最后精确激活。已确认区域拒绝普通成员任务/直接发布绕过；快照恢复验证完整授权链。详见[区域代际交接](region-handoff.md)。
 
@@ -10,9 +10,13 @@ Region cohort 是一个 Region 在某一代际的数据参与 Node 集合。它�
 
 Root 投票角色、区域 Group 的投票角色、数据参与集合分别记录。集合包括区域 Group 的 voter 和 learner，不以 voter 数替代数据多数的分母。内部单条集合记录最多 4096 个 Node，是有界处理限制，不是运维参数，也不是已经验证的集群规模。
 
+Root Join 的 `pending` 接纳仍阻止捕获初始计划；`admitted` 后可以作为区域数据参与者，不要求晋升 Root voter。稳定三区域九节点拓扑会保留六个 Root learner，等待所有 learner 晋升会永久阻塞建组。计划发布后仍需每个参与者恢复本地区域 Group、完成精确应用观察，才能确认该集合。新成员补齐和候选物理复核通过 Runtime 的 Root voter 读取路径确认 Root 切点，再继续核对本地已应用状态，不能直接依赖 learner 的 Host Root ReadIndex。
+
 一个或两个节点的区域不能靠本记录启用本地确认：Placement 和自动建组都支持小区域，但小区域的前台确认仍必须等待跨 Region 门槛，只有至少三个不同 Node 的稳定集合才允许本地 `LocalReady`。不能从“未记录 cohort”推导免于确认。
 
 跨 Region 物理覆盖现在有一个能力中立的规划和写入原语：Root 在同一 applied cut 返回明确选定的已确认 Region cohort 及其注册 Node，`placement.PlanGeo` 固定 Region、Group、generation、epoch 和 fence。Range placement 在 Region 明确退休并以同名新代际确认后，只刷新同一 Range epoch、同一 Region/Group 集合的 generation；不会借刷新偷偷改变 Range Owner 或 Region 集合。`StageGeo` 先在本地 Region 写入严格多数，再在固定计划中取得足够的 Region 严格多数；离线的非必要 Region 不会缩小分母，而是留下后续修复账。`AssessPublication` 还把覆盖绑定到单一 RecordID、引用 RequestID/Index/Hash、Range epoch 和路由键，引用替换或代际变化时不能复用旧观察。Owner Group 现在可持久保存 `GeoCoverageRecord`，`CheckCommittedGeo` 会在使用前重新核验新鲜计划、已覆盖区域证据和 Owner 当前引用；快照会校验引用回链，引用替换/删除会原子清除旧账目。`Writer.WriteGeo` 是显式 opt-in 的同步跨区写入路径，不改变默认本地多数优先行为，并要求元数据镜像传输器在已覆盖 Region 保存引用切点后才进入 coverage 确认。该账目只证明同一不可变 RecordID 的物理持有观察，不能直接发布 `GeoReady`，因为权威引用/日志切点的跨区可恢复性仍需后续接通。
+
+Range 代际刷新每轮最多持久发布 16 条，整轮仍受后台上下文期限约束；不再为每个 Range 单独等待一次后台定时器。每条提案只提交一次，在期限内等待精确持久 Result，首次 ReadIndex 尚未覆盖提案时继续等待，持久拒绝和取消仍明确返回。只刷新已有固定 Region/Group 集合，不能通过批量刷新缩小多数派或加入新的 Region。
 
 Geo 元数据镜像现在支持节点本地的持久 retry ledger 和有界 worker round：临时无法联系任何目标 voter 时，确定性的 mirror 请求会保留在有界账目中；某一目标 Region 成功应用后才删除对应项，目标状态机的持久拒绝不会盲目切换节点重试。每轮重试必须由调用方用当前 Root 计划解析 Region generation/epoch/fence；同名 Region 明确退休后重新形成时，只要 Region、Group、Owner 路由和引用仍一致，欠账会自动重绑定到当前 generation/epoch/fence，再投递给新节点；不同 Region 或过期 Owner 引用则继续挂起。托管 Server 已接入该账目的周期 worker；它只处理当前 Root placement 能重新匹配的任务。该账目本身不改变 Region 多数、不发布 GeoReady；源 Region 丢失后的重建流程仍需接入。
 

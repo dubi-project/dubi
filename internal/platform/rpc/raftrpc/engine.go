@@ -21,12 +21,13 @@ type EngineResolver func(groupID string) (*enginestate.State, bool)
 
 type EngineServer struct {
 	raftwire.UnimplementedEngineServiceServer
-	clusterID string
-	raftID    uint64
-	backend   GroupBackend
-	states    EngineResolver
-	authorize AuthorizePeer
-	maxSize   int
+	clusterID   string
+	raftID      uint64
+	backend     GroupBackend
+	states      EngineResolver
+	authorize   AuthorizePeer
+	maxSize     int
+	mirrorSlots chan struct{}
 }
 
 func NewEngineServer(clusterID string, raftID uint64, backend GroupBackend,
@@ -39,7 +40,7 @@ func NewEngineServer(clusterID string, raftID uint64, backend GroupBackend,
 		maxSize = DefaultMaxMessageSize
 	}
 	return &EngineServer{clusterID: clusterID, raftID: raftID, backend: backend,
-		states: states, authorize: authorize, maxSize: maxSize}, nil
+		states: states, authorize: authorize, maxSize: maxSize, mirrorSlots: make(chan struct{}, 2)}, nil
 }
 
 func (server *EngineServer) Mutate(

@@ -34,6 +34,28 @@ func (b publishedBarrier) ReadIndex(_ context.Context, group string) (uint64, er
 	}
 }
 
+type liveOwnerBarrier struct{ owner *enginestate.State }
+
+func (b liveOwnerBarrier) ReadIndex(_ context.Context, group string) (uint64, error) {
+	if group == "root" {
+		return 5, nil
+	}
+	if group == b.owner.GroupID() {
+		return b.owner.AppliedIndex(), nil
+	}
+	return 0, errors.New("unexpected read barrier Group")
+}
+
+type countingPublishedBarrier struct {
+	ownerIndex uint64
+	calls      int
+}
+
+func (b *countingPublishedBarrier) ReadIndex(ctx context.Context, group string) (uint64, error) {
+	b.calls++
+	return (publishedBarrier{ownerIndex: b.ownerIndex}).ReadIndex(ctx, group)
+}
+
 type referenceHandler struct{ descriptor records.Descriptor }
 
 func (h *referenceHandler) Apply(tx *enginestate.Transaction, target router.Target, _ []byte) (enginestate.Outcome, error) {
@@ -48,6 +70,31 @@ type testObserver struct {
 	delays map[uint64]time.Duration
 	before func()
 	badID  bool
+}
+
+type validReadStore struct{ held bool }
+
+func (s validReadStore) Verify(_ context.Context, d records.Descriptor) (records.Holding, error) {
+	if !s.held {
+		return records.Holding{}, records.ErrNotHeld
+	}
+	id, err := d.ID()
+	if err != nil {
+		return records.Holding{}, err
+	}
+	return records.Holding{RecordID: id, Descriptor: d,
+		StoreID:  "store_00000000000000000000000000000001",
+		VolumeID: "volume_00000000000000000000000000000001"}, nil
+}
+
+type validReadObserver struct{ observer *testObserver }
+
+func (o validReadObserver) ObserveRecordHolding(ctx context.Context, id uint64, d records.Descriptor) (raftrpc.HoldingObservation, error) {
+	result, err := o.observer.ObserveRecordHolding(ctx, id, d)
+	if err == nil {
+		result.Holding.StoreID = fmt.Sprintf("store_%032x", id+1)
+	}
+	return result, err
 }
 
 func (o *testObserver) ObserveRecordHolding(ctx context.Context, id uint64, d records.Descriptor) (raftrpc.HoldingObservation, error) {
@@ -147,6 +194,33 @@ func TestObservePublishedLocalRechecksPublicationAndStablePhysicalMajority(t *te
 	}
 }
 
+func TestObservePublishedLocalReusesAdmissionRootCutButKeepsFreshFinalCut(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		admissionCut  uint64
+		wantBarriers  int
+		wantRootReads int
+	}{
+		{name: "applied cut", admissionCut: 5, wantBarriers: 3, wantRootReads: 2},
+		{name: "lagging local Root falls back", admissionCut: 6, wantBarriers: 4, wantRootReads: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, target, descriptor, owner, _ := publishedFixture(t)
+			barrier := &countingPublishedBarrier{ownerIndex: 2}
+			ctx := router.WithConfirmedRootIndex(context.Background(), tc.admissionCut)
+			got, err := ObservePublishedLocal(ctx, barrier, root, owner,
+				1, root.members[0].NodeID, &testStore{held: true}, &testObserver{root: root}, target,
+				descriptor, "published", 2)
+			if err != nil {
+				t.Fatal(got, err)
+			}
+			if got.Reference.Index != 2 || barrier.calls != tc.wantBarriers || root.reads != tc.wantRootReads {
+				t.Fatalf("unexpected Root cut usage: reference=%+v barriers=%d plan_reads=%d", got.Reference, barrier.calls, root.reads)
+			}
+		})
+	}
+}
+
 func TestObservePublishedLocalUsesHealthyRemoteWithoutSerialTimeoutBudget(t *testing.T) {
 	root, target, descriptor, owner, _ := publishedFixture(t)
 	observer := &testObserver{root: root, delays: map[uint64]time.Duration{2: time.Second}}
@@ -176,16 +250,16 @@ func TestUnavailableHoldingDistinguishesStorageFromAuthorityFailure(t *testing.T
 }
 
 func TestObservePublishedLocalRejectsReplacedReferenceAndChangedCohort(t *testing.T) {
-	root, target, descriptor, owner, handler := publishedFixture(t)
+	root, target, reference, owner, _, _, _ := readCurrentFixture(t)
+	descriptor := reference.Descriptor
 	observer := &testObserver{root: root}
 	observer.before = func() {
-		handler.descriptor = descriptor
-		if err := owner.ApplyRouted(3, "replace", target, []byte("publish")); err != nil {
+		if err := owner.ApplyRouted(owner.AppliedIndex()+1, "replace", target, []byte("publish")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got, err := ObservePublishedLocal(context.Background(), publishedBarrier{ownerIndex: 2}, root, owner,
-		1, root.members[0].NodeID, &testStore{held: true}, observer, target, descriptor, "published", 2); err == nil || got.Reference.Index != 0 {
+	if got, err := ObservePublishedLocal(context.Background(), liveOwnerBarrier{owner: owner}, root, owner,
+		1, root.members[0].NodeID, &testStore{held: true}, observer, target, descriptor, reference.RequestID, reference.Index); err == nil || got.Reference.Index != 0 {
 		t.Fatal("replaced publication accepted", got, err)
 	}
 
@@ -369,6 +443,28 @@ func TestCheckReadCurrentPreservesOwnerAndRegionFencesWithoutRemoteScans(t *test
 	}
 }
 
+func TestReadDefersReceiptAndFinalPlanCheckUntilAfterPhysicalRead(t *testing.T) {
+	root, target, ref, owner, claim, confirmationID, plan := readCurrentFixture(t)
+	if err := owner.ApplyLocalConfirmation(owner.AppliedIndex()+1, "replacement-confirmation", claim); err != nil {
+		t.Fatal("replace local confirmation", err)
+	}
+	root.reads = 0
+	barrier := &countingPublishedBarrier{ownerIndex: owner.AppliedIndex()}
+	ctx := router.WithConfirmedRootIndex(context.Background(), 5)
+	observed, err := observeCommittedLocal(ctx, barrier, root, owner, 1, root.members[0].NodeID,
+		validReadStore{held: true}, validReadObserver{observer: &testObserver{root: root}}, target, ref.Descriptor, ref.RequestID,
+		ref.Index, confirmationID, claim)
+	if err != nil {
+		t.Fatal("verify physical majority for read", observed, err)
+	}
+	if barrier.calls != 3 || root.reads != 2 {
+		t.Fatalf("pre-read verification repeated deferred Owner/Root checks: barriers=%d plan_reads=%d", barrier.calls, root.reads)
+	}
+	if _, err := CheckReadCurrent(ctx, barrier, root, owner, target, ref, confirmationID, claim, plan); err == nil {
+		t.Fatal("read returned after its local confirmation was replaced")
+	}
+}
+
 func TestWriterNeverPublishesWithoutStablePhysicalMajority(t *testing.T) {
 	root, target, descriptor, owner, _ := publishedFixture(t)
 	store := &testStore{}
@@ -383,5 +479,39 @@ func TestWriterNeverPublishesWithoutStablePhysicalMajority(t *testing.T) {
 		Body: []byte("body"), Payload: []byte("publish")}
 	if got, err := writer.WriteLocal(context.Background(), request); err == nil || got.Reference.Index != 0 || submissions != 0 {
 		t.Fatal("minority physical stage published a reference", got, submissions, err)
+	}
+}
+
+func TestEnsureCurrentLocalConfirmationSkipsAReplacedReference(t *testing.T) {
+	root, target, _, owner, _ := publishedFixture(t)
+	var stale enginestate.RecordReference
+	_, err := owner.ReadRouted(context.Background(), publishedBarrier{ownerIndex: 2}, target,
+		func(view enginestate.ReadView) error {
+			var found bool
+			var readErr error
+			stale, found, readErr = view.RecordReference(target.RoutingKey)
+			if readErr != nil {
+				return readErr
+			}
+			if !found {
+				return errors.New("published reference is missing")
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatal("read initial reference", err)
+	}
+	if err := owner.ApplyRouted(3, "replacement", target, []byte("publish replacement")); err != nil {
+		t.Fatal("replace current reference", err)
+	}
+
+	observer := &testObserver{root: root}
+	submissions := 0
+	writer := Writer{Barrier: publishedBarrier{ownerIndex: 3}, Root: root, Owner: owner,
+		LocalID: 1, LocalNodeID: root.members[0].NodeID, Store: &testStore{}, Observer: observer,
+		Submit: func(context.Context, string, []byte) error { submissions++; return nil }}
+	changed, err := writer.EnsureCurrentLocalConfirmation(context.Background(), stale)
+	if err != nil || changed || submissions != 0 || observer.callCount() != 0 {
+		t.Fatal("stale fixed-cut reference became repair debt or was reconfirmed", changed, submissions, observer.calls, err)
 	}
 }

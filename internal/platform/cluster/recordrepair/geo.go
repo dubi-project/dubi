@@ -21,6 +21,19 @@ import (
 // immutable-record Put on that target.
 func RepairSelectedTargets(ctx context.Context, plan placement.GeoPlan, target placement.RepairTarget,
 	source rootstate.Node, group string, d records.Descriptor, client RemoteRepairer) ([]records.Holding, error) {
+	return RepairSelectedTargetsWithLocal(ctx, plan, target, source, group, d, client, 0, nil)
+}
+
+// LocalGeoRepairer writes one selected Geo target into this process's Store.
+// A local target must never be sent through the remote Group RPC path.
+type LocalGeoRepairer func(context.Context, rootstate.Node, string, records.Descriptor) (records.Holding, error)
+
+// RepairSelectedTargetsWithLocal is RepairSelectedTargets with an explicit
+// in-process path for a target that is this Node. All other targets still use
+// authenticated remote repair RPCs.
+func RepairSelectedTargetsWithLocal(ctx context.Context, plan placement.GeoPlan, target placement.RepairTarget,
+	source rootstate.Node, group string, d records.Descriptor, client RemoteRepairer,
+	localRaftID uint64, localRepair LocalGeoRepairer) ([]records.Holding, error) {
 	if ctx == nil || client == nil || len(target.Nodes) == 0 || target.RegionID == "" ||
 		source.RaftID == 0 || source.NodeID == "" || group == "" || d.GroupID != group {
 		return nil, errors.New("Geo repair requires a selected target, source and descriptor")
@@ -72,14 +85,26 @@ func RepairSelectedTargets(ctx context.Context, plan placement.GeoPlan, target p
 			return nil, errors.New("Geo repair target differs from the confirmed plan")
 		}
 		seen[destination.RaftID] = true
-		attempt, cancel := sourceAttemptContext(ctx, remaining)
-		remaining--
-		holding, repairErr := client.RepairRecordOnNode(attempt, destination, source, group, d)
-		cancel()
-		if repairErr != nil {
-			fetchAttempt, fetchCancel := sourceAttemptContext(ctx, remaining+1)
-			holding, repairErr = client.FetchRecordOnNode(fetchAttempt, destination, source, group, d)
-			fetchCancel()
+		var holding records.Holding
+		var repairErr error
+		if destination.RaftID == localRaftID {
+			if localRepair == nil {
+				return nil, errors.New("selected local Geo repair target has no local Store repair path")
+			}
+			attempt, cancel := sourceAttemptContext(ctx, remaining)
+			remaining--
+			holding, repairErr = localRepair(attempt, source, group, d)
+			cancel()
+		} else {
+			attempt, cancel := sourceAttemptContext(ctx, remaining)
+			remaining--
+			holding, repairErr = client.RepairRecordOnNode(attempt, destination, source, group, d)
+			cancel()
+			if repairErr != nil {
+				fetchAttempt, fetchCancel := sourceAttemptContext(ctx, remaining+1)
+				holding, repairErr = client.FetchRecordOnNode(fetchAttempt, destination, source, group, d)
+				fetchCancel()
+			}
 		}
 		if repairErr != nil {
 			failures = append(failures, fmt.Errorf("target Node %d: %w", destination.RaftID, repairErr))

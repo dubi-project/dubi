@@ -13,7 +13,41 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
 	"github.com/dubi-project/dubi/internal/platform/storage/storelock"
+	"golang.org/x/sys/unix"
 )
+
+func TestJoinReceiptInstallsUnderRestrictiveServiceUmask(t *testing.T) {
+	if os.Getenv("DUBI_TEST_ENROLLMENT_UMASK") != "077" {
+		child := exec.Command(os.Args[0], "-test.run=^TestJoinReceiptInstallsUnderRestrictiveServiceUmask$")
+		child.Env = append(os.Environ(), "DUBI_TEST_ENROLLMENT_UMASK=077")
+		if output, err := child.CombinedOutput(); err != nil {
+			t.Fatalf("strict service umask broke PKI bootstrap/enrollment: %v\n%s", err, output)
+		}
+		return
+	}
+	// Umask is process-global: exercise it only in a dedicated child.
+	old := unix.Umask(0o077)
+	defer unix.Umask(old)
+	store, ticket, request, bundle, now := receiptFixture(t)
+	if _, err := SaveReceipt(store, ticket, request, bundle, now); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		_, material, err := ResumeReceipt(store, now)
+		if err != nil {
+			t.Fatal("strict umask prevented resumable installation", err)
+		}
+		for path, mode := range map[string]os.FileMode{
+			material.Paths.CACertificate: 0o644, material.Paths.Certificate: 0o644,
+			material.Paths.PrivateKey: 0o600, material.Paths.Config: 0o600,
+		} {
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode {
+				t.Fatalf("incorrect PKI permissions on %s: %v, %v", path, info, err)
+			}
+		}
+	}
+}
 
 func receiptFixture(t *testing.T) (string, Ticket, Request, Bundle, time.Time) {
 	t.Helper()

@@ -12,6 +12,8 @@ enginestate 的 Result 证明某次命令已执行，不证明当时写入的所
 
 ## 本地写入与确认
 
+Geo Repair 的持有观察必须同时覆盖本机与远端。本机在已确认且本地已应用的 Root 切点下核对当前 NodeID/RaftID/Region，调用 `Records.Verify` 校验实际 Pack，并在验证后复查成员身份；远端继续使用认证 holding RPC，不能把远程 RPC 的 self-target 拒绝当作“本机未持有”。否则三节点区域只剩本机与一个远端有数据、第三节点无容量时，会漏计本机多数，反复修复已有副本而无法向其他区域推进。容量只影响目标选择，不缩小节点或区域多数分母；任务仍须凭新的物理多数观察才能完成。
+
 1. 校验描述、长度与摘要，在本 Store 串行锁内复制写入载荷，避免每个等待调用都提前分配大缓冲。
 2. 用内容绑定的 RecordID 查询索引。已存在也必须重新读取真实 Pack，核对 CRC、Store、外层 Tenant/Engine、RecordID、长度和摘要，不从旧 Result 或 locator 直接返回成功。
 3. 不存在则通过共享 Pool 完成数据和 Pack 检查点同步，再把描述与本地 Location 同步发布到记录索引。不同 Keyspace、不同来源 Group 共用 Volume 当前 Pack。
@@ -87,7 +89,7 @@ Result 在任何事务 Pack 写入前检查完整编码不超过 64 MiB，包含
 
 协议严格为一个身份/Descriptor 头、零个或多个非空数据帧、客户端 EOF。数据帧最大 1 MiB，单记录仍最多 64 MiB；空记录也必须 EOF。禁止混合头/数据、重复头、未知字段、空帧、超长、缺帧或多余字节，完整长度和 SHA-256 校验之后才允许调用 Store。接收器不接受本地 Volume/Pack/Offset，目标节点自行选卷并继续混合写 Pack。
 
-接收头之后、收完数据之后及 Store IO 之后分别检查实际 Node TLS 和当前 Root 成员/登记；登记不一致或授权失效不返回成功。这仍是前后切点检查，不是全局原子撤销保证。确认只有在 Pack 同步、记录索引同步及重新读验完成之后发送；IO/ACK 之间失权、超时或断线可能留下持久字节，不回滚它们。精确描述重试经过既有索引重新读验，不重复追加。索引发布前发生故障仍可能留下不可收编的孤立 Pack 数据，这是既有 Store 崩溃语义，不承诺所有失败都零追加。
+入口已确认的 Root ReadIndex cut 随 Owner EngineData 转发和内部 Pack 传输携带；接收端要求本地 Root 已应用至该 cut，并按本地最新已应用状态校验成员与证书，避免在每段内部 RPC 上再次等待跨区域 Root ReadIndex。目标端若尚未应用该 cut，会退回完整 Root ReadIndex；无 cut 的调用也走完整校验。接收端在接收任何应用载荷之前检查实际 Node TLS 和 Root 成员/登记，之后完整校验长度与摘要再执行 Store IO。IO 完成后，前台写入协调器把固定 cohort 和物理多数绑定到 Owner LocalConfirmation，由 Owner Raft 状态机检查当前 Region fence/成员并决定能否返回 LocalReady。直接的 Pack 传输 ACK 仅表示本地持有完成，不是集群写入成功。成员移除与 IO 并发时可能留下孤立的持久字节，不回滚它们；它们不计入 Owner 当前 fence 下的成功多数。精确描述重试经过既有索引重新读验，不重复追加。索引发布前发生故障仍可能留下不可收编的孤立 Pack 数据，这是既有 Store 崩溃语义，不承诺所有失败都零追加。
 
 每节点两条活动接收和两个实际 Recv worker，接收 body 总预约 128 MiB，分配前预约、实际 IO 结束才释放；发送端每 GroupClient 两条活动发送，不无限排队。发送帧独立拥有字节，不引用调用者可在返回后复用的缓冲，避免 gRPC 追踪/统计延迟引用造成竞态；提前拒绝时读取真实服务端状态，不把 ResourceExhausted 等原因丢成裸 EOF。首帧 10 秒，后续帧/EOF 等待 15 秒，总上下文 5 分钟，持续小包不能延长总期限。不可中断磁盘操作仍占槽，超时不能强行终止它。该预算仅覆盖接收 body，不包含 protobuf 初始分配、发送消息保留、Store 复制、Pack 编码/读验、调用者已有载荷或全进程 RSS。客户端在返回前再次核对真实 TLS 对端和精确持有响应。
 
@@ -113,17 +115,31 @@ Result 在任何事务 Pack 写入前检查完整编码不超过 64 MiB，包含
 
 `recordwrite.Reader.ReadLocal` 是对应的内部数据读门禁：在 Owner ReadIndex 下取得当前引用与关联确认记录，依据当前 Root 集合重新检查真实多数。若入口节点尚未持有，它只从刚通过认证观察的当前成员拉取完整字节，写入自身共享 Pack，再读验并再次确认 Root/Owner/物理多数；损坏的本地记录不会被伪装为缺失来覆盖。Region 增长后旧确认不能用于读，原写 RequestID 再试可在当前多数确认后恢复读。该入口仍只接收内部路由 Target，尚未提供租户授权或通用公开 API。
 
-`enginestate.WalkCurrentReferences` 通过 Owner Group ReadIndex 获取固定 Pebble 切点，在同一切点逐条验证当前引用及其 Range/Keyspace/Result 关联；回调不持有 Apply 锁，可以边扫描边有新写入。只有完整扫描无错误才有完成报告，途中副作用不得被当作全量覆盖证明。分页接口每页至多 1024 条且各页是独立切点；分页游标只用于继续遍历，不是持久快照，新插入且排序在游标之前的引用会在下轮全扫发现。`recordrepair.RepairCurrentLocal` / `RepairCurrentLocalPage` 仅从 Root 已确认 cohort 的认证节点观察并拉取真实字节，末尾复查 cohort。若本地索引有效、只有原 Pack 位置不可读，修复器使用单独的认证拉取和 `RepairExisting`：先把完整数据写入健康 Pack 并验读，再同步切换本地索引；失卷后加新 Volume 可不依赖旧卷恢复。普通 `Put` 和普通拉取不自动覆盖，索引损坏、Store 关闭或资源身份变化仍失败关闭。索引 Sync 结果不确定时整个句柄停用，重开后按实际持久位置恢复；旧位置及失败留下的孤儿 Pack 只有在完整索引快照证明整个 sealed Pack 无引用时才允许由保守 GC 回收。一次性全切点调用遇到未修复引用即报错；有界分页把逐条失败记为 `Unrepaired` 债务并继续后续引用，不能把页完成当作覆盖完成。Managed Node 进程内 worker 默认每轮处理至多 8 条，逐条失败推进游标、下轮再扫；元数据/拓扑切点失败则丢弃游标从头重扫。Owner leader 在多数物理数据就绪后可按当前 Root 代际重新走 Owner Raft 确认，避免扩容后必须等原客户端重试。它不是用户配置的定时作业。进程重启也从头扫描，尚无持久游标、退役/成员移除后的自动再平衡或跨 Region 修复。
+`enginestate.WalkCurrentReferences` 通过 Owner Group ReadIndex 获取固定 Pebble 切点，在同一切点逐条验证当前引用及其 Range/Keyspace/Result 关联；回调不持有 Apply 锁，可以边扫描边有新写入。只有完整扫描无错误才有完成报告，途中副作用不得被当作全量覆盖证明。分页接口每页至多 1024 条且各页是独立切点；分页游标只用于继续遍历，不是持久快照，新插入且排序在游标之前的引用会在下轮全扫发现。`recordrepair.RepairCurrentLocal` / `RepairCurrentLocalPage` 仅从 Root 已确认 cohort 的认证节点观察并拉取真实字节，末尾复查 cohort。若本地索引有效、只有原 Pack 位置不可读，修复器使用单独的认证拉取和 `RepairExisting`：先把完整数据写入健康 Pack 并验读，再同步切换本地索引；失卷后加新 Volume 可不依赖旧卷恢复。普通 `Put` 和普通拉取不自动覆盖，索引损坏、Store 关闭或资源身份变化仍失败关闭。索引 Sync 结果不确定时整个句柄停用，重开后按实际持久位置恢复；旧位置及失败留下的孤儿 Pack 只有在完整索引快照证明整个 sealed Pack 无引用时才允许由保守 GC 回收。一次性全切点调用遇到未修复引用即报错；有界分页把逐条失败记为 `Unrepaired` 债务并继续后续引用，不能把页完成当作覆盖完成。Managed Node 进程内 worker 默认每轮处理至多 64 条，逐条失败推进游标、下轮再扫；元数据/拓扑切点失败则丢弃游标从头重扫。Owner leader 在多数物理数据就绪后可按当前 Root 代际重新走 Owner Raft 确认，避免扩容后必须等原客户端重试。它不是用户配置的定时作业。本地 Pebble 账本保存有界分页游标及当前 cohort 绑定；重启后仅在 generation、Group epoch、fence 和成员集合一致时续扫，否则从头扫描。已知记录欠账与本轮失败计数独立保存：失败扫描结束、下一轮干净页、中途重启或 cohort 变化都不能擦除欠账，只能在当前 cohort 下完整干净扫描并成功落盘后清除。账本同时记录本轮扫描数、开始时间、最近推进与最近完整干净扫描时间，供 status / doctor 观察；这些记录不授予持有或多数权威。跨 Region 修复使用独立 Geo 重试账本，见下文。
+
+Geo 发现使用 `WalkCurrentReferencesWithGeoCoveragePage`：同一有界 Owner 快照同时读取引用、GeoCoverage 回执及其发布/Result 关联，每页只取得一次 Owner ReadIndex，最多遍历 256 条元数据，发现 32 条待修引用即以有效游标提前结束该页；回执缺失会追加待办，回执或关联损坏则拒绝该页。快照中的回执只用于发现修复提示，不能代替新鲜的跨区域物理多数观察。Geo 重确认向持有 RPC 传递本次刚确认的 Root 切点，接收节点仍验证成员身份、已应用切点和真实 Pack 字节；最终确认仍核对当前计划与引用。
+
+本地 Repair leader 先逐条验读/修复本机 Pack，再通过 `Writer.PendingLocalConfirmations` 对这一页引用共用一个 Owner 读切点，前后各确认一次 Root 放置计划；每条仍读取当前引用与 LocalConfirmation，并核验实时 Range fence、关联 Result 和已应用位置。8 条有效回执的元数据检查共需 3 次屏障；缺失/过期回执仍逐条执行完整物理多数重确认，已被覆盖的旧引用留给下轮发现新版本。Root 集合变化、Owner 落后或回执损坏拒绝该页，不能用历史回执代替真实字节检查。页级屏障错误与已有记录欠账分开观察；已有真实欠账仍需完整干净扫描才能解除。
+
+有界 live repair 页先收集同一 Owner 读切点内已验证的引用，再对小记录复用现有批量拉取：每批最多 32 条、总载荷 4 MiB，缺少索引用普通写入，只有有效索引的旧 Pack 位置不可读时才用 `RepairExisting`。完整流及最终授权成功后才开始本地写入，随后每条仍走原来的实际持有/容量检查，页末复查 Root cohort；预填充和页完成都不授予多数或覆盖权威。可重试的来源失败保留逐条修复，权限或协议错误不能降级绕过；无健康可写卷或容量不足时仍由原容量协调路径处理。已卸载的记录不被本地批次强行写回，损坏索引也不被搬迁覆盖。资源边界见[资源界限](../operations/resource-limits.md)。
 
 跨 Node 迁移现在有了内部 `RecordRepairService.Repair` 传输原语：目标 Node 自己向认证来源拉取并写入本地 Pack；已有坏位置使用 `RepairExisting`，目标缺少索引时使用普通新增持有。该通道只接受当前 Root 成员身份，仍不替代跨 Region 目标选择、持久搬迁任务或最终多数复验。
 
 跨 Region Repair 任务现在保存当前引用切点到本地账本；后台重试会重新读取 Range/Region GeoPlan，逐节点观察真实持有，执行目标 Node 自主拉取，再用完整 `GeoPlan.Assess` 复验区域多数后才删除任务。任务账本不保存 Volume、地址或副本数，也不能替代 `GeoReady` 元数据确认。
 
-Geo worker 还会扫描已有引用的 GeoCoverage 账目：如果 Region generation、Group epoch 或 fence 已变化，就把该引用重新加入本地账本，先按当前固定 GeoPlan 补齐物理观察，再重新发送覆盖 Region 的 metadata mirror，并以同一不可变引用原子写入新的 Owner GeoConfirmation。证明仍不是租约，不改变 Region 分母；跨 Region 日志追赶、来源 Region 丢失后的完整重平衡和长期持久游标仍未完成。
+托管节点的 Engine 数据入口在多 Region 的本地多数写入完成后，返回成功前同步保存同一不可变引用的 Geo 补齐提示。相同 RequestID 重试覆盖同一提示；账本写失败时返回错误并保留已提交的引用，调用方使用原 RequestID 重试。提示不携带 Engine/Module 格式，也不增加跨区域数据确认或 Root 提交。单 Region 写入不产生这项 Geo 待办；小区域同步 GeoReady 路径保持原语义。后台扫描继续负责历史记录、重启和拓扑变化后的发现，新写入不必等待全量扫描到达其排序位置。
+
+同键被覆盖或删除后，旧提示不能永久占用账本。Geo worker 必须先获得当前 Root 切点，再通过精确 Range Fence 下的 Owner 多数派读取，证明当前引用 index 高于旧引用，或在不早于旧发布位置的 Owner 切点中已不存在，才可撤销旧提示。撤销单独计为 `Superseded`，不计作物理多数补齐成功；缺少 Root 切点、落后的 Owner 视图、权限错误、超时或不可达均保留待办。这项操作不删除 Pack 数据，也不改变快照或备份保留规则。
+
+本地修复扫描与 Geo 补齐共用该账本时，本地扫描只能追加未解决记录的提示。单节点已持有、同区域已修复或本地完整扫描结束，都不能删除 Geo 任务；删除资格属于完成当前完整 GeoPlan 物理多数复验的 Geo worker。否则本地恢复会提前清掉尚未复制到其他 Region 的记录待办，并造成待办计数短暂归零。
+
+Geo worker 还会扫描已有引用的 GeoCoverage 账目：本地多数已成功、但尚无跨 Region 回执的记录，以及 Region generation、Group epoch 或 fence 已变化的记录，都会重新加入本地账本；后台按当前固定 GeoPlan 补齐物理多数，再发送覆盖 Region 的 metadata mirror，并以同一不可变引用原子写入新的 Owner GeoConfirmation。写入响应不等待这一步；因此跨 Region 多数形成前若 Owner Region 整体永久丢失，最近的本地成功写入仍有丢失窗口。证明仍不是租约，不改变 Region 分母；跨 Region 日志追赶、来源 Region 丢失后的完整重平衡和长期持久游标仍未完成。
+
+Geo 发现每页按 Range 缓存计划，缓存首次未命中时也必须把刚解析的计划交给当前记录，不能只写缓存而让当前记录继续使用空计划。否则每页每个 Range 的首条引用会永久漏扫，待办为零也不能证明完整覆盖。成功推进但尚未结束的页在 100ms 后继续扫描；未推进或空闲轮仍等待 5 秒，失败不会凭旧游标触发快速重试。
 
 ## 验证与后续接线
 
-读路径延迟优化保留首轮完整物理多数验证；Pack 字节读验后，只复核当前 Owner 引用与持久确认凭据，再读取一次 Root 区域计划并与已验证代际比较，不再重复远端物理持有扫描或多做一次 Root 屏障。因此并发覆盖或 Region 代际变化仍失败关闭。写路径复用刚完成的 Stage 多数持有凭据来构造 Owner 确认，不在发布引用后立刻重复扫描；Owner 确认提交后仍执行一次完整物理多数验证，成功返回门禁不变。数据 RPC 入口完成 Node 成员的 Root 多数派确认后，会将该确认索引交给同一请求的路由查询复用；若本机 Root 状态机尚未应用到该索引，路由仍走新的 Root ReadIndex 路径。Owner 的 Range epoch fencing 不变。
+读路径延迟优化保留首轮完整物理多数验证；Pack 字节读验后，只复核当前 Owner 引用与持久确认凭据，再读取一次 Root 区域计划并与已验证代际比较，不再重复远端物理持有扫描或多做一次 Root 屏障。因此并发覆盖或 Region 代际变化仍失败关闭。写路径复用刚完成的 Stage 多数持有凭据来构造 Owner 确认；入口 Root 切点也供初始区域计划读取复用，物理 IO 后不再刷新 Root 计划。Owner 确认命令在区域 Raft 状态机中验证当前 Region fence、成员和引用；它是物理多数 staging 后的最终提交门禁，拒绝在 staging 期间变更的 cohort，从而不必串行等待写后全局 Root ReadIndex。该规则只用于本地区域至少三节点的本地多数路径；小 Region 仍同步等待跨 Region 多数。带旧确认的重试仍必须经过 `CheckCommittedLocal` 重新验证当前物理多数和 Root 计划。数据 RPC 入口完成 Node 成员的 Root 多数派确认后，会将该确认索引交给同一请求的路由与初始区域计划读取复用；若本机 Root 状态机尚未应用到该索引，路由仍走新的 Root ReadIndex 路径。Owner 的 Range epoch fencing 不变。
 
 进程内修复器对未完成的分页扫描以有界短间隔续页，扫完后恢复低频巡检；一次只处理一个小页，仍按 Group 轮转，不额外要求运维配置。最近发现的 Group 欠账保留在本机诊断状态中：一页无错不清除前页欠账，只有完整新一轮无欠账才解除。`dubi status` 通过只接受本机 Node 证书的内部诊断 RPC 读取此观察，最多显示 64 项并给出总数；进程重启后会重新扫描。它不是持久覆盖账目，空列表不代表扫描完成或全群物理多数已就绪。
 

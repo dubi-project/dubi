@@ -89,11 +89,8 @@ func (s *State) RootJoin(grantID string) (RootJoin, bool, error) {
 }
 
 // RootJoinForNode returns the durable enrollment task for a registered Node.
-// It lets control-plane planners distinguish an admitted enrollment learner
-// from a legacy learner that was present before the enrollment workflow.  The
-// distinction matters while forming a Region: an admitted learner may still
-// be catching up to Root and must not be captured in an initial cohort until
-// Root topology promotes it.
+// Admission is independent of the final Root voting role: a successfully
+// enrolled Node may remain a learner in the stable Root topology.
 func (s *State) RootJoinForNode(raftID uint64) (RootJoin, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

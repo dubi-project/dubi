@@ -28,7 +28,9 @@ type recordReader interface {
 // gRPC cancels the transport; the bounded worker remains leased until Send
 // actually exits. Its message owns only a cloned bounded frame, NOT a slice
 // retaining the entire body after the handler releases its body reservation.
-func (s *RecordTransferServer) send(ctx context.Context, stream raftwire.RecordTransferService_GetServer, frame *raftwire.GetRecordResponse) error {
+func (s *RecordTransferServer) send(ctx context.Context, stream interface {
+	Send(*raftwire.GetRecordResponse) error
+}, frame *raftwire.GetRecordResponse) error {
 	ctx, cancel := context.WithTimeout(ctx, s.idle)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -180,7 +182,9 @@ func (w relocationWriter) Put(ctx context.Context, d records.Descriptor, payload
 
 // The worker owns its lease until the actual Recv returns. fetchRecord cancels
 // the RPC context on ALL exit paths, including a derived idle timeout.
-func (c *GroupClient) receiveRecord(ctx context.Context, stream raftwire.RecordTransferService_GetClient, timeout time.Duration) (*raftwire.GetRecordResponse, error) {
+func (c *GroupClient) receiveRecord(ctx context.Context, stream interface {
+	Recv() (*raftwire.GetRecordResponse, error)
+}, timeout time.Duration) (*raftwire.GetRecordResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {

@@ -58,15 +58,14 @@ type Runtime struct {
 	// production startup supplies this through the authenticated GroupClient.
 	rootReadIndex func(context.Context) (uint64, error)
 
-	mu                   sync.Mutex
-	recoverMu            sync.Mutex
-	closed               bool
-	rpcRegistered        bool
-	recoveryContext      context.Context
-	cancelRecovery       context.CancelFunc
-	closeDone            chan struct{}
-	closeErr             error
-	joinRecoveryDeferred bool
+	mu              sync.Mutex
+	recoverMu       sync.Mutex
+	closed          bool
+	rpcRegistered   bool
+	recoveryContext context.Context
+	cancelRecovery  context.CancelFunc
+	closeDone       chan struct{}
+	closeErr        error
 }
 
 // SetRootReadIndex supplies the authenticated remote Root barrier used while
@@ -169,23 +168,27 @@ func (runtime *Runtime) RecoverLocalGroups(ctx context.Context) error {
 	if err := runtime.confirmRoot(ctx); err != nil {
 		return err
 	}
+	deferGroupRecovery := false
+	if runtime.RootJoin != nil {
+		local, err := runtime.RootJoin.Load()
+		if err != nil {
+			return err
+		}
+		// Only a Node that has never completed its local Root activation defers
+		// its first Group recovery hand-off. An already-active enrolled Node is
+		// restarting with established identity and must reopen its local Groups
+		// before advertising server readiness.
+		deferGroupRecovery = local.Phase == rootjoin.LocalCatchingUp
+	}
 	if err := runtime.activateRootJoin(); err != nil {
 		return err
 	}
-	if runtime.RootJoin != nil {
-		runtime.mu.Lock()
-		deferRecovery := !runtime.joinRecoveryDeferred
-		if deferRecovery {
-			// The first post-enrollment recovery only establishes Root readiness.
-			// Regional Groups may be part of the placement cut that promotes this
-			// Node; defer opening them to the scheduler after startup so a slow or
-			// transitional Group cannot block the Node's ready hand-off.
-			runtime.joinRecoveryDeferred = true
-		}
-		runtime.mu.Unlock()
-		if deferRecovery {
-			return nil
-		}
+	if deferGroupRecovery {
+		// A newly enrolled Node first publishes Root readiness. Regional Groups
+		// may be part of the placement cut that promotes it; defer opening them
+		// during this one-time catch-up hand-off. A later process restart sees
+		// LocalActive and follows normal Group recovery.
+		return nil
 	}
 	descriptors, err := runtime.Root.Groups()
 	if err != nil {

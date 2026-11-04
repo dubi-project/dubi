@@ -461,7 +461,12 @@ func (w *guardedWriter) Write(data []byte) (int, error) {
 			w.sinceCheck = 0
 		}
 		chunk := data[:min(len(data), 256<<10)]
+		lease, err := w.disk.Reserve(uint64(len(chunk)))
+		if err != nil {
+			return total, err
+		}
 		n, err := w.writer.Write(chunk)
+		lease.Release()
 		if n < 0 || n > len(chunk) {
 			return total, errors.New("snapshot writer returned invalid count")
 		}

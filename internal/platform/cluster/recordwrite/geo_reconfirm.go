@@ -16,6 +16,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/cluster/routedstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
+	"github.com/dubi-project/dubi/internal/platform/raft"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 )
@@ -27,24 +28,49 @@ import (
 // Group records the replacement receipt.
 func (w Writer) EnsureCurrentGeoConfirmation(ctx context.Context, ref enginestate.RecordReference,
 	maxRegions, maxNodes int) (bool, error) {
+	ready, err := w.prepareGeoConfirmation(ctx, ref, maxRegions, maxNodes)
+	if err != nil || ready == nil {
+		return false, err
+	}
+	return w.commitGeoConfirmation(ctx, ready)
+}
+
+// Preparation retains metadata only. Physical IO keeps its original worker and
+// payload bounds; ready confirmations may subsequently share transport batches.
+type geoConfirmationReady struct {
+	ref         enginestate.RecordReference
+	target      router.Target
+	plan        placement.GeoPlan
+	evidence    []placement.RegionHoldings
+	publication placement.PublicationCut
+	mirrors     []routedstate.GeoMetadataMirror
+	claim       routedstate.GeoConfirmation
+	rootCut     uint64
+}
+
+func (w Writer) prepareGeoConfirmation(ctx context.Context, ref enginestate.RecordReference, maxRegions, maxNodes int) (*geoConfirmationReady, error) {
 	if ctx == nil || w.Barrier == nil || w.Root == nil || w.Owner == nil || w.Store == nil ||
 		w.Observer == nil || w.MirrorGeo == nil || w.Submit == nil || w.LocalID == 0 ||
 		w.LocalNodeID == "" || ref.Descriptor.Validate() != nil || ref.Index == 0 ||
 		ref.OwnerGroupID != w.Owner.GroupID() {
-		return false, errors.New("Geo reconfirmation requires a complete Owner and Node runtime")
+		return nil, errors.New("Geo reconfirmation requires a complete Owner and Node runtime")
 	}
 	root, ok := w.Root.(rangeGeoRoot)
 	if !ok {
-		return false, errors.New("Root does not expose durable Range Region placement")
+		return nil, errors.New("Root does not expose durable Range Region placement")
 	}
 	target := router.Target{Keyspace: ref.Descriptor.Keyspace, RangeID: ref.RangeID,
 		OwnerGroupID: ref.OwnerGroupID, Epoch: ref.RangeEpoch, RoutingKey: bytes.Clone(ref.RoutingKey)}
 	if err := target.Validate(); err != nil {
-		return false, err
+		return nil, err
 	}
-	_, plan, err := placement.ReadRangeGeoPlan(ctx, w.Barrier, root, ref.RangeID, maxRegions, maxNodes)
+	rootCut, err := w.Barrier.ReadIndex(ctx, raft.RootGroupID)
 	if err != nil {
-		return false, err
+		return nil, err
+	}
+	_, plan, err := placement.ReadRangeGeoPlanAtCut(rootCut, root, ref.RangeID, maxRegions, maxNodes)
+	if err != nil {
+		return nil, err
 	}
 	var current enginestate.RecordReference
 	var receipt enginestate.GeoCoverageRecord
@@ -62,36 +88,47 @@ func (w Writer) EnsureCurrentGeoConfirmation(ctx context.Context, ref enginestat
 		receipt, foundReceipt, readErr = view.GeoCoverage(ref.Descriptor.Key)
 		return readErr
 	}); err != nil {
-		return false, err
+		return nil, err
 	}
 	if foundReceipt && geoReceiptMatchesPlan(receipt, ref, target, plan) {
-		return false, nil
+		return nil, nil
 	}
+	// This attempt has just confirmed Root placement. Holding RPCs still
+	// authenticate each member and require its applied Root state to reach the
+	// cut, without repeating global ReadIndex before and after every Pack read.
+	ctx = router.WithConfirmedRootIndex(ctx, rootCut)
 	recordID, err := ref.Descriptor.ID()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	evidence, err := observeGeoHoldings(ctx, plan, w.LocalID, w.LocalNodeID, w.Store, w.Observer, ref.Descriptor)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	publication := placement.PublicationCut{RecordID: recordID, RequestID: ref.RequestID, Index: ref.Index,
 		CommandHash: ref.CommandHash, RangeID: ref.RangeID, RangeEpoch: ref.RangeEpoch,
 		RoutingKey: ref.RoutingKey}
 	coverage, err := plan.AssessPublication(publication, evidence)
 	if err != nil || !coverage.HasMajority() {
-		return false, errors.Join(err, errors.New("Geo reconfirmation lacks a Region majority"))
+		return nil, errors.Join(err, errors.New("Geo reconfirmation lacks a Region majority"))
 	}
 	mirrors, err := GeoMetadataMirrors(target, ref.Descriptor, publication, plan, evidence)
 	if err != nil {
-		return false, err
-	}
-	if _, err := ReplicateGeoMetadataWithRetryStore(ctx, w.MirrorGeo, plan, mirrors, w.MirrorRetry); err != nil {
-		return false, fmt.Errorf("replicate Geo reconfirmation mirrors: %w", err)
+		return nil, err
 	}
 	claim, err := GeoConfirmationClaim(target, ref.Descriptor.Key, coverage, evidence)
 	if err != nil {
-		return false, err
+		return nil, err
+	}
+	return &geoConfirmationReady{ref: ref, target: target, plan: plan, evidence: evidence, publication: publication, mirrors: mirrors, claim: claim, rootCut: rootCut}, nil
+}
+
+func (w Writer) commitGeoConfirmation(ctx context.Context, ready *geoConfirmationReady) (bool, error) {
+	ref, target, plan, evidence, publication, mirrors, claim := ready.ref, ready.target, ready.plan, ready.evidence, ready.publication, ready.mirrors, ready.claim
+	ctx = router.WithConfirmedRootIndex(ctx, ready.rootCut)
+
+	if _, err := replicateGeoMetadataWithCompletion(ctx, geoReconfirmationMirrors{w}, plan, mirrors, w.MirrorRetry, w.mirrorCompleted); err != nil {
+		return false, fmt.Errorf("replicate Geo reconfirmation mirrors: %w", err)
 	}
 	confirmID, err := geoReconfirmationID(claim)
 	if err != nil {

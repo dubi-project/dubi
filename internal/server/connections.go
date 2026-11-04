@@ -25,8 +25,11 @@ func newInternalRPCServer(configuration *tls.Config, maxSize int, lifetimes keep
 	return grpc.NewServer(
 		// Stop cancels transports and joins handlers before releasing Store.
 		grpc.WaitForHandlers(true),
-		grpc.Creds(tlscredentials.NewTLS(normalizeServerTLS(configuration))),
+		grpc.Creds(boundedHandshakes(tlscredentials.NewTLS(normalizeServerTLS(configuration)))),
 		grpc.KeepaliveParams(lifetimes),
+		grpc.ConnectionTimeout(handshakeTimeout),
+		grpc.MaxConcurrentStreams(64),
+		grpc.MaxHeaderListSize(32<<10),
 		grpc.MaxRecvMsgSize(messageSize(maxSize)+1024),
 	)
 }
