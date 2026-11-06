@@ -145,7 +145,7 @@ wait_record() {
 	local label=$1 store=$2 address=$3 key=$4 expected=$5
 	local out="$lab_dir/$label.get.json" err="$lab_dir/$label.get.err"
 	for _ in $(seq 1 180); do
-		if "$binary" record get --store "$store" --server "$address" demo items "$key" >"$out" 2>"$err" &&
+		if "$binary" record get --store "$store" --server "$address" demo "$key" >"$out" 2>"$err" &&
 			python3 -c 'import base64,json,sys; d=json.load(open(sys.argv[1])); want=base64.b64encode(sys.argv[2].encode()).decode(); sys.exit(0 if d.get("found") is True and d.get("value") == want else 1)' "$out" "$expected"; then
 			return 0
 		fi
@@ -174,16 +174,16 @@ wait_status n3 "$n3_store" "$n3_addr"
 wait_root_voters "$n1_store" "$n1_addr"
 printf 'bootstrap gate: three Root voters confirmed\n'
 
-retry_command "dataset create" "$lab_dir/dataset.json" "$lab_dir/dataset.err" \
-	"$binary" dataset create --store "$n1_store" --server "$n1_addr" --request-id lab-dataset demo items
+retry_command "tenant create" "$lab_dir/tenant.json" "$lab_dir/tenant.err" \
+	"$binary" tenant create --store "$n1_store" --server "$n1_addr" --request-id lab-tenant demo
 retry_command "initial record put" "$lab_dir/greeting.json" "$lab_dir/greeting.err" \
-	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-greeting demo items greeting hello
+	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-greeting demo greeting hello
 wait_record greeting-from-n2 "$n2_store" "$n2_addr" greeting hello
 wait_record greeting-from-n3 "$n3_store" "$n3_addr" greeting hello
 printf 'data gate: Pack-backed write/read confirmed on all three Nodes\n'
 
 retry_command "write with one Node offline" "$lab_dir/failover.json" "$lab_dir/failover.err" \
-	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-failover demo items failover two-online
+	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-failover demo failover two-online
 wait_record failover-from-n3 "$n3_store" "$n3_addr" failover two-online
 printf 'failure gate: one stopped Node still leaves a writable/readable majority\n'
 
@@ -192,9 +192,9 @@ wait "$n2_pid" 2>/dev/null || true
 n2_pid=""
 
 retry_command "retryable record put" "$lab_dir/retry-first.json" "$lab_dir/retry-first.err" \
-	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-retry demo items retry same-request
+	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-retry demo retry same-request
 retry_command "same RequestID retry" "$lab_dir/retry-second.json" "$lab_dir/retry-second.err" \
-	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-retry demo items retry same-request
+	"$binary" record put --store "$n1_store" --server "$n1_addr" --request-id lab-retry demo retry same-request
 compare_put_results "$lab_dir/retry-first.json" "$lab_dir/retry-second.json"
 wait_record retry-from-n3 "$n3_store" "$n3_addr" retry same-request
 printf 'idempotency gate: repeated RequestID returned the same committed result\n'

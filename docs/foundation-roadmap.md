@@ -1,5 +1,9 @@
 # 底座可用推进清单
 
+当前概念与职责以 [spec](../spec.md)、[四层架构](architecture/four-layer-architecture.md)及[Runtime 简化记录](development/runtime-simplification.md)为准：一节点多 Volume，`--store` 是元数据目录，物理复制/修复由 Runtime 统一负责。历史阶段记录不表示需要实现独立 Store 生命周期或预先创建所有候选 Engine。
+
+寻址设计更新（2026-11-04）：新功能取消独立 Dataset，采用可信 Tenant + Module + Engine 绑定，由 Runtime 自动编码键和管理 Range；Pack 仍跨 Range 混写。详见 [数据寻址与隔离](architecture/data-addressing.md)。下面旧 Dataset/三元组相关条目保留其实现和验收历史含义，新 Module 隔离和首次写入自动准备 Range 已接入代码；旧数据转换、通用 Range 拆分/合并仍未提供。新版 VPS 验证与旧版长测分开记录。
+
 本清单的“可用”指：DUBI 可以作为后续 Engine 的共同集群底座运行、处理故障并恢复数据；不等于独立硬件、真实 WAN、滚动升级和长时负载均已取得生产资格。`record` 当前只是底座验证探针，不作为正式业务模块交付。实现与验收均保持无 YAML、无手工 Node/Raft ID、无副本数配置、无 Engine 专属 Pack。
 
 ## 当前优先级：先让基座自身跑稳

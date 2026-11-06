@@ -252,10 +252,10 @@ func TestThreeNodeEngineFileSnapshotCatchupAndRestart(t *testing.T) {
 		})
 	}
 	for i, id := range identities {
-		rootCommand(rootstate.Command{Version: 1, Type: rootstate.RegisterNode, RequestID: fmt.Sprintf("node-%d", i),
+		rootCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.RegisterNode, RequestID: fmt.Sprintf("node-%d", i),
 			Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "region-a", Address: addresses[i]}})
 	}
-	rootCommand(rootstate.Command{Version: 1, Type: rootstate.RegisterGroup, RequestID: "group",
+	rootCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.RegisterGroup, RequestID: "group",
 		Group: &rootstate.Group{GroupID: groupID, StateKind: rootstate.GroupStateEngine}})
 	// Bootstrap only the first data participant. The production Root task
 	// worker must prepare, add and promote the other two over authenticated,
@@ -271,9 +271,9 @@ func TestThreeNodeEngineFileSnapshotCatchupAndRestart(t *testing.T) {
 	for _, id := range ids {
 		members = append(members, rootstate.GroupMember{RaftID: id, Role: rootstate.GroupMemberVoter})
 	}
-	rootCommand(rootstate.Command{Version: 1, Type: rootstate.PublishGroupMembers, RequestID: "members",
+	rootCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.PublishGroupMembers, RequestID: "members",
 		Membership: &rootstate.GroupMembership{GroupID: groupID, ExpectedEpoch: 1, Members: members[:1]}})
-	rootCommand(rootstate.Command{Version: 1, Type: rootstate.PlanGroupMembers, RequestID: "grow-data-group", GroupPlan: &rootstate.GroupChangePlan{ChangeID: "grow-data-group", GroupID: groupID, ExpectedEpoch: 2, Members: members}})
+	rootCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.PlanGroupMembers, RequestID: "grow-data-group", GroupPlan: &rootstate.GroupChangePlan{ChangeID: "grow-data-group", GroupID: groupID, ExpectedEpoch: 2, Members: members}})
 	awaitSnapshotCondition(t, "task-bound Group growth", func() bool {
 		for _, node := range nodes {
 			change, found, err := node.Runtime.Root.GroupChange("grow-data-group")
@@ -296,7 +296,7 @@ func TestThreeNodeEngineFileSnapshotCatchupAndRestart(t *testing.T) {
 			retained = append(retained, member)
 		}
 	}
-	rootCommand(rootstate.Command{Version: 1, Type: rootstate.PlanGroupMembers, RequestID: "retire-empty-leader", GroupPlan: &rootstate.GroupChangePlan{ChangeID: "retire-empty-leader", GroupID: groupID, ExpectedEpoch: 3, Members: retained}})
+	rootCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.PlanGroupMembers, RequestID: "retire-empty-leader", GroupPlan: &rootstate.GroupChangePlan{ChangeID: "retire-empty-leader", GroupID: groupID, ExpectedEpoch: 3, Members: retained}})
 	awaitSnapshotCondition(t, "task-bound leadership transfer and removal", func() bool {
 		for _, node := range nodes {
 			change, found, err := node.Runtime.Root.GroupChange("retire-empty-leader")
@@ -306,7 +306,7 @@ func TestThreeNodeEngineFileSnapshotCatchupAndRestart(t *testing.T) {
 		}
 		return true
 	})
-	rootCommand(rootstate.Command{Version: 1, Type: rootstate.PlanGroupMembers, RequestID: "rejoin-empty-leader", GroupPlan: &rootstate.GroupChangePlan{ChangeID: "rejoin-empty-leader", GroupID: groupID, ExpectedEpoch: 4, Members: members}})
+	rootCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.PlanGroupMembers, RequestID: "rejoin-empty-leader", GroupPlan: &rootstate.GroupChangePlan{ChangeID: "rejoin-empty-leader", GroupID: groupID, ExpectedEpoch: 4, Members: members}})
 	var membershipIndex uint64
 	awaitSnapshotCondition(t, "task-bound retired member rejoin", func() bool {
 		var index uint64
@@ -327,7 +327,7 @@ func TestThreeNodeEngineFileSnapshotCatchupAndRestart(t *testing.T) {
 		membershipIndex = index
 		return true
 	})
-	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 		OwnerGroupID: groupID, Epoch: 1, State: rootstate.RangeStateActive}
 	activation, err := routedstate.EncodeActivateRange("activate", descriptor)
 	if err != nil {
@@ -360,7 +360,7 @@ func TestThreeNodeEngineFileSnapshotCatchupAndRestart(t *testing.T) {
 	waitResult("activate")
 	lagging := (leader(groupID) + 1) % len(nodes)
 	stop(lagging)
-	rootCommand(rootstate.Command{Version: 1, Type: rootstate.RegisterTenant, RequestID: "offline-root-write",
+	rootCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.RegisterTenant, RequestID: "offline-root-write",
 		Tenant: &rootstate.Tenant{TenantID: "offline-tenant"}})
 	value := bytes.Repeat([]byte("v"), 1<<20)
 	for i := range 80 {

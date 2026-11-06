@@ -94,7 +94,7 @@ func TestManagedNodeCapacityBalanceOnDisposableFilesystems(t *testing.T) {
 		h, found, err := first.Runtime.Root.RegionCohortHead("default")
 		return err == nil && found && h.CurrentGeneration == 1 && h.PendingGeneration == 0
 	})
-	space := rootstate.Keyspace{TenantID: "balance", EngineID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "balance", EngineID: "data-alpha", ModuleID: "shared"}
 	command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "balance-tenant",
 		Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: space.TenantID}})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestManagedNodeCapacityBalanceOnDisposableFilesystems(t *testing.T) {
 	if err := first.Runtime.Host.Submit(raft.RootGroupID, command); err != nil {
 		t.Fatal(err)
 	}
-	activateEngineTestDataset(t, ctx, first, group, space)
+	activateEngineTestRange(t, ctx, first, group, space)
 	key, body := []byte("capacity-handoff"), bytes.Repeat([]byte("immutable"), (2<<20)/9)
 	written, err := first.EngineData.WriteLocal(ctx, enginedata.WriteRequest{RequestID: "before-capacity-move", Keyspace: space, Key: key, Body: body,
 		Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) }})

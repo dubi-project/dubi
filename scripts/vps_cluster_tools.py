@@ -119,7 +119,7 @@ def workloads():
     for p in pathlib.Path("/proc").glob("[0-9]*/cmdline"):
         try: args=p.read_bytes().decode(errors="replace").split("\0")
         except OSError: continue
-        if any(pathlib.Path(a).name in ("vps_cross_region_soak.sh","vps_cross_region_load.py","vps_root_failover_workload.py") or
+        if any(pathlib.Path(a).name in ("vps_cross_region_soak.sh","vps_cross_region_load.py","vps_root_failover_workload.py","vps_range_soak.py") or
                (pathlib.Path(a).name=="acceptance.py" and "dubi" in a) for a in args):
             found.append({"pid":int(p.parent.name),"command":args[:3]})
     return found
@@ -153,7 +153,7 @@ else:
     binary=expected["binary"]
     if op=="cli":
         args=request["args"]
-        allowed=(("status",),("version",),("dataset","create"),("record","put"),("record","get"),
+        allowed=(("status",),("version",),("tenant","create"),("record","put"),("record","get"),
                  ("node","remove"),("volume","add"),("volume","remove"),("volume","drain"))
         if not any(tuple(args[:len(prefix)])==prefix for prefix in allowed): raise ValueError("unsupported CLI operation")
         if tuple(args[:2]) not in (("record","get"),) and args[0] not in ("status","version") and workloads():

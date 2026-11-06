@@ -37,7 +37,7 @@ func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) err
 func backupCommandFlags(name string, stderr io.Writer) (*flag.FlagSet, *string, *string) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "existing Node store")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	server := flags.String("server", "", "reachable Node RPC address")
 	return flags, store, server
 }

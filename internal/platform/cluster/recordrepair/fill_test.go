@@ -18,7 +18,7 @@ func testReferences(t *testing.T) []enginestate.RecordReference {
 	t.Helper()
 	var out []enginestate.RecordReference
 	for _, key := range []string{"one", "two"} {
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}, "region-west", []byte(key), []byte(key))
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"}, "region-west", []byte(key), []byte(key))
 		if err != nil {
 			t.Fatal(err)
 		}

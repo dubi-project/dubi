@@ -45,7 +45,7 @@ func rootJoinFixture(t *testing.T, root string, register, consume bool) (*State,
 
 func rejectRootJoinCommand(t *testing.T, s *State, command Command) {
 	t.Helper()
-	command.Version = 1
+	command.Version = FormatVersion
 	command.RequestID = fmt.Sprintf("rejected-%d", s.AppliedIndex()+1)
 	index := s.AppliedIndex()
 	if result := applyDirect(t, s, &index, command); result.Error == "" {
@@ -137,7 +137,7 @@ func TestRootJoinIntentRejectsUnauthorizedOrDifferentRequest(t *testing.T) {
 		{Type: CompleteRootJoin, RootJoinFinish: &RootJoinFinish{GrantID: "invalid"}},
 		{Type: BeginRootJoin, RootJoinStart: &start, RootJoinFinish: &RootJoinFinish{GrantID: start.GrantID}},
 	} {
-		command.Version, command.RequestID = 1, "invalid"
+		command.Version, command.RequestID = FormatVersion, "invalid"
 		if _, err := EncodeCommand(command); err == nil {
 			t.Fatal("invalid payload accepted")
 		}

@@ -26,7 +26,7 @@ func grantManagerFixture(t *testing.T) (*GrantManager, *identityenrollment.Grant
 	if err != nil {
 		t.Fatal(err)
 	}
-	command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, Type: rootstate.RegisterNode, RequestID: "register-issuer",
+	command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.RegisterNode, RequestID: "register-issuer",
 		Node: &rootstate.Node{NodeID: local.NodeID, RaftID: local.RaftID, RegionID: "local", Address: "127.0.0.1:7443"}})
 	if err != nil {
 		t.Fatal(err)

@@ -148,7 +148,7 @@ func newHoldingFixture(t *testing.T) *holdingFixture {
 	other.NodeID, other.RaftID = fmt.Sprintf("node_%032x", 992), 992
 	index := uint64(0)
 	for i, id := range []identity.Identity{local, caller, other} {
-		result := applyRootCommand(t, root, &index, rootstate.Command{Version: 1, RequestID: fmt.Sprintf("node-%d", i), Type: rootstate.RegisterNode,
+		result := applyRootCommand(t, root, &index, rootstate.Command{Version: rootstate.FormatVersion, RequestID: fmt.Sprintf("node-%d", i), Type: rootstate.RegisterNode,
 			Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "west", Address: fmt.Sprintf("127.0.0.1:%d", 9000+i)}})
 		if result.Error != "" {
 			t.Fatal(result)
@@ -157,7 +157,7 @@ func newHoldingFixture(t *testing.T) *holdingFixture {
 	if err := root.ApplyMembership(index+1, &raftpb.ConfState{Voters: []uint64{local.RaftID}, Learners: []uint64{caller.RaftID, other.RaftID}}); err != nil {
 		t.Fatal(err)
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "index"}, "origin-not-hosted-here", []byte("opaque/key\x00"), []byte("data"))
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "index"}, "origin-not-hosted-here", []byte("opaque/key\x00"), []byte("data"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -87,15 +87,18 @@ func TestRootUncertainCommitBlocksDirectoryReadsUntilReopen(t *testing.T) {
 					"active-change":        func() error { _, _, err := state.ActiveGroupChange("data-1"); return err },
 					"pending-changes":      func() error { _, err := state.PendingGroupChanges(); return err },
 					"tenant":               func() error { _, _, err := state.Tenant("a"); return err },
-					"dataset":              func() error { _, _, err := state.Dataset("a", "record", "items"); return err },
-					"range":                func() error { _, _, err := state.Range("range"); return err },
-					"route":                func() error { _, _, err := state.Route("a", "record", "items", nil); return err },
-					"pending-ranges":       func() error { _, err := state.PendingRanges(); return err },
-					"snapshot":             func() error { _, _, _, err := state.Snapshot(); return err },
-					"restore":              func() error { return state.Restore(index, image, snapshotConf) },
-					"advance":              func() error { return state.Advance(2) },
-					"apply":                func() error { return state.Apply(2, command) },
-					"membership":           func() error { return state.ApplyMembership(2, conf) },
+					"module": func() error {
+						_, _, err := state.InitialRange(Keyspace{TenantID: "a", ModuleID: "items", EngineID: "record"})
+						return err
+					},
+					"range":          func() error { _, _, err := state.Range("range"); return err },
+					"route":          func() error { _, _, err := state.Route("a", "record", "items", nil); return err },
+					"pending-ranges": func() error { _, err := state.PendingRanges(); return err },
+					"snapshot":       func() error { _, _, _, err := state.Snapshot(); return err },
+					"restore":        func() error { return state.Restore(index, image, snapshotConf) },
+					"advance":        func() error { return state.Advance(2) },
+					"apply":          func() error { return state.Apply(2, command) },
+					"membership":     func() error { return state.ApplyMembership(2, conf) },
 				}
 				for name, check := range checks {
 					if err := check(); !errors.Is(err, injected) {

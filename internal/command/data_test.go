@@ -107,18 +107,18 @@ func referenceTestMux(t *testing.T) *engineruntime.Mux {
 	return mux
 }
 
-func activateEngineTestDataset(t *testing.T, ctx context.Context, first *server.Server,
+func prepareEngineTestRange(t *testing.T, ctx context.Context, first *server.Server,
 	group string, space rootstate.Keyspace) {
 	t.Helper()
-	dataset := rootstate.Dataset{TenantID: space.TenantID, EngineID: space.EngineID,
-		DatasetID: space.DatasetID, RangeID: "range-" + space.EngineID, OwnerGroupID: group}
+	seed := rootstate.RangeSeed{TenantID: space.TenantID, EngineID: space.EngineID,
+		ModuleID: space.ModuleID, RangeID: "range-" + space.EngineID, OwnerGroupID: group}
 	rootCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
-		RequestID: "create-" + space.EngineID, Type: rootstate.CreateDataset, Dataset: &dataset})
+		RequestID: "create-" + space.EngineID, Type: rootstate.PrepareRange, InitialRange: &seed})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Runtime.Host.Submit(raft.RootGroupID, rootCommand); err != nil {
-		t.Fatal("submit engine Dataset", err)
+		t.Fatal("submit engine Module", err)
 	}
 	for {
 		if _, err := first.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
@@ -130,16 +130,22 @@ func activateEngineTestDataset(t *testing.T, ctx context.Context, first *server.
 		}
 		if found {
 			if result.Error != "" {
-				t.Fatal("engine Dataset rejected", result.Error)
+				t.Fatal("engine Module rejected", result.Error)
 			}
 			break
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatal("engine Dataset registration did not commit", ctx.Err())
+			t.Fatal("engine Module registration did not commit", ctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+
+}
+
+func activateEngineTestRange(t *testing.T, ctx context.Context, first *server.Server, group string, space rootstate.Keyspace) {
+	t.Helper()
+	prepareEngineTestRange(t, ctx, first, group, space)
 	bootstrap, err := rangebootstrap.New(first.Runtime.Host, first.Runtime.Root,
 		func(groupID string) (rangebootstrap.OwnerControl, bool) {
 			owner, found := first.Runtime.Engines.Resolve(groupID)
@@ -152,8 +158,8 @@ func activateEngineTestDataset(t *testing.T, ctx context.Context, first *server.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bootstrap.Reconcile(ctx, dataset.RangeID); err != nil {
-		t.Fatal("activate engine Dataset", err)
+	if err := bootstrap.Reconcile(ctx, "range-"+space.EngineID); err != nil {
+		t.Fatal("activate test Range", err)
 	}
 }
 
@@ -203,9 +209,9 @@ func TestEngineDataAnyNodeGateway(t *testing.T) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	space := rootstate.Keyspace{TenantID: "gateway-demo", EngineID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "gateway-demo", EngineID: "data-alpha", ModuleID: "shared"}
 	// The test-owned control-plane setup does not turn the development Record
-	// endpoint into a general Dataset API.
+	// endpoint into a general storage-address API.
 	tenantCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
 		RequestID: "gateway-demo-tenant", Type: rootstate.RegisterTenant,
 		Tenant: &rootstate.Tenant{TenantID: space.TenantID}})
@@ -233,7 +239,7 @@ func TestEngineDataAnyNodeGateway(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	activateEngineTestDataset(t, ctx, first, group, space)
+	prepareEngineTestRange(t, ctx, first, group, space)
 	_, ticket := joinTestTicket(t, store, firstNode.Address)
 	gatewayStore := filepath.Join(t.TempDir(), "gateway")
 	gateway, err := openJoiningServerWithMux(ctx, []string{"--store", gatewayStore,
@@ -246,6 +252,16 @@ func TestEngineDataAnyNodeGateway(t *testing.T) {
 	if _, found := gateway.Runtime.Engines.Resolve(group); found {
 		t.Fatal("gateway unexpectedly hosts the Owner Group")
 	}
+	// Resume the persisted Pending Range through a non-Owner Root learner.
+	// This models the original coordinator disappearing after preparation.
+	binding, err := gateway.EngineData.Bind(space.ModuleID, space.EngineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := binding.ForTenant(space.TenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := bytes.Repeat([]byte("streamed-gateway-body-"), 100000)
 	request := enginedata.WriteRequest{RequestID: "gateway-any-node-write", Keyspace: space,
 		Key: []byte("gateway-key"), Body: body,
@@ -253,7 +269,7 @@ func TestEngineDataAnyNodeGateway(t *testing.T) {
 	var written enginedata.WriteResult
 	for {
 		attempt, stop := context.WithTimeout(ctx, 12*time.Second)
-		written, err = gateway.EngineData.Write(attempt, request)
+		written, err = bound.Write(attempt, enginedata.BoundWrite{RequestID: request.RequestID, Key: request.Key, Body: request.Body, Publish: request.Publish})
 		stop()
 		if err == nil {
 			break
@@ -270,7 +286,7 @@ func TestEngineDataAnyNodeGateway(t *testing.T) {
 	if _, err := gateway.EngineData.WriteLocal(ctx, request); !errors.Is(err, enginedata.ErrOwnerNotLocal) {
 		t.Fatal("Owner-local entry did not distinguish a non-Owner gateway", err)
 	}
-	read, err := gateway.EngineData.Read(ctx, space, request.Key)
+	read, err := bound.Read(ctx, request.Key)
 	if err != nil || !bytes.Equal(read.Body, body) || read.Reference.Index != written.Local.Reference.Index {
 		t.Fatal("gateway did not stream verified current data from Owner", len(read.Body), err)
 	}
@@ -408,18 +424,20 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		t.Helper()
 		var out, diagnostics bytes.Buffer
 		if code := Run(ctx, args, &out, &diagnostics); code != 0 {
+			for i, n := range nodes {
+				if n.process == nil {
+					continue
+				}
+				descriptor, found, rangeErr := n.process.Runtime.Root.InitialRange(rootstate.Keyspace{TenantID: "demo", ModuleID: record.ModuleID, EngineID: record.EngineID})
+				rootStatus, _ := n.process.Runtime.Host.Status(raft.RootGroupID)
+				ownerStatus, _ := n.process.Runtime.Host.Status(group)
+				t.Logf("node=%d range=%+v found=%v err=%v root=%+v owner=%+v", i, descriptor, found, rangeErr, rootStatus, ownerStatus)
+			}
 			t.Fatalf("%v failed: %s", args[:2], diagnostics.String())
 		}
 		return out.Bytes()
 	}
-	create := command("dataset", "create", "--request-id", "data-test-create", "demo", "items")
-	var descriptor struct {
-		RangeID      string `json:"range_id"`
-		OwnerGroupID string `json:"owner_group_id"`
-	}
-	if err := json.Unmarshal(create, &descriptor); err != nil || descriptor.RangeID == "" || descriptor.OwnerGroupID != group {
-		t.Fatal("Dataset was not activated", string(create), err)
-	}
+	command("tenant", "create", "--request-id", "data-test-create", "demo")
 	// A engine implementation calls the same in-process data entry; the
 	// platform routes it and verifies the exact reference published by its
 	// opaque mutation. Both handlers share this Owner Group and Node Pack pool.
@@ -427,19 +445,19 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		space rootstate.Keyspace
 		body  []byte
 	}{
-		{space: rootstate.Keyspace{TenantID: "demo", EngineID: "data-alpha", DatasetID: "shared"}, body: []byte("alpha-immutable-body")},
-		{space: rootstate.Keyspace{TenantID: "demo", EngineID: "data-beta", DatasetID: "shared"}, body: []byte("beta-immutable-body")},
+		{space: rootstate.Keyspace{TenantID: "demo", EngineID: "data-alpha", ModuleID: "shared"}, body: []byte("alpha-immutable-body")},
+		{space: rootstate.Keyspace{TenantID: "demo", EngineID: "data-beta", ModuleID: "shared"}, body: []byte("beta-immutable-body")},
 	}
 	for _, tc := range engineCases {
-		dataset := rootstate.Dataset{TenantID: tc.space.TenantID, EngineID: tc.space.EngineID,
-			DatasetID: tc.space.DatasetID, RangeID: "range-" + tc.space.EngineID, OwnerGroupID: group}
+		seed := rootstate.RangeSeed{TenantID: tc.space.TenantID, EngineID: tc.space.EngineID,
+			ModuleID: tc.space.ModuleID, RangeID: "range-" + tc.space.EngineID, OwnerGroupID: group}
 		rootCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
-			RequestID: "create-" + tc.space.EngineID, Type: rootstate.CreateDataset, Dataset: &dataset})
+			RequestID: "create-" + tc.space.EngineID, Type: rootstate.PrepareRange, InitialRange: &seed})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := first.Runtime.Host.Submit(raft.RootGroupID, rootCommand); err != nil {
-			t.Fatal("submit engine Dataset", err)
+			t.Fatal("submit engine Module", err)
 		}
 		for {
 			if _, err := first.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
@@ -451,13 +469,13 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 			}
 			if found {
 				if result.Error != "" {
-					t.Fatal("engine Dataset rejected", result.Error)
+					t.Fatal("engine Module rejected", result.Error)
 				}
 				break
 			}
 			select {
 			case <-ctx.Done():
-				t.Fatal("engine Dataset registration did not commit", ctx.Err())
+				t.Fatal("engine Module registration did not commit", ctx.Err())
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
@@ -473,8 +491,8 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := bootstrap.Reconcile(ctx, dataset.RangeID); err != nil {
-			t.Fatal("activate engine Dataset", err)
+		if err := bootstrap.Reconcile(ctx, seed.RangeID); err != nil {
+			t.Fatal("activate engine Module", err)
 		}
 		write := enginedata.WriteRequest{
 			RequestID: "write-" + tc.space.EngineID, Keyspace: tc.space,
@@ -634,11 +652,11 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	if _, hosted := recoveredThird.Runtime.Engines.Resolve(group); !hosted {
 		t.Fatal("restarted Node advertised readiness without reopening its Owner Group")
 	}
-	command("record", "put", "--request-id", "data-test-put", "demo", "items", "greeting", "hello")
+	command("record", "put", "--request-id", "data-test-put", "demo", "greeting", "hello")
 	read := func(i int) {
 		t.Helper()
 		encoded := command("record", "get", "--store", nodes[i].store, "--server", nodes[i].address,
-			"demo", "items", "greeting")
+			"demo", "greeting")
 		var got struct {
 			Found bool   `json:"found"`
 			Value []byte `json:"value"`
@@ -669,13 +687,13 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	}
 	read(0)
 	command("record", "put", "--store", nodes[0].store, "--server", nodes[0].address,
-		"--request-id", "data-test-two-online", "demo", "items", "failover", "two-online")
+		"--request-id", "data-test-two-online", "demo", "failover", "two-online")
 	var whileOneDown struct {
 		Found bool   `json:"found"`
 		Value []byte `json:"value"`
 	}
 	if encoded := command("record", "get", "--store", nodes[2].store, "--server", nodes[2].address,
-		"demo", "items", "failover"); json.Unmarshal(encoded, &whileOneDown) != nil || !whileOneDown.Found || string(whileOneDown.Value) != "two-online" {
+		"demo", "failover"); json.Unmarshal(encoded, &whileOneDown) != nil || !whileOneDown.Found || string(whileOneDown.Value) != "two-online" {
 		t.Fatal("two live data voters did not accept and serve a new write", string(encoded))
 	}
 	restarted, err := openServerWithMux([]string{"--store", nodes[1].store, "--listen", nodes[1].address}, io.Discard, mux)
@@ -689,7 +707,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		attempt, stop := context.WithTimeout(ctx, time.Second)
 		var out, diagnostics bytes.Buffer
 		code := Run(attempt, []string{"record", "get", "--store", nodes[1].store, "--server", nodes[1].address,
-			"demo", "items", "greeting"}, &out, &diagnostics)
+			"demo", "greeting"}, &out, &diagnostics)
 		stop()
 		if code == 0 {
 			break
@@ -712,20 +730,20 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 		Value []byte `json:"value"`
 	}{}
 	if encoded := command("record", "get", "--store", nodes[1].store, "--server", nodes[1].address,
-		"demo", "items", "failover"); json.Unmarshal(encoded, &whileOneDown) != nil || !whileOneDown.Found || string(whileOneDown.Value) != "two-online" {
+		"demo", "failover"); json.Unmarshal(encoded, &whileOneDown) != nil || !whileOneDown.Found || string(whileOneDown.Value) != "two-online" {
 		t.Fatal("restarted voter did not catch up the two-live-node write", string(encoded))
 	}
 	// A changed payload may not reuse the previously confirmed RequestID.
 	var out, diagnostics bytes.Buffer
 	if code := Run(ctx, []string{"record", "put", "--store", nodes[0].store, "--server", nodes[0].address,
-		"--request-id", "data-test-put", "demo", "items", "greeting", "changed"}, &out, &diagnostics); code == 0 {
+		"--request-id", "data-test-put", "demo", "greeting", "changed"}, &out, &diagnostics); code == 0 {
 		t.Fatal("RequestID reuse changed a committed Record")
 	}
 	read(2)
 	if _, found, err := first.Runtime.Root.Tenant("demo"); err != nil || !found {
 		t.Fatal("Tenant missing", err)
 	}
-	if _, found, err := first.Runtime.Root.RouteKeyspace(rootstate.Keyspace{TenantID: "demo", EngineID: "record", DatasetID: "items"}, []byte("greeting")); err != nil || !found {
+	if _, found, err := first.Runtime.Root.RouteKeyspace(rootstate.Keyspace{TenantID: "demo", EngineID: "record", ModuleID: record.ModuleID}, []byte("greeting")); err != nil || !found {
 		t.Fatal("Range missing", err)
 	}
 	if _, err := first.Runtime.Host.ReadIndex(ctx, raft.RootGroupID); err != nil {
@@ -734,7 +752,7 @@ func TestManagedRecordRoundTripAndRegionalReferenceFill(t *testing.T) {
 	// Each old Node initially owns a different physical record, including an
 	// empty one. The logical references are replicated through the data Group,
 	// so n4 must try multiple old sources while filling the sealed cut.
-	space := rootstate.Keyspace{TenantID: "demo", EngineID: record.EngineID, DatasetID: "items"}
+	space := rootstate.Keyspace{TenantID: "demo", EngineID: record.EngineID, ModuleID: record.ModuleID}
 	type immutableRef struct {
 		key, body  []byte
 		source     int
@@ -1389,12 +1407,80 @@ func TestSingleRegionThreeNodeMajorityWriteRemainsLocalReady(t *testing.T) {
 		}
 		return out.Bytes()
 	}
-	command("dataset", "create", "--request-id", "single-region-create", "single-region", "items")
+	command("tenant", "create", "--request-id", "single-region-create", "single-region")
 	var result struct {
 		State string `json:"state"`
 	}
-	encoded := command("record", "put", "--request-id", "single-region-write", "single-region", "items", "key", "value")
+	encoded := command("record", "put", "--request-id", "single-region-write", "single-region", "key", "value")
 	if err := json.Unmarshal(encoded, &result); err != nil || result.State != string(enginedata.WriteLocalReady) {
 		t.Fatal("single-Region majority did not preserve LocalReady", string(encoded), err)
+	}
+	// Runtime binds different Modules to the same Engine without sharing data.
+	missingBinding, _ := first.EngineData.Bind("config", record.EngineID)
+	missingTenant, _ := missingBinding.ForTenant("other")
+	if _, err := missingTenant.Write(ctx, enginedata.BoundWrite{RequestID: "same-request-across-scopes", Key: []byte("key"), Body: []byte("other-value"), Publish: record.ReferencePutPayload}); err == nil || !strings.Contains(err.Error(), "Tenant is not registered") {
+		t.Fatal("missing Tenant was not rejected before initialization", err)
+	}
+	command("tenant", "create", "--request-id", "other-tenant", "other")
+	for _, scope := range []struct{ tenant, module, value string }{
+		{"single-region", "config", "config-value"},
+		{"single-region", "session", "session-value"},
+		{"other", "config", "other-value"},
+	} {
+		binding, err := first.EngineData.Bind(scope.module, record.EngineID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := binding.ForTenant(scope.tenant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		space := rootstate.Keyspace{TenantID: scope.tenant, ModuleID: scope.module, EngineID: record.EngineID}
+		if _, found, err := first.Runtime.Root.InitialRange(space); err != nil || found {
+			t.Fatal("binding allocated Range", found, err)
+		}
+		if _, err = bound.Read(ctx, []byte("key")); !errors.Is(err, router.ErrNoRoute) {
+			t.Fatal("missing read", err)
+		}
+		if _, found, err := first.Runtime.Root.InitialRange(space); err != nil || found {
+			t.Fatal("read allocated Range", found, err)
+		}
+		result, err := bound.Write(ctx, enginedata.BoundWrite{RequestID: "same-request-across-scopes", Key: []byte("key"), Body: []byte(scope.value), Publish: record.ReferencePutPayload})
+		if err != nil || result.State != enginedata.WriteLocalReady {
+			t.Fatal("automatic initial Range write", scope, err)
+		}
+	}
+	for _, scope := range []struct{ tenant, module, value string }{
+		{"single-region", "config", "config-value"},
+		{"single-region", "session", "session-value"},
+		{"other", "config", "other-value"},
+	} {
+		binding, _ := first.EngineData.Bind(scope.module, record.EngineID)
+		bound, _ := binding.ForTenant(scope.tenant)
+		read, err := bound.Read(ctx, []byte("key"))
+		if err != nil || string(read.Body) != scope.value {
+			t.Fatal("Module/Tenant isolation lost", scope, string(read.Body), err)
+		}
+	}
+	// Two first writers for one new Module must converge to one durable Range.
+	binding, _ := first.EngineData.Bind("concurrent", record.EngineID)
+	bound, _ := binding.ForTenant("single-region")
+	done := make(chan error, 2)
+	for _, key := range []string{"one", "two"} {
+		go func(key string) {
+			_, err := bound.Write(ctx, enginedata.BoundWrite{RequestID: "first-" + key, Key: []byte(key), Body: []byte(key), Publish: record.ReferencePutPayload})
+			done <- err
+		}(key)
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-done; err != nil {
+			t.Fatal("concurrent initialization", err)
+		}
+	}
+	for _, key := range []string{"one", "two"} {
+		read, err := bound.Read(ctx, []byte(key))
+		if err != nil || string(read.Body) != key {
+			t.Fatal("concurrent write lost", key, err)
+		}
 	}
 }

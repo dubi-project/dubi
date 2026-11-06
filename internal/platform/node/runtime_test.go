@@ -61,9 +61,9 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err := runtime.Host.Campaign(raft.RootGroupID); err != nil {
 		t.Fatal(err)
 	}
-	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "node", Type: rootstate.RegisterNode,
+	applyRoot(t, runtime, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "node", Type: rootstate.RegisterNode,
 		Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "region-a", Address: "node-a:7443"}})
-	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup,
+	applyRoot(t, runtime, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group", Type: rootstate.RegisterGroup,
 		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	state, err := runtime.Groups.NewState(context.Background(), "data-1")
 	if err != nil {
@@ -72,13 +72,13 @@ func TestRuntimeRaftApplyUsesPacksAndRecoversAfterSnapshot(t *testing.T) {
 	if err := runtime.Host.AddGroup("data-1", []uint64{id.RaftID}, false, state); err != nil {
 		t.Fatal(err)
 	}
-	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "members", Type: rootstate.PublishGroupMembers,
+	applyRoot(t, runtime, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "members", Type: rootstate.PublishGroupMembers,
 		Membership: &rootstate.GroupMembership{GroupID: "data-1", ExpectedEpoch: 1,
 			Members: []rootstate.GroupMember{{RaftID: id.RaftID, Role: rootstate.GroupMemberVoter}}}})
 	if err := runtime.Host.Campaign("data-1"); err != nil {
 		t.Fatal(err)
 	}
-	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 		OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	activation, err := routedstate.EncodeActivateRange("activate", descriptor)
 	if err != nil {
@@ -208,9 +208,9 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	if err := runtime.Host.Campaign(raft.RootGroupID); err != nil {
 		t.Fatal(err)
 	}
-	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "register-node", Type: rootstate.RegisterNode,
+	applyRoot(t, runtime, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "register-node", Type: rootstate.RegisterNode,
 		Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "region-a", Address: "node-a:7443"}})
-	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "register-data", Type: rootstate.RegisterGroup,
+	applyRoot(t, runtime, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "register-data", Type: rootstate.RegisterGroup,
 		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	state, err := runtime.Groups.NewState(context.Background(), "data-1")
 	if err != nil {
@@ -219,7 +219,7 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 	if err := runtime.Host.AddGroup("data-1", []uint64{id.RaftID}, false, state); err != nil {
 		t.Fatal(err)
 	}
-	applyRoot(t, runtime, rootstate.Command{Version: 1, RequestID: "publish-data", Type: rootstate.PublishGroupMembers,
+	applyRoot(t, runtime, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "publish-data", Type: rootstate.PublishGroupMembers,
 		Membership: &rootstate.GroupMembership{GroupID: "data-1", ExpectedEpoch: 1,
 			Members: []rootstate.GroupMember{{RaftID: id.RaftID, Role: rootstate.GroupMemberVoter}}}})
 	if _, found := runtime.Engines.Resolve("data-1"); !found {
@@ -230,7 +230,7 @@ func TestRuntimeAssemblesRPCAndRecoversPublishedGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	services := grpcServer.GetServiceInfo()
-	if len(services) != 9 || len(services["dubi.internal.raft.v1.RecordHoldingService"].Methods) != 1 || len(services["dubi.internal.raft.v1.RecordTransferService"].Methods) != 3 || len(services["dubi.internal.raft.v1.RecordCutService"].Methods) != 1 {
+	if len(services) != 9 || len(services["dubi.internal.raft.v1.RecordHoldingService"].Methods) != 2 || len(services["dubi.internal.raft.v1.RecordTransferService"].Methods) != 3 || len(services["dubi.internal.raft.v1.RecordCutService"].Methods) != 1 {
 		t.Fatalf("registered internal RPC services = %v", services)
 	}
 	transfers := map[string]grpc.MethodInfo{

@@ -2,37 +2,39 @@
 
 本文定义 DUBI 自己的集群与存储底座。它约束后续模块的命名和职责；公开 API、磁盘编码等实现参数另行版本化。DUBI 的底座负责身份、路由、放置、均衡、资源与故障恢复，各模块负责自己的数据语义和格式。持久数据按节点与 Region 的多数派自动放置，不向用户提供副本数或最小确认数配置。所有运维入口采用可安全推导的最少参数。ClusterID、NodeID、RaftID、GroupID、内部证书名、证书路径和成员列表由系统生成、持久化和维护，不提供用户覆盖或专家模式。用户仅表达数据目录、加入凭据、网络地址、Region 等实际部署意图；新增节点不能增加手工编排内部身份的工作。启动不需要 YAML。
 
+当前寻址目标以 [数据寻址与隔离](docs/architecture/data-addressing.md) 为准：取消独立 Dataset，按 Tenant + Module 隔离数据，Runtime 自动绑定 Engine 并编码完整键。代码和内部 RPC 已切换到新版地址；开发格式不兼容旧 Dataset 数据，不能原地滚动升级。
+
 ## 1. 总体关系
 
 ```text
 Cluster
-├── Region → Node → Store → Volume            物理拓扑与资源
-├── Tenant → Dataset → Keyspace（内部）→ Range → Owner Group
+├── Region → Node → 多个 Volume               物理拓扑与资源
+├── Tenant + Module + Engine + Key → 内部键空间 → Range → Owner Group
 ├── Placement → Group 成员 / 数据存放位置       放置与均衡
 └── Engine → 自己的数据格式                 业务语义
 
 Volume → Pack（节点底座提供）→ 多条本地记录
 ```
 
-`Range` 是 DUBI 底座的统一路由与所有权单位。`Pack` 是本地物理容器，可放多条来自不同 Range 的记录。Range 不装在 Pack 里；Pack 也不参与集群路由。底座不使用 `Partition` 作为 Range 的同义名称。某个模块可在自己的公开 API 中使用符合其领域的词，例如消息的 Topic 分区，但内部路由仍落到 Range。
+`Range` 是 DUBI 底座的统一路由与所有权单位。`Pack` 是本地物理容器，可放多条来自不同 Range 的记录。一个 Range 的记录也可跨多个 Pack/Volume；不同节点的 Pack 布局可以不同。Pack 不参与集群路由，位置重写不改变逻辑归属；Range 迁移按记录复制并经 Fence 切换，不要求整 Pack 搬运。底座不使用 `Partition` 作为 Range 的同义名称。某个模块可在自己的公开 API 中使用符合其领域的词，例如消息的 Topic 分区，但内部路由仍落到 Range。
 
 ## 2. 基础术语
 
 | 概念 | DUBI 定义 | 标识及边界 |
 | --- | --- | --- |
 | Cluster | 独立的部署、信任和版本管理边界。 | `ClusterID` 持久不变；成员、根证书、路由目录和集群协议属于它。 |
-| Tenant | 集群内的数据归属、授权与资源计量边界；一个 Cluster 可服务多个 Tenant。 | `TenantID` 持久标识租户；其 Dataset 和数据不能被其他 Tenant 默认访问。 |
+| Tenant | 集群内的数据归属、授权与资源计量边界；一个 Cluster 可服务多个 Tenant。 | `TenantID` 持久标识租户；其数据不能被其他 Tenant 默认访问；Tenant 内不同 Module 的数据也相互隔离。 |
 | Region | 节点所在的单层地理故障域。 | 一个 Node 归属一个 Region；Region 本身不保存数据，也不是共识组。 |
 | Node | 运行同一 `dubi server` 程序的成员，可接入请求、承载共识组和保存数据。 | `NodeID` 持久不变；重启不生成新身份。可选 `Name` 是集群内唯一的管理员显示标签，可为空、可修改，不参与身份、路由或授权；正式移除的旧节点名称可由新节点复用。节点不是“专用元数据机”或“专用数据机”。 |
-| Store | Node 对集群暴露的可放置存储资源。 | `StoreID` 归属 `NodeID`；报告容量、预留、健康和负载。一个 Node 可管理多个 Store。 |
-| Volume | Store 管理的本地磁盘或持久目录。 | `VolumeID` 只标识本地介质；多 Volume 不等于跨 Node 副本。 |
-| Engine | Record、Cache、Message、Search、File、Log、Metric、Trace 等数据能力。 | 能力注册路由键、权威/可重建/易失类型、资源指标和本地存储适配；其数据格式由能力拥有，不自定义副本数。 |
-| Dataset | 某 Tenant 下由某能力管理的一组逻辑数据，如 Record 集合、Message Topic 或 Search Index。 | `DatasetID` 归属 Tenant 和 Engine；一个能力可拥有多个 Dataset，各自声明路由方式。它不是物理文件、Store 或共识组。 |
-| Keyspace（内部） | 某 Tenant 的某能力 Dataset 的有序路由键域，由 `(TenantID, EngineID, DatasetID)` 确定；一个 Tenant 可有多个 Keyspace。 | 只用于底座目录与路由实现，不是用户可创建或授权的独立资源；能力定义稳定的 `RoutingKey` 编码。当前每个 Dataset 对应一个 Keyspace。 |
-| Range | 一个 Keyspace 内，按该能力定义的 `RoutingKey` 切分出的不重叠半开区间 `[start, end)`；负责路由、所有权和计量。 | `RangeID` 标识逻辑范围，`RangeEpoch` 标识当前路由代际；Range 可以拆分、迁移，支持时也可合并。 |
+| 节点元数据目录（`--store`） | 一个 Node 保存身份、证书、共识状态、索引和卷登记的本地根目录，默认 `/var/lib/dubi`。 | 不是独立的集群放置资源，不提供多 Store 或 Store 生命周期管理。内部 `StoreID` 绑定这一套节点存储实例，用于校验和恢复。 |
+| Volume | Node 管理的本地数据卷，可以有多个。 | `VolumeID` 标识本地介质；未指定卷时使用 `<store>/volume`。多 Volume 不等于跨 Node 冗余。 |
+| Engine | State、Object、Log、Index 等可复用存储机制及数据语义。 | Engine 身份由服务端装配绑定；多个 Module 复用实现，但不共用业务数据。不自定义分布与副本数。 |
+| Module | 面向业务的功能层，也是 Tenant 内的数据隔离边界。 | Module 身份由 API 路由及服务端装配固定；同 Tenant 不同 Module 使用同一 Engine、同一 Key 也互不覆盖。 |
+| Keyspace（内部） | 完整内部键构成的逻辑地址空间；Runtime 编码 Tenant + Module + Engine + Key。 | 只是地址概念，不是独立资源，无创建命令或独立 ID。Module 不手工拼装它。 |
+| Range | 内部键空间中不重叠的半开区间 `[start,end)` 及其数据；负责路由、所有权与分布。 | Runtime 自动管理 RangeID、边界和代际。拆分/迁移/合并需受控协议，不与 Pack、Volume 或 Module 一一对应。 |
 | Raft Group | 独立的共识日志、成员配置、状态机和 Snapshot。 | `GroupID` 标识共识组；持久 `StateKind` 决定节点运行时使用哪个已注册状态机工厂。一个 Group 可承载一个或多个 Range，也可同时承载不同 Engine 的 Range；Range 与 Group 不强制一一对应。 |
 | Root Group | 保存集群成员、Group 描述符和 Range 路由目录的权威控制面 Group。 | 不保存大量逐条业务记录、文件内容或索引数据；目录自身需要容量与扩展边界。 |
-| Placement | 根据 Active Node/Store 与 Region 拓扑自动确定本地和跨 Region 多数派目标，并负责补齐、迁移和均衡。 | 不接受手工副本数或逐节点拼放置策略；能力负责数据复制、校验和确认。 |
+| Placement | 根据 Node 与 Region 拓扑自动确定本地和跨 Region 多数派目标，节点内由 Runtime 选择健康 Volume。 | 不接受手工副本数或逐节点拼放置策略；物理复制、校验、确认、Repair 与 Rebalance 均由 Runtime 负责。 |
 | PlacementPlan | Placement 针对当前拓扑产生的目标位置与执行步骤。 | 描述期望状态；成功写入并确认后才更新实际存放状态，拓扑变化时重新计算。 |
 | Epoch / Fence | 所有权代际与拒绝旧写入的栅栏。 | Range 切流后，旧 Epoch 的持有者不得继续确认写入。 |
 | Pack | DUBI 节点底座提供的物理记录容器，把大量小型或不可变条目聚合到少量本地文件。 | `PackID` 是本地物理标识；Pack 不对应 Range、Group 或跨节点副本。File 的 Block 默认使用 Pack；其他能力按格式需要选用。 |
@@ -41,11 +43,13 @@ Volume → Pack（节点底座提供）→ 多条本地记录
 
 DUBI 不把 `Replica` / `ReplicaSet` 作为底座概念，也不提供副本数配置。实现仍须分别记录 Group 成员和数据的实际存放位置、确认状态与代际；它们是运行事实，不是用户选择的放置策略。Group 描述符中的 `Voter` / `Learner` 是 Raft 成员角色，不是副本策略；`GroupEpoch` 是成员描述符的 CAS 代际，也不能替代 `RangeEpoch`。
 
-Tenant 是底座必须识别的逻辑边界，不等于独占 Node、Store 或 Volume；集群可共享物理资源，但鉴权、数据可见性、用量、配额和后台任务必须按 Tenant 归属。DUBI 不建立项目层级。一个 Tenant 内的多个业务应用可在授权范围内共享同一 File 内容、Record Dataset 或其他数据；业务方如需区分用途，可自行使用键、路径或名称前缀，这些前缀不是底座的隔离单位。需要独立的数据、权限和配额边界时，使用不同 Tenant。跨 Tenant 共享数据需要单独设计显式授权机制，默认不允许。
+Tenant 是底座必须识别的逻辑边界，不等于独占 Node 或 Volume；集群可共享物理资源，但鉴权、数据可见性、用量、配额和后台任务必须按 Tenant 归属。DUBI 不建立项目层级。一个 Tenant 内的多个业务应用可在授权范围内访问同一 Module 的同一份业务数据；不同 Module 即使复用同一个 Engine 也不共享存储范围；业务方如需区分用途，可自行使用键、路径或名称前缀，这些前缀不是底座的隔离单位。需要独立的数据、权限和配额边界时，使用不同 Tenant。跨 Tenant 共享数据需要单独设计显式授权机制，默认不允许。
 
 ## 3. Range 是集群的逻辑单位
 
-请求先确定 Tenant 身份并完成授权。需要集群所有权路由的请求，由能力转换为所属 Dataset 的 RoutingKey。底座将 `(TenantID, EngineID, DatasetID)` 视作内部 Keyspace，再按 `[start,end)` 定位 Range、Owner Group 与 RangeEpoch。同一 Keyspace 的活动 Range 必须无重叠、无空洞。Tenant 是用户可见的归属、授权与计量边界；Keyspace 不单独授予权限，也不对用户提供创建/删除入口。入口 Node 可接收请求，但要按目录将其送往当前拥有者。一个能力可用不同 Dataset 表达不同路由对象；文件元数据、内容放置记录、索引任务不必共享一个 Range 切分。
+当前实现自动管理每个 Tenant/Module/Engine 绑定范围的初始完整 Range；尚未实现通用多区间路由、自动拆分和合并。以下涉及拆分/迁移/合并的条款是实现约束，不是完成声明。后续扩展仍由 Runtime 自动执行，不增加用户创建的容器；详见[数据寻址与实现边界](docs/architecture/data-addressing.md)。
+
+请求先确定可信 Tenant 并完成授权。API 路由固定 Module，Module 的服务端依赖固定 Engine；客户端不能覆盖这两种身份。Runtime 将已绑定的 Tenant、Module、Engine 与 Engine 提供的稳定编码键组合为完整内部键，再定位 Range、Owner Group 与 RangeEpoch。Module 只调用 Engine API，不创建 Dataset、不拼 Keyspace、不选择 Range。所需路由由 Runtime 自动、幂等地建立与维护；普通读取不得隐式创建资源。同一逻辑路由域的活动 Range 必须无重叠、无空洞；完整地址和 Fence 在 Owner 执行时仍须验证，隔离不能只依赖入口一次检查。
 
 Range 只表示**哪一段可路由状态由谁负责**。它不要求每份物理数据都在 Range 中，也不规定持久格式、缓存规则或读写一致性。例如：
 
@@ -64,7 +68,7 @@ Range 只表示**哪一段可路由状态由谁负责**。它不要求每份物�
 
 所有写命令必须携带稳定 RequestID。Owner Group 将命令内容摘要、结果和 AppliedIndex 与业务变更同批同步落盘；相同 RequestID 与相同命令的重试返回首次结果且不重复执行，不同命令复用 RequestID 必须报告冲突。Fence 失败、配额拒绝等业务结果也要持久化，不能让响应丢失后的重试绕过原判定。初始 Range Fence 由独立的 Raft 控制命令安装；在 Split、迁移和受控切流协议完成前，只允许 Epoch 1 的完整 Keyspace Range 激活，不能通过普通数据命令改写 Fence。
 
-Dataset 创建采用两阶段可恢复流程：Root 先持久化 `Pending` Range，此时 Router 不得返回它；协调器以确定性 RequestID 在目标 Owner Group 安装 `Active` Fence，并线性一致确认其结果；最后向 Root 提交带 Owner Fence RequestID 和实际 AppliedIndex 的激活记录，Root 才将 Range 置为 `Active` 并开放路由。Root 的 Pending 描述符就是持久任务事实，协调器不依赖内存进度；在 Owner 提交后或 Root 发布后中断，都可通过两边的请求结果安全重试。若 Owner 上已有不匹配的 RangeID、Keyspace、Epoch、边界或 Owner Fence，流程必须停止，不得覆盖。
+Runtime 自动准备初始 Range 应复用两阶段可恢复流程（已由绑定入口的首次写入触发）：Root 先持久化 `Pending` Range，此时 Router 不得返回它；协调器以确定性 RequestID 在目标 Owner Group 安装 `Active` Fence，并线性一致确认其结果；最后向 Root 提交带 Owner Fence RequestID 和实际 AppliedIndex 的激活记录，Root 才将 Range 置为 `Active` 并开放路由。Root 的 Pending 描述符就是持久任务事实，协调器不依赖内存进度；在 Owner 提交后或 Root 发布后中断，都可通过两边的请求结果安全重试。若 Owner 上已有不匹配的 RangeID、Keyspace、Epoch、边界或 Owner Fence，流程必须停止，不得覆盖。
 
 跨节点控制命令通过内部 Group RPC 发送，必须携带 ClusterID、来源/目标 RaftID 和 GroupID，并使用双向 TLS 将来源声明绑定到节点证书。远端 `Submit` 只有在目标节点完成该 Group 的 ReadIndex、确认命令已进入已应用状态后才能返回 confirmed index；这只证明日志应用进度，不等于业务结果成功。协调器仍须按 RequestID 查询并核对状态机的持久 Result，再推进下一阶段。命令大小、deadline、目标 Group 和目标节点都必须有界且显式，不能将 Raft peer 消息 RPC 直接当作业务控制 API。
 
@@ -74,7 +78,7 @@ Dataset 创建采用两阶段可恢复流程：Root 先持久化 `Pending` Range
 
 不可变数据的进程内能力入口遵守同一个“任意 Node 接入、当前 Owner 执行”边界：入口从 Root 解析 Owner，本机不托管时通过节点认证的独立流式 RPC 向 Owner 成员转送逻辑请求和分帧 Body。Owner 先确认本地严格多数的真实物理持有，再提交权威引用与区域 fence 绑定的确认；本地至少 3 个 Node 时，该区域确认提交即可返回 `LocalReady`，无需等待跨区域数据多数或确认跨区数据覆盖，跨区覆盖由后台补齐。但当集群存在多个已确认 Region 时，Owner 在本地写入前还必须确认至少一个其它 Region 当前能建立自己的 Raft 多数；即使某个 Range 的固定 placement 仍只含本地区域，也不能把集群临时退化成单一区域当作正常可写。该可达性门禁不等于远端数据已复制，也无法消除探测之后远端立即故障的竞态；只有满足跨区域数据确认的 `GeoReady` 才代表数据已覆盖区域多数。集群持久拓扑本来只有一个已确认 Region 时，本地多数仍可返回 `LocalReady`。Root ReadIndex 用于入口成员/路由准入；入口已确认的 Root cut 随 Owner EngineData 转发及持有数据的内部传输携带，接收节点在本地应用到该 cut 后校验当前已应用成员和 TLS 身份，避免每段内部 RPC 再等待一次跨区域 Root ReadIndex。若目标尚未应用该 cut，则退回完整 Root ReadIndex。物理 staging 完成后不再等待全局 Root 屏障，Owner Group 的本地 Raft `LocalConfirmation` 以当前 Range/Region fence、成员集合和固定多数作最终提交门禁。小 Region 仍须同步满足跨区域多数。流式传输成功本身不构成数据多数或写入成功。路由代际变化或结果不确定时调用方使用同一 RequestID 重新解析和重试；此内部入口并非已授权的 Tenant 公共 API。实现边界见[能力数据入口](docs/architecture/engine-data-entry.md)。
 
-`StateKind=engine` 使用通用 Mux 按 Route Target 中已验证的 `EngineID` 分派 Handler；Mux 的注册集合必须在节点启动装配期封存，运行中不能增删，避免同一节点上先后打开的 Group 得到不同实现集合。未注册 Engine、或对未实现只读接口的 Engine 发起 Read，返回可持久/可重试的稳定拒绝，不得使已提交日志毒化状态机。Handler 看到的是 Keyspace 本地逻辑键；底座将 Transaction/ReadView 绑定到 `(TenantID, EngineID, DatasetID)`，自动加入完整命名空间。同一 Group 中不同 Tenant、Engine 或 Dataset 使用同名逻辑键都不会碰撞，不由业务方补写隔离前缀。业务项目可在同一 Tenant/Dataset 的键内自用前缀，共享内容也不需要 Project 资源。存储隔离不替代入口授权和 Range Fence：每次读写仍须通过完整 Route Target 校验。当前 engine 状态/快照为 v7，保持完整 Keyspace 归属，包含[区域代际/成员位置栅栏](docs/architecture/region-fences.md)、持久交接门禁、[不可变记录权威引用和本地多数确认记录](docs/architecture/immutable-records.md)；旧 v6 及更早开发格式明确拒绝自动迁移，滚动协商和迁移工具未完成。
+`StateKind=engine` 使用通用 Mux 按 Route Target 中已验证的 `EngineID` 分派 Handler；Mux 的注册集合必须在节点启动装配期封存，运行中不能增删，避免同一节点上先后打开的 Group 得到不同实现集合。未注册 Engine、或对未实现只读接口的 Engine 发起 Read，返回可持久/可重试的稳定拒绝，不得使已提交日志毒化状态机。目标接口中 Handler 使用绑定范围内的逻辑键，底座自动加入 Tenant/Module/Engine 完整归属；不同 Tenant、Module 或 Engine 的同名键互不覆盖。同一 Tenant/Module 的应用可共享数据，不引入 Project。当前 Transaction/ReadView 按 `(TenantID, ModuleID, EngineID)` 绑定完整归属。存储隔离不替代入口授权和 Range Fence：每次读写仍须通过完整 Route Target 校验。当前 engine 状态/快照为 v8，保持完整 Keyspace 归属，包含[区域代际/成员位置栅栏](docs/architecture/region-fences.md)、持久交接门禁、[不可变记录权威引用和本地多数确认记录](docs/architecture/immutable-records.md)；旧 v7 及更早开发格式明确拒绝自动迁移，滚动协商和迁移工具未完成。
 
 不可变记录的逻辑权威和物理持有分开：事务可原子发布/覆盖/显式删除某 Keyspace/Key 对应的完整数据描述及发布位置，与 Result/applied 同步；普通 KV 删除不隐式删除该引用。引用禁止带本地物理位置，两种 Raft 快照只恢复引用元数据、不据此宣告数据已持有。来源 Group 不等于当前 Owner，历史成功 Result 不等于当前引用，当前引用也不等于 LocalReady/GeoReady；认证持有与稳定多数确认必须独立实现。此接口不强制上层模块改变载荷格式，不增加部署参数。
 
@@ -110,7 +114,7 @@ Group 路由目录直接投影 Root 的成员描述符和 Node 地址，并可�
 
 ## 4. 统一放置与均衡
 
-底座维护 Store/Volume 的容量、预留、IO、CPU、网络、热点、维修与故障状态，并将资源使用和任务归属计入 Tenant。Placement 根据持久拓扑成员、当前健康可用位置、容量和能力是否为权威持久数据自动推导目标；没有用户可设置的副本数、最小确认数、Home Region 或逐节点规则。参与集合及 Active Region 名单不得因心跳超时自动缩小多数门槛，只能经受控拓扑变更和代际切换调整。写入端 Region 用于定位本地放置，目标分为两个层次：
+底座维护 Node/Volume 的容量、预留、IO、CPU、网络、热点、维修与故障状态，并将资源使用和任务归属计入 Tenant。Placement 根据持久拓扑成员、当前健康可用位置、容量和能力是否为权威持久数据自动推导目标；没有用户可设置的副本数、最小确认数、Home Region 或逐节点规则。参与集合及 Active Region 名单不得因心跳超时自动缩小多数门槛，只能经受控拓扑变更和代际切换调整。写入端 Region 用于定位本地放置，目标分为两个层次：
 
 持久数据以空间换安全：优先满足真实故障域上的数据存放和修复余量，再优化存储利用率与均衡成本。容量成本不能成为把同一 Node 的多盘或同一 Region 的多个位置伪装成跨故障域多数的理由；纯易失或可重建数据按能力声明采用不同目标。
 
@@ -133,29 +137,29 @@ Placement 至少处理三种动作：
 
 Root Group 只保存目录与控制状态。逐项数据副本记录由相应能力拥有的 Range/Group 管理，不能随着数据量增加无限写入 Root。若目录规模超过单个 Root Group 的能力，目录本身需要分层或分片。
 
-## 5. Store、Volume 和 Pack
+## 5. 节点元数据目录、Volume 和 Pack
 
 Store/Volume 元数据当前为 v2，既有 Store 清单还必须登记不可变记录索引的稳定资源 ID 和创建/激活阶段。正式 Node 自动建立/恢复并拥有该索引；父级已激活后丢失子索引不能按新资源重建。v1 开发目录拒绝打开，不自动迁移。enginestate 权威引用和认证逐条传输已独立接通，但引用存在或跨节点传输成功不代表 LocalReady/GeoReady。详见[不可变数据记录](docs/architecture/immutable-records.md)。
 
-节点的 `--store` / `StoreRoot` 表示节点持久数据根目录，默认 `/var/lib/dubi`；它是本地路径，不等于集群放置资源的 `StoreID`。身份、PKI、Root/共识状态和卷登记由节点管理。首次初始化未指定数据卷时，只自动创建并登记一个默认 Volume，路径为 `<store>/volume`（默认 `/var/lib/dubi/volume`）；首次显式指定一个或多个外部卷时，仅登记指定卷，不创建、不启用 `<store>/volume`。VolumeID 始终由系统生成并持久保存，用户只提供路径。
+节点的 `--store` / `StoreRoot` 表示节点元数据根目录，默认 `/var/lib/dubi`，保存身份、PKI、Raft 日志、状态机数据、记录索引和卷登记；不是只有可以丢弃的配置文件。一个节点只有一套该目录及内部 StoreID，不再设计独立 Store 的增删、Drain 或放置策略。StoreID 用于绑定资源、拒绝错接目录和恢复时重映射，保留既有内部名称和持久格式。首次初始化未指定数据卷时，只自动创建并登记一个默认 Volume，路径为 `<store>/volume`（默认 `/var/lib/dubi/volume`）；首次显式指定一个或多个外部卷时，仅登记指定卷，不创建、不启用 `<store>/volume`。VolumeID 始终由系统生成并持久保存，用户只提供路径。
 
-当前已实现模块无关的 Volume 登记、状态查询和节点启动恢复，通用 Pack 的追加、读取/扫描、持久封存及崩溃恢复，以及按 Volume 统一、跨 Engine 混写的持久集合清单和自动滚动也已实现；Pack 的多卷选址和进程内字节预约已接入 Node Runtime；其它存储引擎的统一准入、节点内均衡与安全移除尚未实现。单盘部署不要求用户指定两个根目录；后续增加外部 Volume 是对持久卷集合的追加，已有 `<store>/volume` 保持 Active。后续数据层须让其与新增卷一起参与存储和节点内均衡，不能因为加盘而自动停用、替换或删除。节点身份始终保持在原 StoreRoot。
+当前 Volume 登记、状态查询、节点启动恢复，以及通用 Pack 的追加、校验、封存、崩溃恢复和多卷选址已接入 Node Runtime。节点内均衡、卷迁出和 Pack 回收的实现及验收边界见 [Volume 均衡](docs/architecture/volume-rebalance.md)和[生产验收记录](docs/production-readiness.md)。单盘部署不要求用户指定两个根目录；后续增加外部 Volume 是对持久卷集合的追加，已有 `<store>/volume` 保持 Active。其与新增卷一起参与存储和节点内均衡，不能因为加盘而自动停用、替换或删除。节点身份始终保持在原 StoreRoot。
 
 卷集合及默认卷是否已被移除由持久登记决定。只有首次未指定卷时才创建默认卷；重启未传卷路径、默认目录不存在、或曾显式移除默认卷，都不能触发重新创建。登记过的卷缺失或挂载失效时按故障处理，不能自动创建空卷或回退到节点所在盘继续写入。同一文件系统内的节点状态与 Volume 共用空间预留，不能将子目录重复计为独立磁盘容量或故障域。
 
-当前本地登记保存在 `<store>/DUBI_VOLUMES`，独立的 `DUBI_STORAGE_ID` 绑定自动生成的 StoreID、NodeID 和 RaftID；卷内 `DUBI_VOLUME` 标记再绑定 VolumeID。登记不绑定尚未取得的 ClusterID，因此可在 join prepare 时完成并在之后绑定集群时保留。注册先同步发布 Registered 意图，再排他发布并同步介质标记，最后同步发布 Active；重复初始化和重复加卷恢复同一意图及 ID。待激活卷额外记录目录的设备号/inode，防止中断后误认被替换的目录；完成激活后不依赖跨重启可能变化的设备号作为持久身份。活动卷缺失/损坏只改变健康观察，不重建目录、不篡改生命周期。节点可保持控制面启动以便观察故障；Pack 通过 Volume 访问门禁拒绝访问缺失/被替换的卷，不自动补建；尚无具体能力写入器，不能据此宣称损坏卷仍可承载数据。
+当前本地登记保存在 `<store>/DUBI_VOLUMES`，独立的 `DUBI_STORAGE_ID` 绑定自动生成的 StoreID、NodeID 和 RaftID；卷内 `DUBI_VOLUME` 标记再绑定 VolumeID。登记不绑定尚未取得的 ClusterID，因此可在 join prepare 时完成并在之后绑定集群时保留。注册先同步发布 Registered 意图，再排他发布并同步介质标记，最后同步发布 Active；重复初始化和重复加卷恢复同一意图及 ID。待激活卷额外记录目录的设备号/inode，防止中断后误认被替换的目录；完成激活后不依赖跨重启可能变化的设备号作为持久身份。活动卷缺失/损坏只改变健康观察，不重建目录、不篡改生命周期。节点可保持控制面启动以便观察故障；Pack 通过 Volume 访问门禁拒绝访问缺失/被替换的卷，不自动补建；损坏卷不能据此继续承载数据。
 
-Store 运行锁、卷登记锁及介质标记锁分别保护进程、登记变更和实际卷的排他占用。路径须存在且首次登记时为空，拒绝符号链接卷、重叠路径和侵入节点元数据目录。容量查询按文件系统设备去重；它仅为物理观测值，不包含进程内预约。新增 Registry.Reserve 和 Pack Pool 负责 Pack 写入的字节准入，但尚未统一接管其它存储引擎。CLI 已提供 `init/join prepare --volume`（可重复）、`volume list`、`volume add`、`volume drain` 和 `volume remove`；Drain/Remove 都是管理员显式操作，运行中的 Node 通过本地认证 RPC 执行。底层 Registry/Pack Pool 已提供可恢复的 `BeginDrain → RemoveDrained` 写入停止边界：Drain 保留读取并拒绝新 Pack 写入；路径仍在且有 Pack 时最终移除会拒绝，管理员明确确认永久丢盘后即使旧路径不可读也可以移除其元数据，不会删除可见数据或把新盘认成旧 Volume。
+Store 运行锁、卷登记锁及介质标记锁分别保护进程、登记变更和实际卷的排他占用。路径须存在且首次登记时为空，拒绝符号链接卷、重叠路径和侵入节点元数据目录。容量查询按文件系统设备去重；它仅为物理观测值，不包含进程内预约。Registry.Reserve 与 Pack Pool 参与按文件系统共享的空间预约，详见[资源界限](docs/operations/resource-limits.md)。CLI 已提供 `init/join prepare --volume`（可重复）、`volume list`、`volume add`、`volume drain` 和 `volume remove`；Drain/Remove 都是管理员显式操作，运行中的 Node 通过本地认证 RPC 执行。底层 Registry/Pack Pool 已提供可恢复的 `BeginDrain → RemoveDrained` 写入停止边界：Drain 保留读取并拒绝新 Pack 写入；路径仍在且有 Pack 时最终移除会拒绝，管理员明确确认永久丢盘后即使旧路径不可读也可以移除其元数据，不会删除可见数据或把新盘认成旧 Volume。
 
 默认卷和外部卷采用相同的安全移除流程：先预检本节点其他活动卷的可用容量与迁移预算，将目标卷置为 Draining 并停止向其分配新写入，再由当前节点将必需的活数据迁到本节点其他卷、同步并校验目标数据、原子更新本地位置索引。待在途写入及读取引用安全收敛，并满足快照/备份保护条件、确认源卷不再承载必需数据后，才持久标记 Removed 并注销卷。迁出任务须可中断续跑；容量不足或没有可用目标卷时不得丢弃数据或宣布移除完成。这个过程不改变 NodeID、RaftID、Group 成员或 Range 所有权，也不能因其他节点有数据拷贝而省略本节点内的迁移。
 
-Store 是集群可以选择的资源；Volume 是本地介质；Pack 是节点底座**必须提供**的聚合存储能力。平台统一提供空间预约、磁盘安全预留、健康上报、IO 配额、故障隔离及本地文件生命周期。File BlockStore 默认把 Block 写入 Pack，避免一块一个小文件。Record、Message、Search 等能力可按自身读写模式使用 Pack、Pebble/SST、顺序日志段或索引段；不强迫每种数据都进入 Pack。
+集群选择 Node 作为数据持有目标，节点内由 Runtime 管理 Volume 选址；StoreID 只校验目标节点存储实例，不增加一级放置资源。Pack 是节点底座**必须提供**的聚合存储能力。平台统一提供空间预约、磁盘安全预留、健康上报、IO 配额、故障隔离及本地文件生命周期。Engine 可按语义使用 Runtime 提供的记录、状态或后续受管资源接口，不自行打开 Pack、数据库或复制日志；不强迫所有持久文件都采用 Pack 格式。
 
-一个 Node 可以挂载多个 Volume，通过加盘在线扩容；新增 Volume 先登记介质身份、校验可用空间和健康，再加入 Store 的可放置容量，最后由限速均衡逐步利用。加盘提高该 Node 的容量和本地 IO 并行度，但不会增加独立 Node/Region 的故障容忍度，也不能替代缺失节点上的数据拷贝。均衡和修复须预留 Pack Compaction、快照及数据重建所需空间，不能把新增盘立即填满。
+一个 Node 可以挂载多个 Volume，通过加盘在线扩容；新增 Volume 先登记介质身份、校验可用空间和健康，再加入该 Node 的可用数据容量，最后由限速均衡逐步利用。加盘提高该 Node 的容量和本地 IO 并行度，但不会增加独立 Node/Region 的故障容忍度，也不能替代缺失节点上的数据拷贝。均衡和修复须预留 Pack Compaction、快照及数据重建所需空间，不能把新增盘立即填满。
 
 Pack 的初始目标大小定为 **512 MiB**，节点配置可调整；建议调节范围为 **256 MiB–1 GiB**。这些是目标值，写入完整记录时允许超过目标后封存。第一阶段内部 API 将目标硬上限设为 1 GiB，单条 Payload 上限 64 MiB、Key 上限 64 KiB、Tenant 标记上限 256 字节、Engine 标记上限 128 字节；Pack 数据文件上限为目标加一条最大编码记录，超大对象由能力切分。Pack 使用 `Active → Sealed → Compacting → Obsolete` 生命周期，并提供追加、校验、同步、封存、崩溃恢复和安全回收。
 
-每个 Pack 归属一个 Volume，不归属某个 Engine；可以混放不同能力、Tenant 和 Range 的记录。每个 Volume 统一使用一个 `packs/` 目录、一份集合清单和一个当前写入 Pack，不按能力划分目录或 Pack。Pack 的完整本地位置由 `StoreID / VolumeID / PackID` 确定。使用 Pack 的能力维护逻辑索引 `记录键 → VolumeID / PackID / Offset / Length / 校验信息`；每条记录必须显式保存 EngineID 和 TenantID 归属，并纳入记录完整性校验，以支持隔离、计量和安全回收。记录载荷、索引键、压缩、保留、过期和 GC 由能力定义。Range 搬迁按活记录复制和能力校验进行，不能仅复制整个 Pack；Pack Compaction 只更新本地索引，不改变集群 Range 路由。
+每个 Pack 归属一个 Volume，不归属某个 Engine；可以混放不同能力、Tenant 和 Range 的记录。每个 Volume 统一使用一个 `packs/` 目录、一份集合清单和一个当前写入 Pack，不按能力划分目录或 Pack。Pack 的完整本地位置由 `StoreID / VolumeID / PackID` 确定。Runtime 维护本地位置索引 `记录键 → VolumeID / PackID / Offset / Length / 校验信息`；记录描述必须保留 Tenant/Module/Engine 归属并纳入完整性校验。Engine 定义载荷编码、键和版本语义，Module 定义业务保留与过期规则；Runtime 根据权威引用和备份/快照保护执行物理回收。Range 搬迁由 Runtime 按活记录复制并校验，不能仅复制整个 Pack；Pack Compaction 只更新本地位置索引，不改变集群 Range 路由。
 
 Pack 是底座提供的容器机制，统一外层记录封装但不要求所有模块采用相同的载荷编码。能力只是记录归属，不是物理文件边界；不同能力按写入到达顺序追加到同一个当前 Pack。保留、过期和活数据判定按记录处理；未来 Compaction/GC 必须核对所有记录的引用及备份/快照保护，不能因为某一能力的数据过期就删除整个混合 Pack。授权仍由路由与能力层实施，物理 Location 不授予对其它能力或 Tenant 的读取权限。
 
@@ -169,16 +173,16 @@ Pack/Volume、记录索引准入、Raft/Pebble 文件写入和快照暂存按实
 
 ## 6. 快照、备份与恢复
 
-DUBI 底座只定义 Raft 快照和整集群备份/恢复两类恢复机制。Raft 快照用于 Group 日志压缩、状态机恢复和新节点追赶；Cluster Backup/Restore 面向整个集群的物理持久状态。两者边界不同，不能互相替代；备份不按 Tenant、Dataset 或能力筛选，底座只处理已注册存储资源的不透明字节与一致性切点，不解析各能力的记录格式。
+DUBI 底座只定义 Raft 快照和整集群备份/恢复两类恢复机制。Raft 快照用于 Group 日志压缩、状态机恢复和新节点追赶；Cluster Backup/Restore 面向整个集群的物理持久状态。两者边界不同，不能互相替代；备份不按 Tenant、Module 或 Engine 筛选，底座只处理已注册存储资源的不透明字节与一致性切点，不解析各能力的记录格式。
 
 | 机制 | 目的与边界 | 不承诺什么 |
 | --- | --- | --- |
 | Raft Group Snapshot | 截断/压缩共识日志，为同 Group 副本追平和恢复状态机服务；绑定 Group 成员与日志代际。 | 不是可移植备份，不能当作跨集群恢复点。 |
-| Cluster Backup/Restore | 协调所有权威 Group 和全部节点的持久存储资源，将可验证的物理 Checkpoint 归档到独立 Backup Repository，并从完整 Recovery Point 恢复整个集群。 | 不提供单 Tenant、单 Dataset 或单模块的数据导入/导出；不自动承诺任意拓扑或跨不兼容格式版本恢复。 |
+| Cluster Backup/Restore | 协调所有权威 Group 和全部节点的持久存储资源，将可验证的物理 Checkpoint 归档到独立 Backup Repository，并从完整 Recovery Point 恢复整个集群。 | 不提供单 Tenant 或单 Module 的业务数据导入/导出；不自动承诺任意拓扑或跨不兼容格式版本恢复。 |
 
-每种持久资源必须由 Store/Group 底座登记其所有者、文件范围、格式版本、Checkpoint/恢复操作和垃圾回收保护；能力若只使用底座支持的存储引擎，不需要实现单独的备份编码器。Pack、Pebble/SST、顺序日志段和索引段都可作为不透明物理资源截取。未登记的外部文件不能悄悄遗漏；系统必须拒绝将这样的任务标记为完整 Cluster Backup。内存 Cache 等明确可丢弃的状态可以排除，并在恢复后按其能力语义重建。
+每种持久资源必须由 Node/Group 底座登记其所有者、文件范围、格式版本、Checkpoint/恢复操作和垃圾回收保护；能力若只使用底座支持的存储引擎，不需要实现单独的备份编码器。Pack、Pebble/SST、顺序日志段和索引段都可作为不透明物理资源截取。未登记的外部文件不能悄悄遗漏；系统必须拒绝将这样的任务标记为完整 Cluster Backup。内存 Cache 等明确可丢弃的状态可以排除，并在恢复后按其能力语义重建。
 
-Backup Repository 是独立于源集群故障域的备份目标；Recovery Point 是已封存并完成完整性校验的不可变清单，而不是“某个任务显示上传完成”。清单记录源 Cluster、各 Group/Store 的切点、资源清单、格式版本、对象摘要和恢复所需的集群配置。底座统一提供任务持久化、Lease 接管、外部目标适配、流式传输、限速、容量预约、完整性校验、加密与密钥恢复边界、审计及状态查询。备份使用临时对象和最后发布的完成清单；未完成、校验失败或遭隔离的清单不得作为恢复点。Repository 的保留、校验、清理与修复必须有互斥门禁，不能与正在运行的备份或恢复交叉破坏对象。Repository 的结构化配置、file 节点本地布局、S3 参数和第一阶段代码边界见 [Backup / Restore Repository](docs/architecture/backup-repository.md)。
+Backup Repository 是独立于源集群故障域的备份目标；Recovery Point 是已封存并完成完整性校验的不可变清单，而不是“某个任务显示上传完成”。清单记录源 Cluster、各 Group/节点存储实例的切点、资源清单、格式版本、对象摘要和恢复所需的集群配置。底座统一提供任务持久化、Lease 接管、外部目标适配、流式传输、限速、容量预约、完整性校验、加密与密钥恢复边界、审计及状态查询。备份使用临时对象和最后发布的完成清单；未完成、校验失败或遭隔离的清单不得作为恢复点。Repository 的保留、校验、清理与修复必须有互斥门禁，不能与正在运行的备份或恢复交叉破坏对象。Repository 的结构化配置、file 节点本地布局、S3 参数和第一阶段代码边界见 [Backup / Restore Repository](docs/architecture/backup-repository.md)。
 
 “不解析数据格式”不等于可以随时复制文件。底座必须协调 Group 提交点、各存储引擎的 Checkpoint/WAL、Pack 封存和 GC/Compaction 保护，确保每个 Recovery Point 包含其切点引用的全部数据。若没有统一写入/提交屏障，多个资源的切点可能不同，清单必须准确记录并标注一致性级别，不能宣称全局原子恢复点。新能力若使用底座以外的存储路径，必须先接入通用资源登记与 Checkpoint 协议；不能因为底座不解析格式，就让部分持久数据遗漏于整集群备份。
 
@@ -188,7 +192,7 @@ Backup Repository 是独立于源集群故障域的备份目标；Recovery Point
 
 备份与普通 GC、Compaction、迁移、升级共享资源预算和维护门禁，避免长任务饿死前台流量或在保留保护解除前删除所需数据。生产验收必须定期从真实目标恢复到隔离环境，覆盖损坏对象、Leader/Worker 中断、容量不足、节点移除/重新加入与版本升级，并记录 RPO、RTO、恢复吞吐及各能力的可服务水位。
 
-## 7. Node、Store 与 Volume 生命周期
+## 7. Node 与 Volume 生命周期
 
 生命周期状态是控制面的**持久意图**，健康状态是监测得到的**当前观察**；二者不能混用。Node 心跳超时只表示 `Unavailable`，不能自动移除或复用其身份。Node 正常重启保留 NodeID、RaftID 和受管 Store 身份并追赶数据；管理员移除后重新加入的机器即使地址和路径相同，也必须取得全新的 NodeID、RaftID、StoreID 和 VolumeID。StoreID 与 VolumeID 也不得因路径重用而指向不同物理介质。
 
@@ -197,10 +201,9 @@ Backup Repository 是独立于源集群故障域的备份目标；Recovery Point
 | 对象 | 控制面生命周期 | 关键规则 |
 | --- | --- | --- |
 | Node | `Joining → Active → Draining → Retired`；不可恢复时由授权操作进入 `Lost` | `Joining` 不承载生产责任；`Draining` 不接收新的 Group 成员或数据存放任务；`Retired`/`Lost` 身份不得重新入群。失联、网络分区和进程重启是健康观察，不直接改变持久生命周期。 |
-| Store | `Joining → Active → Draining → Retired`；介质不可恢复时进入 `Lost` | Store 是 Placement 的放置目标；`Draining`/`Lost` 不得分配新副本。Store 故障不自动意味着同 Node 的其他 Store 或 Volume 故障。 |
 | Volume | `Registered → Active → Draining → Removed`；介质损坏是 `Failed` 健康观察 | Volume 是本地持久介质，不是独立的集群成员；迁移或删除前须证明其上已无必需的活数据，并保留必要的备份/快照保护。 |
 
-Node/Store/Volume 的 Drain 都是持久、可恢复的操作：`请求与预检 → 禁止新放置/写入 → 搬迁或重建 → 校验目标和耐久性 → 按作用域更新位置或成员/所有权 → 验证无剩余责任 → 退役`。Node/Store 的跨节点退役由 Root 或所属权威 Group 记录；单个 Volume 的节点内迁出使用节点持久卷登记与任务记录，按第 5 节执行，只更新本地数据位置，不改变共识成员和 Range 所有权。操作有稳定 ID、代际、进度、失败原因和重试/取消边界；控制器换 Leader 或节点强杀后必须能续跑。未达到自动多数派安全条件时不允许仅为了完成 Drain 而删除最后一份有效数据或破坏 Raft 多数派。取消只允许在不可逆成员/身份变更之前；之后应以新的补偿操作处理。
+Node/Volume 的受控退出都是持久、可恢复的操作：`请求与预检 → 禁止新放置/写入 → 搬迁或重建 → 校验目标和耐久性 → 按作用域更新位置或成员/所有权 → 验证无剩余责任 → 退役`。Node 的跨节点退役由 Root 或所属权威 Group 记录；单个 Volume 的节点内迁出使用节点持久卷登记与任务记录，按第 5 节执行，只更新本地数据位置，不改变共识成员和 Range 所有权。操作有稳定 ID、代际、进度、失败原因和重试/取消边界；控制器换 Leader 或节点强杀后必须能续跑。未达到自动多数派安全条件时不允许仅为了完成 Drain 而删除最后一份有效数据或破坏 Raft 多数派。取消只允许在不可逆成员/身份变更之前；之后应以新的补偿操作处理。
 
 计划内节点迁移先 Drain 再退出；突发损坏则由健康状态标记、管理员手动移除旧成员、新节点普通加入和后台自动 Repair/再平衡组成。超时不能触发移除，已标记 `Lost` 的旧盘重新出现时只能隔离检查，不能以旧身份自动恢复服务；若需取回其中数据，必须走受控导入/校验而非让其重新成为合法副本。扩容与缩容应同时检查 Root/各 Group 的多数派、Region 故障域、空闲容量、后台搬迁预算和正在运行的备份/升级任务。
 
@@ -224,7 +227,7 @@ Region 明确退休并以同名新代际重新确认后，Range placement 只刷
 
 | 故障 | 允许继续服务的前提 | 必须拒绝或等待的情况 |
 | --- | --- | --- |
-| 单节点或 Store 失联 | 仍有合法 Owner/Group 多数派和足够的实际有效拷贝时，按当前确认模式继续服务并限速修复。 | 不能把超时拷贝或计划目标计为 Ready，也不得让旧 Owner 在新 Epoch 后确认写入。 |
+| 单节点失联或节点存储不可用 | 仍有合法 Owner/Group 多数派和足够的实际有效拷贝时，按当前确认模式继续服务并限速修复。 | 不能把超时拷贝或计划目标计为 Ready，也不得让旧 Owner 在新 Epoch 后确认写入。 |
 | Volume 损坏或数据校验失败 | 只从已校验的其它拷贝读取并修复；损坏拷贝隔离。 | 无有效拷贝时拒绝依赖该数据的操作，不得返回未经确认的内容。 |
 | Group 失去多数派 | 其他不受影响的 Group 可以继续服务。 | 该 Group 不得确认新的权威写入；需要线性一致性的读取也不得伪装成功。 |
 | 整个 Region 失联 | 已达到 `GeoReady` 的数据在丢失少于区域严格多数的 Region 后仍至少保有一份有效拷贝；能否继续读写还取决于 Group/Root 多数派与当前确认模式。 | `LocalReady` 但尚未 `GeoReady` 不具备同等跨 Region 不丢保证；故障降级不得静默放宽已承诺的确认级别。 |
@@ -233,24 +236,24 @@ Root Group 负责集群目录和成员变更，必须有独立的多数派与恢
 
 `GeoReady` 的区域覆盖必须同时保护可恢复的权威元数据切点/日志尾部与其引用的数据，不能仅证明各区存有不可变字节。整个来源 Region 丢失后，远端仅有多个物理版本不足以判断当前逻辑引用；恢复与路由重新建立还须遵守新身份和 Fence 边界。当前清单、持有观察和逐条传输均不提供这一保证。
 
-首个验收场景以单 Region、三节点为起点，覆盖任意单节点失效、一个 Store/Volume 损坏、Leader 切换、旧节点重新出现和恢复中的再次故障。多 Region 还须覆盖 `LocalReady → GeoReady` 补齐窗口、Writer Region 整体失联和 Root 多数派丢失。用户不设置副本数；本地参与集合的形成/上限、降级读写边界及目标修复时间在故障域与性能测试后定稿。在此之前不得把实验拓扑的可用性写成产品承诺。
+首个验收场景以单 Region、三节点为起点，覆盖任意单节点失效、节点元数据目录或 Volume 损坏、Leader 切换、旧节点重新出现和恢复中的再次故障。多 Region 还须覆盖 `LocalReady → GeoReady` 补齐窗口、Writer Region 整体失联和 Root 多数派丢失。用户不设置副本数；本地参与集合的形成/上限、降级读写边界及目标修复时间在故障域与性能测试后定稿。在此之前不得把实验拓扑的可用性写成产品承诺。
 
 ## 9. 统一资源治理
 
 当前首先落地 Registry 的进程内磁盘字节预约与 Node Runtime 持有的 Pack Pool：按文件系统设备共享预算，默认保留 `max(1 GiB, TotalBytes / 20)`，从健康 Active 卷中选可预约字节最多者，并列轮转。Pool 在写入前预约、完成/失败/取消后释放；读取不要求新增预约，也不为读取完成 Pending Pack 创建。写入错误不自动跨卷重试，避免不确定成功后的重复写入。该能力不是物理预分配或持久 Placement 任务；其它引擎尚未接入，外部占用与底层存储限制仍可能导致 IO 失败。CLI 容量仍是观察值，未包含预约明细；下述统一多资源治理仍是后续目标。
 
-所有能力共享一套资源准入与计量路径，而不是各自建立互不知情的限速器。底座以 `Cluster → Node → Store/Volume` 为物理资源层，以 `Tenant → Engine` 为归属层，再按工作类别分配预算。每个请求和后台任务在消耗大量内存、磁盘、IO 或网络之前先取得预算；完成、取消或失败都必须释放。无法精确预估的流式工作按有界批次续租，禁止先无限缓存再事后计量。
+所有能力共享一套资源准入与计量路径，而不是各自建立互不知情的限速器。底座以 `Cluster → Node → Volume` 为物理资源层，以 `Tenant → Module → Engine` 为归属层，再按工作类别分配预算。每个请求和后台任务在消耗大量内存、磁盘、IO 或网络之前先取得预算；完成、取消或失败都必须释放。无法精确预估的流式工作按有界批次续租，禁止先无限缓存再事后计量。
 
 | 维度 | 底座统一处理 | 上层可声明什么 |
 | --- | --- | --- |
-| 磁盘与容量 | Store/Volume 真实空间、安全预留、已用/预约量、Pack/索引/WAL/快照及修复临时空间；到保留线前拒绝新放置。 | 每类数据的大小预估、保留和可重建性。 |
+| 磁盘与容量 | 节点元数据目录及 Volume 所在文件系统的真实空间、安全预留、已用/预约量、Pack/索引/WAL/快照及修复临时空间；到保留线前拒绝新放置。 | 每类数据的大小预估、保留和可重建性。 |
 | 内存、CPU 与并发 | 进程总预算、请求/任务内存令牌、并发槽、队列上限及超时取消。 | 单次操作成本估计和可拆分批次。 |
-| 磁盘 IO 与网络 | 按 Node/Store 限制前台与后台吞吐，控制复制、备份、Compaction 和索引构建的并发。 | 工作的读写特征、预计字节数和中断/续跑能力。 |
+| 磁盘 IO 与网络 | 按 Node/Volume 及实际文件系统限制前台与后台吞吐，控制复制、备份、Compaction 和索引构建的并发。 | 工作的读写特征、预计字节数和中断/续跑能力。 |
 | Tenant 与能力公平性 | Tenant 用量和上限、能力级资源池、热点监测及公平调度；一个高吞吐能力不能占满共享节点。 | 业务优先级和其自身 API 的超限提示，不得绕过底座硬上限。 |
 
 工作类别至少区分控制面必要任务、前台读写、维持数据安全的 Repair，以及可延后的 Backup/Rebalance/Compaction/Index 等后台工作。控制面和 Repair 要有受保护的最低预算，但也有硬上限；前台优先并不意味着 Repair 可以无限期饥饿。容量不足时先暂停或退避可延后工作，再拒绝新的大写入，同时保留元数据、故障修复和安全关停所需空间。任何自动均衡都要有迟滞、每节点并发上限和跨 Region 带宽预算，避免因负载抖动反复迁移。
 
-资源拒绝必须给出稳定的原因与可重试性，例如 Tenant 配额、节点过载、磁盘保留线、后台预算或存储不可用；客户端重试应有退避，不能把集群推入重试风暴。状态和指标至少展示按 Node、Store、Tenant、Engine、工作类别的已用/预约量、等待、拒绝、排队时长和 Repair 欠账。配额与调度参数可以渐进开放，但缺省值也必须有边界，不能以“未配置”为无限制。
+资源拒绝必须给出稳定的原因与可重试性，例如 Tenant 配额、节点过载、磁盘保留线、后台预算或存储不可用；客户端重试应有退避，不能把集群推入重试风暴。状态和指标至少展示按 Node、Volume、Tenant、Module、Engine、工作类别的已用/预约量、等待、拒绝、排队时长和 Repair 欠账。配额与调度参数可以渐进开放，但缺省值也必须有边界，不能以“未配置”为无限制。
 
 ## 10. 各层代码职责
 
@@ -262,21 +265,22 @@ Root Group 负责集群目录和成员变更，必须有独立的多数派与恢
 | `platform/raft` | Group 生命周期、成员、日志、Snapshot | 将所有能力强制写入同一 Raft Group |
 | `platform/placement` | 本地/区域多数派目标、安全预检、Repair、迁移任务与均衡 | 把尚未校验的实际拷贝当作已达到多数派 |
 | `platform/resource`、`platform/task` | 统一准入、预算、公平调度、后台任务限额及可恢复进度 | 允许能力绕过物理或 Tenant 硬上限 |
-| `platform/storage` | Store/Volume 的生命周期、故障隔离、空间安全预留及 Pack 通用容器生命周期 | 决定能力的载荷编码、索引和保留规则 |
+| `platform/storage` | 节点存储实例校验、Volume 生命周期、故障隔离、空间预留及 Pack 生命周期 | 定义业务载荷编码、业务索引和保留规则，或引入独立 Store 管理层 |
 | `platform/recovery` | 注册持久资源、协调 Checkpoint、整集群 Backup/Restore、Recovery Point、任务门禁、恢复预检和演练证据 | 按 Tenant/能力筛选备份、解析业务记录格式或另建 Node Snapshot/Replacement 流程 |
-| `engine/*` | RoutingKey、数据格式、复制/保留语义和业务数据导入/导出；持久资源接入底座登记和 Checkpoint 协议 | 自建另一套节点身份、集群目录或整集群备份系统 |
+| `engine/*` | 键编码、数据格式、版本/CAS、索引等存储语义，通过 Runtime 契约访问受管资源 | 节点发现、物理复制/修复、共识与成员变更、集群备份编排 |
+| `module/*` | 业务规则、保留/过期、导入/导出、多 Engine 组合与派生数据重建 | 选择 Group/Range/Node/Volume、拼内部地址或自行补齐物理冗余 |
 
 ## 11. 需要在实现前定稿的参数
 
 - Range 描述符的具体字段、各能力 RoutingKey 的编码版本、拆分规则和目录扩展方式。
 - Tenant 的授权、配额、用量与删除流程；跨 Tenant 物理 Pack 混写和加密边界需在磁盘格式确定前明确。
 - Group 与 Range 的映射策略，以及不同能力的数据确认级别。
-- Store/Volume 数量和身份、单盘到多盘迁移与磁盘失效处理。
+- Volume 数量上限、单盘到多盘的均衡参数与磁盘失效处理；内部存储实例身份自动管理。
 - Placement 的容量预留、故障域、热度指标和后台任务预算。
 - Pack 的记录头、索引接口、磁盘格式、硬大小上限，以及 512 MiB 默认目标在目标机器上的性能验证。
 - 注册资源的 Checkpoint/WAL 一致性协议、Cluster Restore 所支持的拓扑与格式版本、Repository 格式及密钥恢复边界。
-- Node/Store/Volume 状态描述符、失联与 Lost 判定、Drain 任务状态及旧身份重现时的隔离流程。
+- Node/Volume 状态描述符、失联与 Lost 判定、Drain 任务状态及旧身份重现时的隔离流程。
 - 本地多数参与集合的形成、扩缩与上限；Region 故障模式、Root 失联期间的服务边界及耐久性 SLO。
 - 磁盘安全预留、内存/IO/网络/并发预算、Tenant/能力公平性、Repair 保底和各类过载错误的默认阈值。
 
-这些是实现参数；Cluster、Tenant、Node、Region、Store、Volume、Range、Group、Placement、Pack 的概念边界由本文确定。
+这些是实现参数；Cluster、Tenant、Node、Region、Volume、Range、Group、Placement、Pack 的概念边界由本文确定。

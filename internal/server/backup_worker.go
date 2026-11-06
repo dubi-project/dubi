@@ -425,7 +425,7 @@ func (w *backupWorker) sources(ctx context.Context) ([]recovery.Source, func(), 
 	}
 	if indexImage != nil {
 		sources = append(sources, recovery.Source{Name: "records/index", Kind: "records-index", NodeID: w.runtime.Identity.NodeID,
-			StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_RECORD_INDEX_V1", Size: int64(len(indexImage)),
+			StoreID: w.runtime.Packs.StoreID(), Format: "DUBI_RECORD_INDEX_V2", Size: int64(len(indexImage)),
 			Open: func(call context.Context) (io.ReadCloser, error) {
 				if err := call.Err(); err != nil {
 					return nil, err

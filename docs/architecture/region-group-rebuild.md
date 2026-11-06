@@ -7,7 +7,7 @@
 1. 临时失联不触发任何切换。原节点恢复后，保留原 NodeID/RaftID，直接追赶落后数据。
 2. 每次 `node remove` 都是明确的管理员动作；系统不靠超时自动删除节点，也不自动缩小多数分母。删除请求可以从任意存活 Node 发起，并由 Root leader 执行。
 3. 当一个 Region 的旧成员全部被明确移除后，Root 内部记录新的区域代际。这个记录只用于隔离旧 Raft 状态、拒绝旧身份回写，不暴露为命令、配置或运维流程。
-4. 新节点必须取得全新 NodeID、RaftID、StoreID 和 VolumeID，但可以使用相同的 Region 名称。新节点按普通加入流程形成本地 Group，并由各业务模块从其它可用 Region 修复自己的数据。
+4. 新节点必须取得全新 NodeID、RaftID、StoreID 和 VolumeID，但可以使用相同的 Region 名称。新节点按普通加入流程形成本地 Group，再由 Runtime 的 Placement / Repair / Rebalance 从其它可用 Region 补齐权威状态与数据。Engine/Module 不实现节点间物理修复；Module 只在业务需要时根据已恢复的权威数据重建派生结果，例如搜索索引。
 5. 如果其它 Region 没有足够的权威数据，区域保持 `Degraded`，不能用空数据冒充恢复完成。
 
 因此，内部代际只是防止旧状态与新节点混用的安全边界；它不要求用户理解 Group retirement、rebuild intent 或单独的替换状态机。

@@ -79,7 +79,7 @@ func newFixture(t *testing.T, wrap func(RootReader) RootReader) *fixture {
 	t.Cleanup(func() { _ = listener.Close() })
 	f := &fixture{host: host, root: root, issuer: issuer, signer: signer, address: listener.Addr().String()}
 	register := func(id identity.Identity, address string) {
-		command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "renewal-register-" + id.NodeID, Type: rootstate.RegisterNode, Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: address}})
+		command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "renewal-register-" + id.NodeID, Type: rootstate.RegisterNode, Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: address}})
 		if err != nil {
 			t.Fatal(err)
 		}

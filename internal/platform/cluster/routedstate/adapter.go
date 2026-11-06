@@ -16,7 +16,7 @@ import (
 	"go.etcd.io/raft/v3/raftpb"
 )
 
-const FormatVersion = 1
+const FormatVersion = 2
 
 const (
 	Mutation      = "mutation"

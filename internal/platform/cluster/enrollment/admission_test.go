@@ -116,9 +116,9 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 	}
 	f.authorizer.now = func() time.Time { return f.clock }
 	issuer.authorizer = f.authorizer
-	submitAdmissionCommand(t, f, rootstate.Command{Version: 1, RequestID: "register-issuer", Type: rootstate.RegisterNode,
+	submitAdmissionCommand(t, f, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "register-issuer", Type: rootstate.RegisterNode,
 		Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "r1", Address: "issuer:7443"}})
-	submitAdmissionCommand(t, f, rootstate.Command{Version: 1, RequestID: "create-grant", Type: rootstate.CreateJoinGrant, JoinGrant: &grant})
+	submitAdmissionCommand(t, f, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "create-grant", Type: rootstate.CreateJoinGrant, JoinGrant: &grant})
 	return f
 }
 
@@ -302,7 +302,7 @@ func TestJoinGrantAdmissionRejectsWrongProofRoleAndRevocation(t *testing.T) {
 			case "expired":
 				f.clock = time.Unix(f.grant.ExpiresUnix, 0)
 			case "revoked":
-				submitAdmissionCommand(t, f, rootstate.Command{Version: 1, RequestID: "revoke", Type: rootstate.RevokeJoinGrant,
+				submitAdmissionCommand(t, f, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "revoke", Type: rootstate.RevokeJoinGrant,
 					JoinRevocation: &rootstate.JoinGrantRevocation{GrantID: f.grant.GrantID, RevokedUnix: f.now.Unix()}})
 			case "trailing":
 				proof = append(proof, []byte(" {}")...)

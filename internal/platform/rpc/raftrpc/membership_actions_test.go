@@ -24,7 +24,7 @@ func (f actionJoiner) PrepareJoining(ctx context.Context, task rootstate.GroupTa
 func completeActionTask(t *testing.T, b *guardedMembershipBackend, id string) {
 	t.Helper()
 	index := b.root.AppliedIndex()
-	r := applyRootCommand(t, b.root, &index, rootstate.Command{Version: 1, RequestID: "complete-" + id, Type: rootstate.CompleteGroupMembers, GroupCompletion: &rootstate.GroupChangeCompletion{GroupID: "data-1", ChangeID: id}})
+	r := applyRootCommand(t, b.root, &index, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "complete-" + id, Type: rootstate.CompleteGroupMembers, GroupCompletion: &rootstate.GroupChangeCompletion{GroupID: "data-1", ChangeID: id}})
 	if r.Error != "" {
 		t.Fatal(r)
 	}
@@ -35,7 +35,7 @@ func transferActionFixture(t *testing.T) (*MembershipServer, *guardedMembershipB
 	s, b, ctx, mutation := membershipFenceFixture(t)
 	completeActionTask(t, b, "add-node")
 	index := b.root.AppliedIndex()
-	r := applyRootCommand(t, b.root, &index, rootstate.Command{Version: 1, RequestID: "retire", Type: rootstate.PlanGroupMembers, GroupPlan: &rootstate.GroupChangePlan{ChangeID: "retire", GroupID: "data-1", ExpectedEpoch: 3, Members: []rootstate.GroupMember{{RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}}})
+	r := applyRootCommand(t, b.root, &index, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "retire", Type: rootstate.PlanGroupMembers, GroupPlan: &rootstate.GroupChangePlan{ChangeID: "retire", GroupID: "data-1", ExpectedEpoch: 3, Members: []rootstate.GroupMember{{RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}}})
 	if r.Error != "" {
 		t.Fatal(r)
 	}

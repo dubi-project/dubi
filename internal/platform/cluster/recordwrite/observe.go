@@ -45,6 +45,18 @@ type PublishedObservation struct {
 func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
 	localID uint64, localNodeID string, store Verifier, observer Observer,
 	target router.Target, descriptor records.Descriptor, requestID string, publicationIndex uint64) (PublishedObservation, error) {
+	return observePublishedLocal(ctx, barrier, root, owner, localID, localNodeID, store, observer,
+		target, descriptor, requestID, publicationIndex, false)
+}
+
+// deferRootCheck is only used by Reader, after reading the bytes. It defers the
+// post-physical Root check to CheckReadCurrent, which checks the exact receipt
+// and Owner reference first. The returned observation is provisional until then.
+// Writers and durability retries must use the exported, fully checked path.
+func observePublishedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
+	localID uint64, localNodeID string, store Verifier, observer Observer,
+	target router.Target, descriptor records.Descriptor, requestID string, publicationIndex uint64,
+	deferRootCheck bool) (PublishedObservation, error) {
 	started := time.Now()
 	defer Trace(ctx, "observe.total", started)
 	if ctx == nil || barrier == nil || root == nil || owner == nil || localID == 0 || localNodeID == "" ||
@@ -192,12 +204,14 @@ func ObservePublishedLocal(ctx context.Context, barrier Barrier, root Root, owne
 		}
 		return 0
 	})
-	latest, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
-	if err != nil {
-		return PublishedObservation{}, err
-	}
-	if !plan.Matches(latest) {
-		return PublishedObservation{}, errors.New("local Region cohort changed during published record observation")
+	if !deferRootCheck {
+		latest, err := placement.ReadLocalPlan(ctx, barrier, root, target.OwnerGroupID)
+		if err != nil {
+			return PublishedObservation{}, err
+		}
+		if !plan.Matches(latest) {
+			return PublishedObservation{}, errors.New("local Region cohort changed during published record observation")
+		}
 	}
 	last, err := publishedReference(ctx, barrier, owner, target, descriptor.Key, recordID, requestID, publicationIndex)
 	if err != nil {

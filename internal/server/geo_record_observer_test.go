@@ -44,7 +44,7 @@ func TestGeoRepairLocalObservationRequiresPhysicalBytesAndCurrentIdentity(t *tes
 			root := &geoObserverTestRoot{node: node, applied: 9, member: true}
 			ctx := router.WithConfirmedRootIndex(context.Background(), 9)
 			calls := 0
-			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}, "region-west", []byte("key"), []byte("body"))
+			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"}, "region-west", []byte("key"), []byte("body"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,7 +145,7 @@ func TestGeoRepairCountsLocalHolderWithFullThirdNode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}, "region-west", []byte("key"), []byte("body"))
+			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"}, "region-west", []byte("key"), []byte("body"))
 			if err != nil {
 				t.Fatal(err)
 			}

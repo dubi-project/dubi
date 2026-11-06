@@ -19,7 +19,7 @@ func activateKeyspace(t *testing.T, s *State, keyspace rootstate.Keyspace) route
 	t.Helper()
 	index := s.AppliedIndex() + 1
 	descriptor := rootstate.Range{RangeID: fmt.Sprintf("range-%d", index), TenantID: keyspace.TenantID,
-		EngineID: keyspace.EngineID, DatasetID: keyspace.DatasetID, OwnerGroupID: s.groupID, Epoch: 1, State: rootstate.RangeStateActive}
+		EngineID: keyspace.EngineID, ModuleID: keyspace.ModuleID, OwnerGroupID: s.groupID, Epoch: 1, State: rootstate.RangeStateActive}
 	request := fmt.Sprintf("activate-%d", index)
 	if err := s.ApplyRange(index, request, descriptor); err != nil {
 		t.Fatal(err)
@@ -45,10 +45,10 @@ func TestKeyspaceIsolationWithMixedPackReopenAndRestore(t *testing.T) {
 	}
 	defer func() { s.Close() }()
 	scopes := []rootstate.Keyspace{
-		{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"},
-		{TenantID: "tenant-b", EngineID: "record", DatasetID: "items"},
-		{TenantID: "tenant-a", EngineID: "record", DatasetID: "other"},
-		{TenantID: "tenant-a", EngineID: "search", DatasetID: "items"},
+		{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"},
+		{TenantID: "tenant-b", EngineID: "record", ModuleID: "items"},
+		{TenantID: "tenant-a", EngineID: "record", ModuleID: "other"},
+		{TenantID: "tenant-a", EngineID: "search", ModuleID: "items"},
 	}
 	var targets []router.Target
 	var values [][]byte
@@ -143,8 +143,8 @@ func TestKeyspaceIsolationWithMixedPackReopenAndRestore(t *testing.T) {
 }
 
 func TestKeyspaceEncodingCannotEscapeIntoAnotherScope(t *testing.T) {
-	a := rootstate.Keyspace{TenantID: "a", EngineID: "record", DatasetID: "items"}
-	b := rootstate.Keyspace{TenantID: "b", EngineID: "record", DatasetID: "items"}
+	a := rootstate.Keyspace{TenantID: "a", EngineID: "record", ModuleID: "items"}
+	b := rootstate.Keyspace{TenantID: "b", EngineID: "record", ModuleID: "items"}
 	for _, key := range [][]byte{[]byte("../b/record/items/item"), []byte("data/keyspace/b/record/items/item"), {0, '/', 255}} {
 		encoded := engineKey(a, key)
 		decoded, err := splitValueKey(encoded)
@@ -162,8 +162,8 @@ func TestKeyspaceEncodingCannotEscapeIntoAnotherScope(t *testing.T) {
 func FuzzKeyspaceValueKey(f *testing.F) {
 	f.Add("tenant-a", "record", "items", []byte("../other/item"))
 	f.Add("tenant-b", "search", "index", []byte{0, '/', 255})
-	f.Fuzz(func(t *testing.T, tenant, engine, dataset string, key []byte) {
-		scope := rootstate.Keyspace{TenantID: tenant, EngineID: engine, DatasetID: dataset}
+	f.Fuzz(func(t *testing.T, tenant, engine, module string, key []byte) {
+		scope := rootstate.Keyspace{TenantID: tenant, EngineID: engine, ModuleID: module}
 		if scope.Validate() != nil || validateEngineKey(key) != nil {
 			return
 		}
@@ -247,7 +247,7 @@ func TestSnapshotRejectsCrossKeyspaceAttributionBeforePackWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	target := activateKeyspace(t, source, rootstate.Keyspace{TenantID: "a", EngineID: "record", DatasetID: "items"})
+	target := activateKeyspace(t, source, rootstate.Keyspace{TenantID: "a", EngineID: "record", ModuleID: "items"})
 	if err := source.ApplyRouted(2, "write", target, bytes.Repeat([]byte("a"), PackValueThreshold)); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestSnapshotRejectsCrossKeyspaceAttributionBeforePackWrites(t *testing.T) {
 					case "tenant":
 						entry.TenantID = "b"
 					case "keyspace":
-						entry.Key = engineKey(rootstate.Keyspace{TenantID: "b", EngineID: "record", DatasetID: "items"}, []byte("item"))
+						entry.Key = engineKey(rootstate.Keyspace{TenantID: "b", EngineID: "record", ModuleID: "items"}, []byte("item"))
 						entry.TenantID = "b"
 					case "old-namespace":
 						entry.Key = []byte("data/engine/record/item")

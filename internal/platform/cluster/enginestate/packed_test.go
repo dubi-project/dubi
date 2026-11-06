@@ -75,7 +75,7 @@ func packedTarget(t *testing.T, s *State, engine, tenant string) router.Target {
 	t.Helper()
 	i := s.AppliedIndex() + 1
 	descriptor := rootstate.Range{RangeID: fmt.Sprintf("range-%d", i), TenantID: tenant, EngineID: engine,
-		DatasetID: "items", OwnerGroupID: s.groupID, Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: s.groupID, Epoch: 1, State: rootstate.RangeStateActive}
 	if err := s.ApplyRange(i, fmt.Sprintf("activate-%d", i), descriptor); err != nil {
 		t.Fatal(err)
 	}

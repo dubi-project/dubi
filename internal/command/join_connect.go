@@ -45,15 +45,21 @@ func openJoiningServer(ctx context.Context, args []string, stdin io.Reader, stde
 func openJoiningServerWithMux(ctx context.Context, args []string, stdin io.Reader, stderr io.Writer, mux *engineruntime.Mux) (process *server.Server, returnErr error) {
 	flags := flag.NewFlagSet("join", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "durable joining Node store")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	listen := flags.String("listen", "", "internal RPC listen address")
 	apiListen := flags.String("api-listen", "", "optional Tenant HTTPS and monitoring listen address")
+	apiCert := flags.String("api-cert", "", "public HTTPS certificate chain PEM")
+	apiKey := flags.String("api-key", "", "public HTTPS private key PEM")
+	flags.String("api-host", "", "public DNS name or IP for HTTPS")
+	flags.Bool("api-acme", false, "manage public certificate automatically; accepts ACME CA terms")
+	flags.String("acme-directory", "", "ACME directory override (default Let's Encrypt)")
+	flags.String("acme-listen", "", "HTTP-01 listener (default 0.0.0.0:80)")
 	advertise := flags.String("advertise", "", "published host:port; derive from route to issuer by default")
 	region := flags.String("region", "", "deployment region; reuse prepared request or default to default")
 	name := flags.String("name", "", "optional operator-facing Node name")
 	ticketFile := flags.String("ticket-file", "", "private one-time credential file; '-' reads stdin; optional after receipt")
 	var volumes volumePaths
-	flags.Var(&volumes, "volume", "existing empty data directory; repeat for initial volumes")
+	flags.Var(&volumes, "volume", "existing empty data volume directory; repeat for initial volumes (default: <store>/volume)")
 	if err := flags.Parse(args); err != nil {
 		return nil, err
 	}
@@ -62,6 +68,26 @@ func openJoiningServerWithMux(ctx context.Context, args []string, stdin io.Reade
 		return nil, err
 	}
 	*store = resolved
+	gatewaySettings, err := resolveGatewaySettings(flags, *store, apiListen, apiCert, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	publicTLS, err := config.PrepareGatewayTLS(resolved, gatewaySettings)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if returnErr == nil && process != nil {
+			if process.PublicAddress() != "" {
+				gatewaySettings.Listen = process.PublicAddress()
+			}
+			if err := config.SaveGateway(*store, gatewaySettings); err != nil {
+				_ = process.Close()
+				process = nil
+				returnErr = err
+			}
+		}
+	}()
 	bound, err := resolveListen(flags, *listen, *store)
 	if err != nil {
 		return nil, err
@@ -227,7 +253,7 @@ func openJoiningServerWithMux(ctx context.Context, args []string, stdin io.Reade
 			return nil, err
 		}
 		return openManagedServerWithMuxAndPublic(root, listener, publicListener,
-			server.NetworkOptions{Advertise: address, Region: regionID, Name: *name}, stderr, mux)
+			server.NetworkOptions{Advertise: address, Region: regionID, Name: *name}, stderr, mux, publicTLS)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -281,7 +307,7 @@ func openJoiningServerWithMux(ctx context.Context, args []string, stdin io.Reade
 		return nil, err
 	}
 	return openManagedServerWithMuxAndPublic(root, listener, publicListener,
-		server.NetworkOptions{Advertise: address, Region: regionID, Name: *name}, stderr, mux)
+		server.NetworkOptions{Advertise: address, Region: regionID, Name: *name}, stderr, mux, publicTLS)
 }
 
 func initializeJoinVolumes(store string, paths []string) error {

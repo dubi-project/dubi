@@ -42,7 +42,7 @@ func regionObservationFixture(t *testing.T) (*RegionFenceServer, *rootstate.Stat
 	t.Cleanup(func() { root.Close() })
 	index := uint64(0)
 	for _, id := range []uint64{1, 2, 3, 991} {
-		r := applyRootCommand(t, root, &index, rootstate.Command{Version: 1, RequestID: fmt.Sprintf("node-%d", id), Type: rootstate.RegisterNode,
+		r := applyRootCommand(t, root, &index, rootstate.Command{Version: rootstate.FormatVersion, RequestID: fmt.Sprintf("node-%d", id), Type: rootstate.RegisterNode,
 			Node: &rootstate.Node{NodeID: fmt.Sprintf("node_%032x", id), RaftID: id, RegionID: "west", Address: fmt.Sprintf("127.0.0.1:%d", 9000+id)}})
 		if r.Error != "" {
 			t.Fatal(r)
@@ -52,7 +52,7 @@ func regionObservationFixture(t *testing.T) (*RegionFenceServer, *rootstate.Stat
 		t.Fatal(err)
 	}
 	index++
-	r := applyRootCommand(t, root, &index, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
+	r := applyRootCommand(t, root, &index, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	if r.Error != "" {
 		t.Fatal(r)
 	}

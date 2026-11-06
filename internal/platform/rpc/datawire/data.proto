@@ -3,28 +3,27 @@ package dubi.internal.data.v1;
 option go_package = "github.com/dubi-project/dubi/internal/platform/rpc/datawire";
 
 // This is a Node-authenticated development entry, not a tenant-facing API.
-message CreateDatasetRequest {
+message CreateTenantRequest {
   string cluster_id = 1;
   uint64 from_raft_id = 2;
   string request_id = 3;
   string tenant_id = 4;
-  string dataset_id = 5;
 }
-message CreateDatasetResponse {
-  string range_id = 1;
-  string owner_group_id = 2;
-  uint64 root_index = 3;
-}
+message CreateTenantResponse { uint64 root_index = 1; }
 message PutRecordRequest {
   string cluster_id = 1;
   uint64 from_raft_id = 2;
   string request_id = 3;
   string tenant_id = 4;
-  string dataset_id = 5;
+  reserved 5;
+  reserved "dataset_id";
   bytes key = 6;
   bytes value = 7;
 }
 message PutRecordResponse {
+  // Node-authenticated probe diagnostics, not client-selectable identities.
+  string owner_group_id = 5;
+  string range_id = 6;
   uint64 applied_index = 1;
   string state = 2;
   uint64 confirmation_index = 3;
@@ -34,7 +33,8 @@ message GetRecordRequest {
   string cluster_id = 1;
   uint64 from_raft_id = 2;
   string tenant_id = 3;
-  string dataset_id = 4;
+  reserved 4;
+  reserved "dataset_id";
   bytes key = 5;
 }
 message GetRecordResponse {
@@ -325,8 +325,17 @@ message VolumeHealthStatus {
   string health = 3;
   string error = 4;
 }
+message AccessCredentialRequest {
+  string cluster_id = 1;
+  uint64 from_raft_id = 2;
+  string request_id = 3;
+  bytes credential_json = 4;
+  string revoke_id = 5;
+}
+message AccessCredentialResponse { uint64 root_index = 1; }
 service DataService {
-  rpc CreateDataset(CreateDatasetRequest) returns (CreateDatasetResponse);
+  rpc MutateAccessCredential(AccessCredentialRequest) returns (AccessCredentialResponse);
+  rpc CreateTenant(CreateTenantRequest) returns (CreateTenantResponse);
   rpc PutRecord(PutRecordRequest) returns (PutRecordResponse);
   rpc GetRecord(GetRecordRequest) returns (GetRecordResponse);
   // Cluster-level backup/recovery Repository administration. These methods

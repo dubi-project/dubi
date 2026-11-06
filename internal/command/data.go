@@ -24,13 +24,13 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-func runDataset(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func runTenantCreate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] != "create" {
-		return errors.New("usage: dubi dataset create [--store path] [--server host:port] [--request-id ID] <tenant> <dataset>")
+		return errors.New("usage: dubi tenant create [--store path] [--server host:port] [--request-id ID] <tenant>")
 	}
-	flags := flag.NewFlagSet("dataset create", flag.ContinueOnError)
+	flags := flag.NewFlagSet("tenant create", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "existing Node store")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	server := flags.String("server", "", "reachable Node RPC address")
 	requestID := flags.String("request-id", "", "stable ID for retrying an uncertain request")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -46,8 +46,8 @@ func runDataset(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	*server = endpoint
-	if flags.NArg() != 2 || *store == "" || identityenrollment.ValidateNodeAddress(*server) != nil {
-		return errors.New("usage: dubi dataset create [--store path] [--server host:port] [--request-id ID] <tenant> <dataset>")
+	if flags.NArg() != 1 || *store == "" || identityenrollment.ValidateNodeAddress(*server) != nil {
+		return errors.New("usage: dubi tenant create [--store path] [--server host:port] [--request-id ID] <tenant>")
 	}
 	if err := ensureRequestID(requestID); err != nil {
 		return err
@@ -60,9 +60,9 @@ func runDataset(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	_, _ = fmt.Fprintf(stderr, "dubi: request-id %s\n", *requestID)
 	call, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	response, err := datawire.NewDataServiceClient(conn).CreateDataset(call, &datawire.CreateDatasetRequest{
+	response, err := datawire.NewDataServiceClient(conn).CreateTenant(call, &datawire.CreateTenantRequest{
 		ClusterId: id.ClusterID, FromRaftId: id.RaftID, RequestId: *requestID,
-		TenantId: flags.Arg(0), DatasetId: flags.Arg(1)})
+		TenantId: flags.Arg(0)})
 	if err != nil {
 		return err
 	}
@@ -71,12 +71,12 @@ func runDataset(ctx context.Context, args []string, stdout, stderr io.Writer) er
 
 func runRecord(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || (args[0] != "put" && args[0] != "get") {
-		return errors.New("usage: dubi record put|get [--store path] [--server host:port] <tenant> <dataset> <key> [value]")
+		return errors.New("usage: dubi record put|get [--store path] [--server host:port] <tenant> <key> [value]")
 	}
 	operation := args[0]
 	flags := flag.NewFlagSet("record "+operation, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "existing Node store")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	server := flags.String("server", "", "reachable Node RPC address")
 	requestID := flags.String("request-id", "", "stable ID for retrying an uncertain put")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -92,13 +92,13 @@ func runRecord(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	*server = endpoint
-	want := 3
+	want := 2
 	if operation == "put" {
-		want = 4
+		want = 3
 	}
 	if flags.NArg() != want || *store == "" || identityenrollment.ValidateNodeAddress(*server) != nil ||
 		(operation == "get" && *requestID != "") {
-		return errors.New("usage: dubi record put|get [--store path] [--server host:port] <tenant> <dataset> <key> [value]")
+		return errors.New("usage: dubi record put|get [--store path] [--server host:port] <tenant> <key> [value]")
 	}
 	if operation == "put" {
 		if err := ensureRequestID(requestID); err != nil {
@@ -116,15 +116,15 @@ func runRecord(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if operation == "put" {
 		_, _ = fmt.Fprintf(stderr, "dubi: request-id %s\n", *requestID)
 		response, err := client.PutRecord(call, &datawire.PutRecordRequest{ClusterId: id.ClusterID,
-			FromRaftId: id.RaftID, RequestId: *requestID, TenantId: flags.Arg(0), DatasetId: flags.Arg(1),
-			Key: []byte(flags.Arg(2)), Value: []byte(flags.Arg(3))})
+			FromRaftId: id.RaftID, RequestId: *requestID, TenantId: flags.Arg(0),
+			Key: []byte(flags.Arg(1)), Value: []byte(flags.Arg(2))})
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(stdout).Encode(response)
 	}
 	response, err := client.GetRecord(call, &datawire.GetRecordRequest{ClusterId: id.ClusterID,
-		FromRaftId: id.RaftID, TenantId: flags.Arg(0), DatasetId: flags.Arg(1), Key: []byte(flags.Arg(2))})
+		FromRaftId: id.RaftID, TenantId: flags.Arg(0), Key: []byte(flags.Arg(1))})
 	if err != nil {
 		return err
 	}

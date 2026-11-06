@@ -20,7 +20,7 @@ func TestCapacityOffloadIsRecheckedAndRepairRestoresLostMajority(t *testing.T) {
 			plan := repairTestPlan(t)
 			store := repairTestStore(t)
 			body := []byte("retained on other current Nodes")
-			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"}, "origin-group", []byte("offloaded"), body)
+			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"}, "origin-group", []byte("offloaded"), body)
 			if err != nil {
 				t.Fatal(err)
 			}

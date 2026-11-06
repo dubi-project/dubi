@@ -18,7 +18,7 @@ func TestFillBatchBoundsPagesAndReverifiesPhysicalBytes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			var refs []enginestate.RecordReference
 			for i := 0; i < 70; i++ {
-				d, err := records.Describe(rootstate.Keyspace{TenantID: "t", EngineID: "record", DatasetID: "d"}, "region-west", []byte(fmt.Sprint(i)), []byte("data"))
+				d, err := records.Describe(rootstate.Keyspace{TenantID: "t", EngineID: "record", ModuleID: "d"}, "region-west", []byte(fmt.Sprint(i)), []byte("data"))
 				if err != nil {
 					t.Fatal(err)
 				}

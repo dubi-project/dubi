@@ -15,6 +15,10 @@ import (
 	"sync"
 	"time"
 
+	v1 "github.com/dubi-project/dubi/api/v1"
+	stateengine "github.com/dubi-project/dubi/internal/engine/state"
+	"github.com/dubi-project/dubi/internal/gateway/httpapi"
+	configmodule "github.com/dubi-project/dubi/internal/module/config"
 	"github.com/dubi-project/dubi/internal/platform/auth"
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginedata"
 	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
@@ -53,19 +57,24 @@ const rootReadAttemptTimeout = 8 * time.Second
 const rootReadRetryCount = 3
 
 type Options struct {
-	StoreRoot          string
-	Listener           net.Listener
-	PublicListener     net.Listener
-	ServerTLS          *tls.Config
-	ClientTLS          *tls.Config
-	AuthorizePeer      raftrpc.AuthorizePeer
-	EngineMux          *engineruntime.Mux
-	RootBootstrapPeers []uint64
-	BootstrapDirectory raftrpc.Directory
-	TickInterval       time.Duration
-	MembershipInterval time.Duration
-	MaxMessageSize     int
-	ReportError        groupmembership.ErrorReporter
+	StoreRoot      string
+	Listener       net.Listener
+	PublicListener net.Listener
+	// PublicTLS is an independently managed browser/application certificate.
+	// Nil retains the private Node CA endpoint for trusted internal clients.
+	PublicTLS             *tls.Config
+	PublicMaintenance     func(context.Context)
+	PublicCertificateInfo func() any
+	ServerTLS             *tls.Config
+	ClientTLS             *tls.Config
+	AuthorizePeer         raftrpc.AuthorizePeer
+	EngineMux             *engineruntime.Mux
+	RootBootstrapPeers    []uint64
+	BootstrapDirectory    raftrpc.Directory
+	TickInterval          time.Duration
+	MembershipInterval    time.Duration
+	MaxMessageSize        int
+	ReportError           groupmembership.ErrorReporter
 	// Only an existing managed authority may serve enrollment. Joining Nodes
 	// never receive the CA signer. This is internal composition, not a CLI flag.
 	EnrollmentSigner *nodepki.Signer
@@ -81,27 +90,28 @@ type Server struct {
 	MembershipReconciler *groupmembership.Reconciler
 	NodeRemoval          *noderemoval.Coordinator
 
-	listener        net.Listener
-	publicListener  net.Listener
-	publicHTTP      *http.Server
-	publicTLS       *tls.Config
-	grpc            *grpc.Server
-	transport       *raftrpc.Transport
-	scheduler       *groupmembership.Scheduler
-	certificates    *certificateRenewal
-	regional        *regionalFormation
-	liveRepair      *liveRecordRepair
-	repairProgress  *recordrepair.ProgressStore
-	geoRetry        *recordwrite.GeoMetadataRetryStore
-	geoRecordRepair *recordrepair.GeoRecordRepairStore
-	geoRepair       *geoMetadataRepair
-	volumeMigration *volumeMigrationWorker
-	nodeBalance     *nodeBalanceWorker
-	backup          *backupWorker
-	ready           chan struct{}
-	localNode       *rootstate.Node
-	desiredName     string
-	storeRoot       string
+	listener          net.Listener
+	publicListener    net.Listener
+	publicHTTP        *http.Server
+	publicTLS         *tls.Config
+	grpc              *grpc.Server
+	transport         *raftrpc.Transport
+	scheduler         *groupmembership.Scheduler
+	certificates      *certificateRenewal
+	regional          *regionalFormation
+	liveRepair        *liveRecordRepair
+	repairProgress    *recordrepair.ProgressStore
+	geoRetry          *recordwrite.GeoMetadataRetryStore
+	geoRecordRepair   *recordrepair.GeoRecordRepairStore
+	geoRepair         *geoMetadataRepair
+	volumeMigration   *volumeMigrationWorker
+	nodeBalance       *nodeBalanceWorker
+	backup            *backupWorker
+	ready             chan struct{}
+	publicMaintenance func(context.Context)
+	localNode         *rootstate.Node
+	desiredName       string
+	storeRoot         string
 
 	mu        sync.Mutex
 	cancel    context.CancelFunc
@@ -573,8 +583,37 @@ func Open(options Options) (*Server, error) {
 		if liveRepair != nil {
 			repairSnapshot = liveRepair.snapshot
 		}
-		publicHTTP = newPublicHTTPServerWithMonitoring(auth.Verifier{Barrier: runtime, Catalog: runtime.Root}, runtime, ready, repairSnapshot)
-		publicTLS = normalizeServerTLS(options.ServerTLS)
+		configState, err := stateengine.New(localData, configmodule.ModuleID)
+		if err != nil {
+			return fail(err, transport, client)
+		}
+		verifier := auth.Verifier{Barrier: runtime, Catalog: runtime.Root}
+		publicHTTP = newPublicHTTPServerWithConfig(verifier, runtime, ready, repairSnapshot, httpapi.NewConfig(configmodule.New(configState), verifier))
+		publicHTTP.Handler = httpapi.NewGateway(httpapi.GatewayOptions{
+			Legacy: publicHTTP.Handler,
+			Access: auth.AccessVerifier{Barrier: runtime, Catalog: runtime.Root},
+			Commit: func(ctx context.Context, c rootstate.Command) error {
+				return dataServer.rootCommandWithSubmit(ctx, c, rootControlHost.Submit)
+			},
+			Certificate: options.PublicCertificateInfo,
+			Audit: func(action, id, result string) {
+				if options.ReportError != nil {
+					options.ReportError(fmt.Errorf("gateway audit action=%s credential=%s result=%s", action, id, result))
+				}
+			},
+			Info: func(ctx context.Context) (any, error) {
+				var certificate any
+				if options.PublicCertificateInfo != nil {
+					certificate = options.PublicCertificateInfo()
+				}
+				return v1.GatewayInfo{ClusterID: runtime.Identity.ClusterID, NodeID: runtime.Identity.NodeID, APIVersion: "v1", Console: "gateway-shell", BusinessModules: []string{"config"}, Management: "gateway-foundation", ObservedUnix: time.Now().Unix(), Certificate: certificate}, nil
+			},
+		})
+		publicCertificate := options.PublicTLS
+		if publicCertificate == nil {
+			publicCertificate = options.ServerTLS
+		}
+		publicTLS = normalizeServerTLS(publicCertificate)
 		publicTLS.ClientAuth = tls.NoClientCert
 		publicTLS.ClientCAs = nil
 		publicTLS.NextProtos = []string{"http/1.1"}
@@ -582,7 +621,7 @@ func Open(options Options) (*Server, error) {
 	return &Server{Runtime: runtime, GroupClient: client, EngineData: localData, MembershipReconciler: reconciler, NodeRemoval: nodeRemoval,
 		listener: limitListener(options.Listener, internalConnectionLimit), publicListener: limitedPublicListener(options.PublicListener), publicHTTP: publicHTTP, publicTLS: publicTLS,
 		grpc: grpcServer, transport: transport,
-		scheduler: scheduler, certificates: certificates, regional: regional, liveRepair: liveRepair, ready: ready, localNode: localNode,
+		publicMaintenance: options.PublicMaintenance, scheduler: scheduler, certificates: certificates, regional: regional, liveRepair: liveRepair, ready: ready, localNode: localNode,
 		desiredName: func() string {
 			if options.Network != nil {
 				return options.Network.Name
@@ -764,6 +803,10 @@ func (server *Server) Run(ctx context.Context) error {
 // run never closes owned resources. Close first cancels and joins this
 // supervisor and its workers, then releases transport/state/Store ownership.
 func (server *Server) run(runCtx context.Context, cancel context.CancelCauseFunc) error {
+	if server.publicMaintenance != nil {
+		server.workers.Add(1)
+		go func() { defer server.workers.Done(); server.publicMaintenance(runCtx) }()
+	}
 	if server.publicHTTP != nil {
 		server.workers.Add(1)
 		go func() {
@@ -1070,6 +1113,11 @@ func closeListener(listener net.Listener) error {
 }
 
 func validateOptions(options Options) error {
+	if options.PublicTLS != nil && (options.PublicListener == nil ||
+		(len(options.PublicTLS.Certificates) == 0 && options.PublicTLS.GetCertificate == nil) ||
+		(options.PublicTLS.MaxVersion != 0 && options.PublicTLS.MaxVersion < tls.VersionTLS13)) {
+		return errors.New("public TLS requires a public listener, certificate and TLS 1.3 support")
+	}
 	if options.StoreRoot == "" || options.Listener == nil || options.AuthorizePeer == nil ||
 		options.EngineMux == nil || options.TickInterval < 0 || options.MembershipInterval < 0 {
 		return errors.New("server requires StoreRoot, listener, peer authorizer, Engine Mux, and valid intervals")

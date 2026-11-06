@@ -69,14 +69,14 @@ func TestBootstrapInstallsOwnerFenceBeforePublishingRootRoute(t *testing.T) {
 	if err := host.Campaign("data-1"); err != nil {
 		t.Fatal(err)
 	}
-	submitRoot(t, host, rootState, rootstate.Command{Version: 1, RequestID: "group-data", Type: rootstate.RegisterGroup,
+	submitRoot(t, host, rootState, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group-data", Type: rootstate.RegisterGroup,
 		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
-	submitRoot(t, host, rootState, rootstate.Command{Version: 1, RequestID: "tenant-a", Type: rootstate.RegisterTenant,
+	submitRoot(t, host, rootState, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "tenant-a", Type: rootstate.RegisterTenant,
 		Tenant: &rootstate.Tenant{TenantID: "tenant-a"}})
-	submitRoot(t, host, rootState, rootstate.Command{Version: 1, RequestID: "dataset-a", Type: rootstate.CreateDataset,
-		Dataset: &rootstate.Dataset{TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+	submitRoot(t, host, rootState, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "module-a", Type: rootstate.PrepareRange,
+		InitialRange: &rootstate.RangeSeed{TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 			RangeID: "range-a", OwnerGroupID: "data-1"}})
-	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"}
 	if _, found, err := rootState.RouteKeyspace(keyspace, nil); err != nil || found {
 		t.Fatalf("pending Root route = found %v, err %v", found, err)
 	}
@@ -112,8 +112,8 @@ func TestBootstrapInstallsOwnerFenceBeforePublishingRootRoute(t *testing.T) {
 
 	// Simulate a coordinator stopping after the Owner commit but before the
 	// Root activation. Reconcile must discover the durable Fence and continue.
-	submitRoot(t, host, rootState, rootstate.Command{Version: 1, RequestID: "dataset-b", Type: rootstate.CreateDataset,
-		Dataset: &rootstate.Dataset{TenantID: "tenant-a", EngineID: "record", DatasetID: "more",
+	submitRoot(t, host, rootState, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "module-b", Type: rootstate.PrepareRange,
+		InitialRange: &rootstate.RangeSeed{TenantID: "tenant-a", EngineID: "record", ModuleID: "more",
 			RangeID: "range-b", OwnerGroupID: "data-1"}})
 	pending, found, err := rootState.Range("range-b")
 	if err != nil || !found || pending.State != rootstate.RangeStatePending {
@@ -148,7 +148,7 @@ func TestBootstrapInstallsOwnerFenceBeforePublishingRootRoute(t *testing.T) {
 func TestBootstrapRejectsConflictingOwnerFence(t *testing.T) {
 	// The exact mismatch behavior is covered without a second Raft fixture.
 	left := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	right := left
 	right.Epoch = 2
 	if sameRange(left, right) {

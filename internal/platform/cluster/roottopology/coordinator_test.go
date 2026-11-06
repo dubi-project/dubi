@@ -44,7 +44,7 @@ func coordinatorFixture(t *testing.T, view rootjoin.View) (*Coordinator, *testHo
 	}
 	t.Cleanup(func() { _ = root.Close() })
 	for _, node := range view.Peers {
-		cmd, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: fmt.Sprintf("node-%d", node.RaftID), Type: rootstate.RegisterNode, Node: &node})
+		cmd, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: fmt.Sprintf("node-%d", node.RaftID), Type: rootstate.RegisterNode, Node: &node})
 		if err != nil {
 			t.Fatal(err)
 		}

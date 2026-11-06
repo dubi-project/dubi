@@ -54,7 +54,7 @@ func TestAutomaticVolumeBalanceOnIndependentFilesystems(t *testing.T) {
 	}
 	defer store.Close()
 	payload := make([]byte, 8<<20)
-	descriptor, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "state", DatasetID: "items"}, "region-test", []byte("balance"), payload)
+	descriptor, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "state", ModuleID: "items"}, "region-test", []byte("balance"), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestVolumeWorkerContinuesSmallRecordMigrationPages(t *testing.T) {
 	defer store.Close()
 	var descriptors []records.Descriptor
 	for i := 0; i < 12; i++ {
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "state", DatasetID: "items"}, "region-test", []byte(fmt.Sprintf("small-%d", i)), []byte("body"))
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "state", ModuleID: "items"}, "region-test", []byte(fmt.Sprintf("small-%d", i)), []byte("body"))
 		if err != nil {
 			t.Fatal(err)
 		}

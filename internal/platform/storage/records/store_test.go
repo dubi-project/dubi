@@ -200,7 +200,7 @@ func TestRecordIndexSnapshotRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal("snapshot index", err)
 	}
-	if !bytes.Contains(image, []byte(`"version":1`)) {
+	if !bytes.Contains(image, []byte(fmt.Sprintf(`"version":%d`, IndexSnapshotVersion))) {
 		t.Fatal("snapshot image has no version")
 	}
 	if err := s.RestoreIndex(context.Background(), image, func(location pack.Location) (pack.Location, error) {
@@ -605,7 +605,7 @@ func TestRecordIndexRejectsCorruption(t *testing.T) {
 			case "version":
 				e.Version++
 			case "descriptor":
-				e.Descriptor.Keyspace.DatasetID = "other"
+				e.Descriptor.Keyspace.ModuleID = "other"
 			case "store":
 				e.Location.StoreID = "foreign"
 			}

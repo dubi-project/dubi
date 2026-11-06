@@ -1,10 +1,12 @@
 # 本地 Pack 与集合管理
 
+Range 与 Pack 的目标关系见 [数据寻址与隔离](data-addressing.md)：Range 是逻辑区间，Pack 聚合属于不同 Range 的记录；一个 Range 可跨多个 Pack/Volume，不同节点的物理布局无需相同。Range 迁移按记录复制并受 Fence 控制；Pack 整理与跨卷重写只改变本地位置，不改变逻辑归属。
+
 `internal/platform/storage/pack` 提供单 Pack 容器，以及每个 Volume 统一的持久集合管理和自动滚动。它依赖已打开的 Volume Registry，不直接接受磁盘路径，也不提供新的用户配置项。集合管理与带预约的多卷 Pool 已由 Node Runtime 装配并负责关闭，并接入通用 enginestate 大值事务；内置 `record` 能力已经可经 Node 认证的开发验证入口写入，面向租户的公开数据 API 尚未实现。
 
 ## 所有权与接口
 
-每个 Pack 绑定 `StoreID / VolumeID / PackID`，不绑定 Engine。PackID 自动随机生成；一个 Pack 可以混放不同 Engine、Tenant、Dataset 或 Range 的记录，不引入 File 的 Chunk、Block 或 CID。每条记录保存合法非空 EngineID、非空 TenantID、非空不透明 Key 和不透明 Payload；Dataset、Range、逻辑版本及删除语义由能力编码和索引管理。
+每个 Pack 绑定 `StoreID / VolumeID / PackID`，不绑定 Engine。PackID 自动随机生成；一个 Pack 可以混放不同 Engine、Module、Tenant 或 Range 的记录，不引入 File 的 Chunk、Block 或 CID。每条记录保存合法非空 EngineID、非空 TenantID、非空不透明 Key 和不透明 Payload；完整归属由 Runtime 地址和上层记录描述保留；当前 Pack 外层格式仍只有 Engine/Tenant，不能据此宣称 Module 寻址迁移已完成。Range、逻辑版本及删除语义不由 Pack 文件布局决定。
 
 - `Create(registry, volumeID, targetSize)`：在指定活动卷创建 Pack，target 为零使用 512 MiB。
 - `Open(...)`：只打开已有 Pack，验证所有权和已提交记录，恢复未提交尾部；当前需要活动卷。

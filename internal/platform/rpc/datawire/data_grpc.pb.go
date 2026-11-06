@@ -19,36 +19,38 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataService_CreateDataset_FullMethodName        = "/dubi.internal.data.v1.DataService/CreateDataset"
-	DataService_PutRecord_FullMethodName            = "/dubi.internal.data.v1.DataService/PutRecord"
-	DataService_GetRecord_FullMethodName            = "/dubi.internal.data.v1.DataService/GetRecord"
-	DataService_CreateRepository_FullMethodName     = "/dubi.internal.data.v1.DataService/CreateRepository"
-	DataService_UpdateRepository_FullMethodName     = "/dubi.internal.data.v1.DataService/UpdateRepository"
-	DataService_DeleteRepository_FullMethodName     = "/dubi.internal.data.v1.DataService/DeleteRepository"
-	DataService_SetDefaultRepository_FullMethodName = "/dubi.internal.data.v1.DataService/SetDefaultRepository"
-	DataService_ListRepositories_FullMethodName     = "/dubi.internal.data.v1.DataService/ListRepositories"
-	DataService_CreateBackupJob_FullMethodName      = "/dubi.internal.data.v1.DataService/CreateBackupJob"
-	DataService_GetBackupJob_FullMethodName         = "/dubi.internal.data.v1.DataService/GetBackupJob"
-	DataService_ListBackupJobs_FullMethodName       = "/dubi.internal.data.v1.DataService/ListBackupJobs"
-	DataService_ClaimBackupJob_FullMethodName       = "/dubi.internal.data.v1.DataService/ClaimBackupJob"
-	DataService_CompleteBackupJob_FullMethodName    = "/dubi.internal.data.v1.DataService/CompleteBackupJob"
-	DataService_FailBackupJob_FullMethodName        = "/dubi.internal.data.v1.DataService/FailBackupJob"
-	DataService_FinalizeBackupJob_FullMethodName    = "/dubi.internal.data.v1.DataService/FinalizeBackupJob"
-	DataService_CreateTenantToken_FullMethodName    = "/dubi.internal.data.v1.DataService/CreateTenantToken"
-	DataService_RevokeTenantToken_FullMethodName    = "/dubi.internal.data.v1.DataService/RevokeTenantToken"
-	DataService_AddVolume_FullMethodName            = "/dubi.internal.data.v1.DataService/AddVolume"
-	DataService_DrainVolume_FullMethodName          = "/dubi.internal.data.v1.DataService/DrainVolume"
-	DataService_RemoveVolume_FullMethodName         = "/dubi.internal.data.v1.DataService/RemoveVolume"
-	DataService_CompactStore_FullMethodName         = "/dubi.internal.data.v1.DataService/CompactStore"
-	DataService_LocalRepairStatus_FullMethodName    = "/dubi.internal.data.v1.DataService/LocalRepairStatus"
-	DataService_ClusterRepairStatus_FullMethodName  = "/dubi.internal.data.v1.DataService/ClusterRepairStatus"
+	DataService_MutateAccessCredential_FullMethodName = "/dubi.internal.data.v1.DataService/MutateAccessCredential"
+	DataService_CreateTenant_FullMethodName           = "/dubi.internal.data.v1.DataService/CreateTenant"
+	DataService_PutRecord_FullMethodName              = "/dubi.internal.data.v1.DataService/PutRecord"
+	DataService_GetRecord_FullMethodName              = "/dubi.internal.data.v1.DataService/GetRecord"
+	DataService_CreateRepository_FullMethodName       = "/dubi.internal.data.v1.DataService/CreateRepository"
+	DataService_UpdateRepository_FullMethodName       = "/dubi.internal.data.v1.DataService/UpdateRepository"
+	DataService_DeleteRepository_FullMethodName       = "/dubi.internal.data.v1.DataService/DeleteRepository"
+	DataService_SetDefaultRepository_FullMethodName   = "/dubi.internal.data.v1.DataService/SetDefaultRepository"
+	DataService_ListRepositories_FullMethodName       = "/dubi.internal.data.v1.DataService/ListRepositories"
+	DataService_CreateBackupJob_FullMethodName        = "/dubi.internal.data.v1.DataService/CreateBackupJob"
+	DataService_GetBackupJob_FullMethodName           = "/dubi.internal.data.v1.DataService/GetBackupJob"
+	DataService_ListBackupJobs_FullMethodName         = "/dubi.internal.data.v1.DataService/ListBackupJobs"
+	DataService_ClaimBackupJob_FullMethodName         = "/dubi.internal.data.v1.DataService/ClaimBackupJob"
+	DataService_CompleteBackupJob_FullMethodName      = "/dubi.internal.data.v1.DataService/CompleteBackupJob"
+	DataService_FailBackupJob_FullMethodName          = "/dubi.internal.data.v1.DataService/FailBackupJob"
+	DataService_FinalizeBackupJob_FullMethodName      = "/dubi.internal.data.v1.DataService/FinalizeBackupJob"
+	DataService_CreateTenantToken_FullMethodName      = "/dubi.internal.data.v1.DataService/CreateTenantToken"
+	DataService_RevokeTenantToken_FullMethodName      = "/dubi.internal.data.v1.DataService/RevokeTenantToken"
+	DataService_AddVolume_FullMethodName              = "/dubi.internal.data.v1.DataService/AddVolume"
+	DataService_DrainVolume_FullMethodName            = "/dubi.internal.data.v1.DataService/DrainVolume"
+	DataService_RemoveVolume_FullMethodName           = "/dubi.internal.data.v1.DataService/RemoveVolume"
+	DataService_CompactStore_FullMethodName           = "/dubi.internal.data.v1.DataService/CompactStore"
+	DataService_LocalRepairStatus_FullMethodName      = "/dubi.internal.data.v1.DataService/LocalRepairStatus"
+	DataService_ClusterRepairStatus_FullMethodName    = "/dubi.internal.data.v1.DataService/ClusterRepairStatus"
 )
 
 // DataServiceClient is the client API for DataService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DataServiceClient interface {
-	CreateDataset(ctx context.Context, in *CreateDatasetRequest, opts ...grpc.CallOption) (*CreateDatasetResponse, error)
+	MutateAccessCredential(ctx context.Context, in *AccessCredentialRequest, opts ...grpc.CallOption) (*AccessCredentialResponse, error)
+	CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*CreateTenantResponse, error)
 	PutRecord(ctx context.Context, in *PutRecordRequest, opts ...grpc.CallOption) (*PutRecordResponse, error)
 	GetRecord(ctx context.Context, in *GetRecordRequest, opts ...grpc.CallOption) (*GetRecordResponse, error)
 	// Cluster-level backup/recovery Repository administration. These methods
@@ -94,10 +96,20 @@ func NewDataServiceClient(cc grpc.ClientConnInterface) DataServiceClient {
 	return &dataServiceClient{cc}
 }
 
-func (c *dataServiceClient) CreateDataset(ctx context.Context, in *CreateDatasetRequest, opts ...grpc.CallOption) (*CreateDatasetResponse, error) {
+func (c *dataServiceClient) MutateAccessCredential(ctx context.Context, in *AccessCredentialRequest, opts ...grpc.CallOption) (*AccessCredentialResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateDatasetResponse)
-	err := c.cc.Invoke(ctx, DataService_CreateDataset_FullMethodName, in, out, cOpts...)
+	out := new(AccessCredentialResponse)
+	err := c.cc.Invoke(ctx, DataService_MutateAccessCredential_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*CreateTenantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateTenantResponse)
+	err := c.cc.Invoke(ctx, DataService_CreateTenant_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +340,8 @@ func (c *dataServiceClient) ClusterRepairStatus(ctx context.Context, in *LocalRe
 // All implementations must embed UnimplementedDataServiceServer
 // for forward compatibility.
 type DataServiceServer interface {
-	CreateDataset(context.Context, *CreateDatasetRequest) (*CreateDatasetResponse, error)
+	MutateAccessCredential(context.Context, *AccessCredentialRequest) (*AccessCredentialResponse, error)
+	CreateTenant(context.Context, *CreateTenantRequest) (*CreateTenantResponse, error)
 	PutRecord(context.Context, *PutRecordRequest) (*PutRecordResponse, error)
 	GetRecord(context.Context, *GetRecordRequest) (*GetRecordResponse, error)
 	// Cluster-level backup/recovery Repository administration. These methods
@@ -374,8 +387,11 @@ type DataServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDataServiceServer struct{}
 
-func (UnimplementedDataServiceServer) CreateDataset(context.Context, *CreateDatasetRequest) (*CreateDatasetResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateDataset not implemented")
+func (UnimplementedDataServiceServer) MutateAccessCredential(context.Context, *AccessCredentialRequest) (*AccessCredentialResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MutateAccessCredential not implemented")
+}
+func (UnimplementedDataServiceServer) CreateTenant(context.Context, *CreateTenantRequest) (*CreateTenantResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateTenant not implemented")
 }
 func (UnimplementedDataServiceServer) PutRecord(context.Context, *PutRecordRequest) (*PutRecordResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutRecord not implemented")
@@ -464,20 +480,38 @@ func RegisterDataServiceServer(s grpc.ServiceRegistrar, srv DataServiceServer) {
 	s.RegisterService(&DataService_ServiceDesc, srv)
 }
 
-func _DataService_CreateDataset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateDatasetRequest)
+func _DataService_MutateAccessCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AccessCredentialRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(DataServiceServer).CreateDataset(ctx, in)
+		return srv.(DataServiceServer).MutateAccessCredential(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: DataService_CreateDataset_FullMethodName,
+		FullMethod: DataService_MutateAccessCredential_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DataServiceServer).CreateDataset(ctx, req.(*CreateDatasetRequest))
+		return srv.(DataServiceServer).MutateAccessCredential(ctx, req.(*AccessCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_CreateTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).CreateTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_CreateTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).CreateTenant(ctx, req.(*CreateTenantRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -886,8 +920,12 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*DataServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "CreateDataset",
-			Handler:    _DataService_CreateDataset_Handler,
+			MethodName: "MutateAccessCredential",
+			Handler:    _DataService_MutateAccessCredential_Handler,
+		},
+		{
+			MethodName: "CreateTenant",
+			Handler:    _DataService_CreateTenant_Handler,
 		},
 		{
 			MethodName: "PutRecord",

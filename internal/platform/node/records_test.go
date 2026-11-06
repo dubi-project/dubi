@@ -30,7 +30,7 @@ func TestRuntimeRecordsInitializeRestartAndRelease(t *testing.T) {
 	if r.Records == nil {
 		t.Fatal("missing records")
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "dataset"}, "origin-group", []byte("key"), []byte("data"))
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "module"}, "origin-group", []byte("key"), []byte("data"))
 	if err != nil {
 		t.Fatal(err)
 	}

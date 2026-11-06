@@ -555,7 +555,7 @@ func validateRootReadCut(response *raftwire.GroupReadIndexResponse) error {
 func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "existing managed Node store")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	address := flags.String("server", "", "reachable Node RPC address")
 	if err := flags.Parse(args); err != nil {
 		return err

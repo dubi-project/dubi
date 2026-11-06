@@ -291,7 +291,7 @@ func TestSnapshotStatesReturnsDeterministicOpaqueGroupImages(t *testing.T) {
 func activate(t *testing.T, state *enginestate.State, index uint64, rangeID, engineID string) router.Target {
 	t.Helper()
 	descriptor := rootstate.Range{RangeID: rangeID, TenantID: "tenant-a", EngineID: engineID,
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	if err := state.ApplyRange(index, "activate-"+rangeID, descriptor); err != nil {
 		t.Fatal(err)
 	}

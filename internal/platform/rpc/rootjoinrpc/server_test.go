@@ -95,7 +95,7 @@ func handlerFixture(t *testing.T) (*Server, *controlledHost, identity.Identity, 
 	if err := host.Campaign(raft.RootGroupID); err != nil {
 		t.Fatal(err)
 	}
-	command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "register", Type: rootstate.RegisterNode, Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: "127.0.0.1:7443"}})
+	command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "register", Type: rootstate.RegisterNode, Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: "127.0.0.1:7443"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +128,11 @@ func TestRootJoinRPCBoundsCancellationAndTransientErrors(t *testing.T) {
 	h.mode.Store(1)
 	ctx, cancel := context.WithCancel(nodeContext(context.Background(), leaf, ca))
 	defer cancel()
-	results := make(chan error, 4)
-	for range 4 {
+	results := make(chan error, maxConcurrentDiscoveries)
+	for range maxConcurrentDiscoveries {
 		go func() { _, err := s.DiscoverRoot(ctx, request); results <- err }()
 	}
-	for range 4 {
+	for range maxConcurrentDiscoveries {
 		select {
 		case <-h.entered:
 		case <-time.After(5 * time.Second):
@@ -152,8 +152,17 @@ func TestRootJoinRPCBoundsCancellationAndTransientErrors(t *testing.T) {
 	if !foundRetry {
 		t.Fatal("missing retry guidance", err)
 	}
+	// Full discovery occupancy must not consume membership admission slots.
+	_, releaseJoin, joinErr := s.acquire(ctx, 1)
+	if joinErr != nil {
+		t.Fatal("discovery starved membership admission", joinErr)
+	}
+	releaseJoin()
+	if _, err := s.JoinRoot(ctx, &rootjoinwire.JoinRootRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatal("join handler blocked by discovery traffic", err)
+	}
 	cancel()
-	for range 4 {
+	for range maxConcurrentDiscoveries {
 		select {
 		case err := <-results:
 			if status.Code(err) != codes.Canceled {
@@ -163,7 +172,7 @@ func TestRootJoinRPCBoundsCancellationAndTransientErrors(t *testing.T) {
 			t.Fatal("cancelled call leaked slot")
 		}
 	}
-	if len(s.slots) != 0 {
+	if len(s.discoverySlots) != 0 {
 		t.Fatal("admission slots leaked")
 	}
 	ctx = nodeContext(context.Background(), leaf, ca)
@@ -271,5 +280,26 @@ func TestRootJoinRPCFollowerRedirectDoesNotPropose(t *testing.T) {
 	}
 	if _, err := s.JoinRoot(nodeContext(context.Background(), leaf, ca), &rootjoinwire.JoinRootRequest{ClusterId: s.clusterID, GrantId: "join_00000000000000000000000000000001", RequestDocument: append(document, '\n')}); status.Code(err) != codes.InvalidArgument {
 		t.Fatal("noncanonical request accepted", err)
+	}
+}
+
+func TestDiscoveryRemainsAvailableWhileMembershipAdmissionIsFull(t *testing.T) {
+	s, _, id, leaf, ca := handlerFixture(t)
+	ctx := nodeContext(context.Background(), leaf, ca)
+	for range maxConcurrentRequests {
+		_, release, err := s.acquire(ctx, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+	}
+	if _, _, err := s.acquire(ctx, 1); status.Code(err) != codes.ResourceExhausted {
+		t.Fatal("join bound missing", err)
+	}
+	if _, err := s.DiscoverRoot(ctx, &rootjoinwire.DiscoverRootRequest{ClusterId: id.ClusterID, FromRaftId: id.RaftID}); err != nil {
+		t.Fatal("join admission blocked discovery", err)
+	}
+	if len(s.discoverySlots) != 0 {
+		t.Fatal("discovery slot leaked")
 	}
 }

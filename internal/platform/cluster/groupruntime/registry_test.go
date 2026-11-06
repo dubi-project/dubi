@@ -36,7 +36,7 @@ func TestRegistryConstructsStateFromPersistentKindAfterRootBarrier(t *testing.T)
 		t.Fatal(err)
 	}
 	defer root.Close()
-	applyRegistryRoot(t, root, 1, rootstate.Command{Version: 1, RequestID: "group-data",
+	applyRegistryRoot(t, root, 1, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group-data",
 		Type: rootstate.RegisterGroup, Group: &rootstate.Group{
 			GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
 	barrier := &registryBarrier{}
@@ -70,7 +70,7 @@ func TestRegistryFailsClosedForStaleRootOrUnknownKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	applyRegistryRoot(t, root, 1, rootstate.Command{Version: 1, RequestID: "group-special",
+	applyRegistryRoot(t, root, 1, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group-special",
 		Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "special-1", StateKind: "special"}})
 	barrier := &registryBarrier{err: errors.New("no Root quorum")}
 	registry, _ := New(root, barrier)

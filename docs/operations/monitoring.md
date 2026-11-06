@@ -43,3 +43,22 @@ curl --cacert <cluster-ca.pem> https://127.0.0.1:7444/metrics
 - 保留至少 14 天，以便分析节点故障、磁盘压力和迁移趋势。
 - Prometheus 只读访问；禁止告警系统直接调用 DUBI 的破坏性管理命令。
 - 每个 scrape target 添加 `cluster`、`region`、`node_name`、`node_id` 标签（可用 Prometheus 静态标签或 relabel 配置完成）。
+
+## Go 内存指标
+
+现有 `/metrics` 同时提供下列进程级指标；不依赖 Runtime 已完成启动，不增加诊断端口，不暴露堆内容，不强制 GC：
+
+| 指标 | 含义 |
+| --- | --- |
+| `dubi_go_heap_objects_bytes` | 当前已分配对象，包含尚未回收的垃圾 |
+| `dubi_go_heap_live_bytes` | 最近一次 GC 标记的存活对象 |
+| `dubi_go_heap_goal_bytes` | 下次 GC 的堆目标 |
+| `dubi_go_heap_free_bytes` | 保留供复用的空闲堆页 |
+| `dubi_go_heap_released_bytes` | 已归还操作系统的堆页 |
+| `dubi_go_memory_total_bytes` | Go 映射总量，包含已释放页；不是 RSS |
+| `dubi_go_memory_limit_bytes` | Go 软内存上限；不是 RSS 硬限制 |
+| `dubi_go_heap_allocated_bytes_total` | 进程启动以来累计堆分配字节，counter |
+| `dubi_go_gc_cycles_total` | 累计 GC 次数，counter |
+| `dubi_go_goroutines` | 当前 goroutine 数 |
+
+其余项为 gauge。累计分配量持续增加不等于内存泄漏；应对照存活堆、GC、流量和主机进程 RSS。运行时不支持的指标不输出，不伪报为零。

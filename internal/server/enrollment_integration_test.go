@@ -105,7 +105,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("Server did not become ready")
 	}
-	command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "register-enrollment-issuer", Type: rootstate.RegisterNode,
+	command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "register-enrollment-issuer", Type: rootstate.RegisterNode,
 		Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: listener.Addr().String()}})
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 	}
 	// Simulate a client disappearing after its authenticated durable intent.
 	// The formal Server scheduler must finish it without another client call.
-	startCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "interrupted-root-join", Type: rootstate.BeginRootJoin,
+	startCommand, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "interrupted-root-join", Type: rootstate.BeginRootJoin,
 		RootJoinStart: &rootstate.RootJoinStart{GrantID: ticket.GrantID(), Request: request}})
 	if err != nil {
 		t.Fatal(err)
@@ -312,7 +312,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 	var sourceHoldings []records.Holding
 	for _, engine := range []string{"file", "cache", "message", "search"} {
 		payload := []byte("opaque/" + engine)
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "holding-" + engine, EngineID: engine, DatasetID: "items"}, "origin-not-hosted", []byte("key"), payload)
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "holding-" + engine, EngineID: engine, ModuleID: "items"}, "origin-not-hosted", []byte("key"), payload)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -423,7 +423,7 @@ func TestManagedEnrollmentServerIssuesLeafThroughRoot(t *testing.T) {
 	}
 	// Confirm a fresh Root command reaches the restarted learner through its
 	// normal Raft transport, not merely a cached admission response.
-	encoded, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "after-learner-restart", Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: "after-restart"}})
+	encoded, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "after-learner-restart", Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: "after-restart"}})
 	if err != nil {
 		t.Fatal(err)
 	}

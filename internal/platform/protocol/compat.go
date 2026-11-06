@@ -7,13 +7,13 @@ package protocol
 import "errors"
 
 const (
-	CurrentVersion = 1
-	MinimumVersion = 1
+	CurrentVersion = 2
+	MinimumVersion = 2
 
-	EngineStateFormatVersion   = 7
+	EngineStateFormatVersion   = 8
 	PackContainerFormatVersion = 2
 	PackCatalogFormatVersion   = 2
-	RecordIndexFormatVersion   = 1
+	RecordIndexFormatVersion   = 2
 )
 
 type Advertisement struct {

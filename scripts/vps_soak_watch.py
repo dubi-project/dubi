@@ -115,7 +115,7 @@ class Watch:
         for index in sorted(set(indices)):
             row = eligible[index]
             iteration = int(row['iteration'])
-            fixture = {'status': status, 'tenant': c['tenant'], 'dataset': c['dataset'],
+            fixture = {'status': status, 'tenant': c['tenant'],
                        'key': f"soak-{info['key_epoch']}-{iteration}",
                        'value': f"dubi-cross-region-soak:{info['key_epoch']}:{iteration}",
                        'owner_group_id': c['owner_group_id']}
@@ -165,7 +165,7 @@ class Watch:
                     time.sleep(1)
                     continue
                 info = dict(line.split('=', 1) for line in info_path.read_text().splitlines() if '=' in line)
-                if any(info.get(k) != self.config[k] for k in ('store', 'tenant', 'dataset')):
+                if any(info.get(k) != self.config[k] for k in ('store', 'tenant')):
                     raise RuntimeError('workload identity or Keyspace differs from the accepted configuration')
                 self.verify_binaries()
                 with (self.run_dir / 'metrics.tsv').open() as stream:
@@ -236,7 +236,7 @@ def start_workload(watch):
     if fingerprint(status) != c['topology_sha256']:
         raise RuntimeError('topology changed after acceptance')
     env = {**os.environ, 'DUBI_BINARY': c.get('binary', '/usr/local/bin/dubi'), 'DUBI_STORE': c['store'],
-           'DUBI_SOAK_TENANT': c['tenant'], 'DUBI_SOAK_DATASET': c['dataset'],
+           'DUBI_SOAK_TENANT': c['tenant'],
            'DUBI_SOAK_DURATION_SECONDS': '21600', 'DUBI_SOAK_INTERVAL_SECONDS': '30',
            'DUBI_SOAK_STATUS_INTERVAL_SECONDS': '90', 'DUBI_SOAK_ALLOW_GEO_DEGRADED': '1',
            'DUBI_SOAK_MAX_ITERATIONS': '0', 'DUBI_SOAK_DIR': c['run_dir'],

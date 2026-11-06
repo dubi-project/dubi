@@ -24,7 +24,7 @@ import (
 
 func localGeoHintFixture(t *testing.T) recordwrite.LocalWrite {
 	t.Helper()
-	descriptor, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "documents"},
+	descriptor, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "documents"},
 		"region-west", []byte("document"), []byte("opaque engine bytes"))
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestIncompleteEngineDataEntryFailsClosed(t *testing.T) {
 	if service, err := New(nil, nil); err == nil || service != nil {
 		t.Fatal("incomplete Node constructed a engine data entry", service, err)
 	}
-	space := rootstate.Keyspace{TenantID: "tenant", EngineID: "example", DatasetID: "data"}
+	space := rootstate.Keyspace{TenantID: "tenant", EngineID: "example", ModuleID: "data"}
 	var incomplete Service
 	if result, err := incomplete.WriteLocal(context.Background(), WriteRequest{Keyspace: space,
 		Key: []byte("key"), Publish: func(records.Descriptor) ([]byte, error) { return nil, nil }}); err == nil || result.State != WriteUnknown {

@@ -1,5 +1,7 @@
 # 流式 Raft 快照实施记录
 
+寻址实现已更新为 Tenant + Module + Engine 的可信绑定，独立 Dataset 已移除；详见 [数据寻址与隔离](data-addressing.md)。当前 Root/Routed Command 为 v2、Engine 为 v8、Records 索引为 v2；下文涉及旧版本的演进记录保留历史含义，不能据此打开旧数据目录。
+
 成员移除后，当前 Group epoch 可以高于上一代已确认 cohort；历史 cohort 仍保持原节点集合和确认分母。Root 快照校验须覆盖这个正常切点，以及后续增长已授权、已完成但尚未确认新 cohort 的切点。在同一固定视图中逐 epoch 查找已完成的 Maintenance GroupChange，核对成员减少、既有角色和多数约束，再衔接已有 RegionGrowth 的 BaseMembers；缺失、重复或不匹配的历史记录仍拒绝。扫描逐条解码，不把整个成员历史加载到内存，不修改历史 cohort 或增加恢复状态机。
 
 目标：参考 Byfile 的“持久分段文件 + 小型 Raft 引用 + 流式接收 + 校验后恢复”机制，支持大状态，并保持模块数据格式不透明。这是 Raft Group 的快照追赶和状态机恢复机制，不是 Cluster Backup/Restore；它不负责集群级资源清单或灾难恢复。
@@ -68,7 +70,7 @@ Raft Group 提供可选 `SnapshotPreparer`：在 Group 锁内快速固定 index/
 
 ## 当前已实现：Root 文件快照与目录校验
 
-`rootstate.PrepareSnapshotTo/RestoreFrom` 与 engine 共用有序流、持久 artifact 及私有 staging 组件。Root 使用 `rootstate-v1` 格式；固定 index/conf 后锁外输出，恢复前完整核验文件，并用同一 staging 视图的点查验证 Node/NodeID、Group 成员、成员变更/活动任务、Tenant/Dataset/Range/RangeID 的双向关联及请求结果。未知命名空间、无效 JSON、错归属和缺关联均在修改原状态前拒绝。OwnerFenceIndex 属于数据 Group，不错误地用 Root index 限制它。
+`rootstate.PrepareSnapshotTo/RestoreFrom` 与 engine 共用有序流、持久 artifact 及私有 staging 组件。Root 使用 `rootstate-v2` 格式；固定 index/conf 后锁外输出，恢复前完整核验文件，并用同一 staging 视图的点查验证 Node/NodeID、Group 成员、成员变更/活动任务、Tenant、Range/RangeID 的归属与双向关联及请求结果。未知命名空间、无效 JSON、错归属和缺关联均在修改原状态前拒绝。OwnerFenceIndex 属于数据 Group，不错误地用 Root index 限制它。
 
 安装同样采用持久恢复屏障、约 1 MiB 批次及最终 Sync；恢复中断后正常接口拒绝服务，重开报告 applied=0，仅允许同一引用及 Conf 重放。Root 不包含物理 Pack 位置，也不增加运维配置。旧独立 State 的内联格式继续保留；新文件格式不能交给不支持它的旧二进制。
 

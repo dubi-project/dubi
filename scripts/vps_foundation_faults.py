@@ -111,10 +111,12 @@ class Scenario:
         raise RuntimeError(f"{label} timed out: {last}")
 
     def write(self, key, server=None):
-        fixture = {"tenant": self.tenant, "dataset": "probe", "key": key,
+        fixture = {"tenant": self.tenant, "key": key,
                    "value": f"dubi-vps-fault:{self.plan['run_id']}:{key}", "owner_group_id": self.group}
-        response = self.cli(self.entry, ["record", "put"], (self.tenant, "probe", key, fixture["value"]),
+        response = self.cli(self.entry, ["record", "put"], (self.tenant, key, fixture["value"]),
                             server=server, request_id="fault-" + self.plan["run_id"] + "-" + key)
+        self.group = response["owner_group_id"]
+        fixture["owner_group_id"] = self.group
         self.fixtures.append(fixture)
         self.assertion("write-" + key, response=response)
         return fixture, response
@@ -137,7 +139,7 @@ class Scenario:
 
     def reads(self, server=None):
         for fixture in self.fixtures:
-            result = self.cli(self.entry, ["record", "get"], (self.tenant, "probe", fixture["key"]), server=server)
+            result = self.cli(self.entry, ["record", "get"], (self.tenant, fixture["key"]), server=server)
             if result.get("found") is not True or base64.b64decode(result["value"]) != fixture["value"].encode():
                 raise ValueError("read returned different bytes")
         self.assertion("logical-reads", server=server or self.entry["address"])
@@ -235,9 +237,9 @@ class Scenario:
         self.fleet.copy(self.plan["probe"], self.entry["host"], self.work + "/holding-probe")
         self.fleet.request(self.entry["host"], "stage-check", expected=self.entry,
                            staged=self.work + "/holding-probe", sha256=self.plan["probe_sha256"])
-        response = self.cli(self.entry, ["dataset", "create"], (self.tenant, "probe"),
-                            server=self.target["address"], request_id="fault-dataset-" + self.plan["run_id"])
-        self.group = response["owner_group_id"]
+        self.cli(self.entry, ["tenant", "create"], (self.tenant,),
+                            server=self.target["address"], request_id="fault-tenant-" + self.plan["run_id"])
+        self.group = ""
         fixture, _ = self.write("before", self.target["address"])
         # Fixture warm-up is preparation only. After the fault no target reads
         # or fetches are allowed until a physical holding has been observed.

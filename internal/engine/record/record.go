@@ -12,6 +12,10 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 )
 
+// ModuleID identifies only the built-in development probe. Other Modules may
+// reuse this Engine with their own server-side binding.
+const ModuleID = "record"
+
 const EngineID = "record"
 
 const (

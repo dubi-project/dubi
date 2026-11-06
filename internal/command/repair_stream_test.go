@@ -118,7 +118,7 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	space := rootstate.Keyspace{TenantID: "stream-repair", EngineID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "stream-repair", EngineID: "data-alpha", ModuleID: "shared"}
 	tenant, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
 		RequestID: "stream-repair-tenant", Type: rootstate.RegisterTenant,
 		Tenant: &rootstate.Tenant{TenantID: space.TenantID}})
@@ -143,7 +143,7 @@ func TestManagedRepairRecoversAfterMidStreamSourceDisconnect(t *testing.T) {
 			break
 		}
 	}
-	activateEngineTestDataset(t, ctx, first, group, space)
+	activateEngineTestRange(t, ctx, first, group, space)
 	routes, err := router.New(first.Runtime.Host, first.Runtime.Root)
 	if err != nil {
 		t.Fatal(err)

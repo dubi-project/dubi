@@ -19,6 +19,9 @@ import (
 
 const DefaultListen = "0.0.0.0:7443"
 
+// DefaultStore returns the Node metadata directory, not a placement resource.
+// Initial volume registration uses <store>/volume only when no volumes are
+// specified; subsequent opens recover the registered set without recreating it.
 func DefaultStore() string {
 	if value := strings.TrimSpace(os.Getenv("DUBI_STORE")); value != "" {
 		return value

@@ -89,9 +89,9 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 	}
 	Trace(ctx, "read.pack_read_or_fetch", phaseStarted)
 	phaseStarted = time.Now()
-	verified, err := observeCommittedLocal(ctx, r.Barrier, r.Root, r.Owner, r.LocalID, r.LocalNodeID,
+	verified, err := observeCommitted(ctx, r.Barrier, r.Root, r.Owner, r.LocalID, r.LocalNodeID,
 		r.Store, r.Observer, target, ref.Descriptor, ref.RequestID, ref.Index,
-		receipt.RequestID, receipt.Claim)
+		receipt.RequestID, receipt.Claim, true)
 	Trace(ctx, "read.initial_majority_check", phaseStarted)
 	if err != nil {
 		if errors.Is(err, errStaleLocalCohort) && r.RefreshLocal != nil {
@@ -109,8 +109,9 @@ func (r Reader) ReadLocal(ctx context.Context, target router.Target, key []byte)
 		return LocalRead{}, err
 	}
 	// The remote fetch or local Pack read may overlap an Owner overwrite or a
-	// Region transition. The preceding full check established physical
-	// majority; recheck logical currentness without repeating remote holding IO.
+	// Region transition. The preceding observation established physical
+	// majority; now check logical currentness and the fresh Root plan together.
+	// The provisional observation cannot authorize bytes without this final gate.
 	phaseStarted = time.Now()
 	finalPlan, err := CheckReadCurrent(ctx, r.Barrier, r.Root, r.Owner, target, ref,
 		receipt.RequestID, receipt.Claim, verified.Plan)

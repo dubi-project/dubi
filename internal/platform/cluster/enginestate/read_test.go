@@ -40,7 +40,7 @@ func prepareReadableState(t *testing.T) (*State, router.Target) {
 		t.Fatal(err)
 	}
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	if err := state.ApplyRange(1, "activate-a", descriptor); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestQueryRoutedDelegatesOpaqueReadPayload(t *testing.T) {
 	}
 	defer state.Close()
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	if err := state.ApplyRange(1, "activate-a", descriptor); err != nil {
 		t.Fatal(err)
 	}

@@ -32,7 +32,7 @@ func TestLiveRepairKeepsGeoDebtAfterLocalRecovery(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = ledger.Close() })
 			makeReference := func(key string) enginestate.RecordReference {
-				descriptor, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"},
+				descriptor, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"},
 					"region-west", []byte(key), []byte("body"))
 				if err != nil {
 					t.Fatal(err)

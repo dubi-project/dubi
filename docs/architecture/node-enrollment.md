@@ -68,7 +68,7 @@ TLS 的 VerifiedChains 是握手时的验证结果，不是无限期授权。普
 
 服务端最多同时处理 4 个 enrollment/management 调用，每调用 30 秒上下文上限；请求协议体最多 32 KiB、CSR 文档最多 16 KiB、proof 最多 4 KiB。忙时立即返回 ResourceExhausted 和 RetryInfo，取消释放槽。磁盘压力沿用底座 ResourceExhausted/RetryInfo；Root 不可用返回 Unavailable，不伪装成永久权限拒绝；无效/撤销/已被不同请求绑定的凭证返回 PermissionDenied。对外不回显 secret、CSR 或内部 Root 命令。
 
-Root Join/Discover 共用另外 4 个处理槽，每调用 30 秒，请求最多 32 KiB/CSR 16 KiB，响应最多 4 MiB/4096 个成员。这是单次发现协议的资源上限，不是用户副本数；超限拒绝返回，不截断成员、更不缩小 quorum。客户端不把 resolver URI 或 wildcard 地址当作拨号目标。错误分类同样区分权限拒绝、待重试不可用、磁盘压力和成员已移除。
+Root Join 保留独立 4 个处理槽，DiscoverRoot 使用独立 8 个处理槽，与数据入口的 8 个处理槽规模一致；两类不互相占槽，不新增等待队列。每调用仍为 30 秒，请求最多 32 KiB/CSR 16 KiB，响应最多 4 MiB/4096 个成员。这是单次发现协议的资源上限，不是用户副本数；超限拒绝返回，不截断成员、更不缩小 quorum。客户端不把 resolver URI 或 wildcard 地址当作拨号目标。错误分类同样区分权限拒绝、待重试不可用、磁盘压力和成员已移除。
 
 Issuer、CSR advertise 和成员发现共用可拨号地址校验：拒绝 wildcard/multicast、零端口/非规范端口、URI/path/userinfo、带 zone 的非通用地址及过长 DNS 名称。Prepare 在创建 Store/身份前拒绝；网络 Enroll 在消费 grant、登记 Node 前拒绝，失败不会花掉凭证。此检查不解析 DNS，也不保证实际路由可达；跨主机连通性仍需正式加入流程确认。
 

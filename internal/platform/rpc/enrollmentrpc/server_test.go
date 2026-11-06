@@ -88,7 +88,7 @@ func newNetworkFixtureWithInterceptor(t *testing.T, wrap func(enrollment.Host) e
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	address := listener.Addr().String()
-	command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "register-network-issuer", Type: rootstate.RegisterNode,
+	command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "register-network-issuer", Type: rootstate.RegisterNode,
 		Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: address}})
 	if err != nil {
 		t.Fatal(err)

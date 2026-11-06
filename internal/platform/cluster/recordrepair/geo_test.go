@@ -47,7 +47,7 @@ func TestRepairSelectedTargetsWritesOnlyConfirmedGeoTargets(t *testing.T) {
 			east = region
 		}
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"region-west", []byte("geo-key"), []byte("geo-body"))
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestRepairSelectedTargetsUsesLocalStoreForSelfTarget(t *testing.T) {
 			east = region
 		}
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("geo-local-key"), []byte("geo-local-body"))
 	if err != nil {
 		t.Fatal(err)

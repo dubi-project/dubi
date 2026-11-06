@@ -558,11 +558,11 @@ func commandHash(kind, requestID string, value any, payload []byte) string {
 
 func fenceRangeKey(rangeID string) []byte { return []byte("data/fence/range/" + rangeID) }
 func fenceKeyspaceKey(value rootstate.Keyspace) []byte {
-	return []byte("data/fence/keyspace/" + value.TenantID + "/" + value.EngineID + "/" + value.DatasetID)
+	return []byte("data/fence/keyspace/" + value.TenantID + "/" + value.ModuleID + "/" + value.EngineID)
 }
 func engineKey(keyspace rootstate.Keyspace, key []byte) []byte {
 	// Identity components cannot contain '/' and the final key is opaque.
-	prefix := []byte("data/keyspace/" + keyspace.TenantID + "/" + keyspace.EngineID + "/" + keyspace.DatasetID + "/")
+	prefix := []byte("data/keyspace/" + keyspace.TenantID + "/" + keyspace.ModuleID + "/" + keyspace.EngineID + "/")
 	return append(prefix, key...)
 }
 func resultKey(requestID string) []byte { return []byte("result/" + requestID) }

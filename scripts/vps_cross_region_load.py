@@ -71,7 +71,6 @@ def main() -> int:
     parser.add_argument("--binary", default="/usr/local/bin/dubi")
     parser.add_argument("--store", default="/var/lib/dubi-lab6-ready")
     parser.add_argument("--tenant", default="rootread")
-    parser.add_argument("--dataset", default="smoke")
     parser.add_argument("--stages", default="1:120,2:180,4:180,8:180", type=parse_stages)
     parser.add_argument("--run-dir", default="")
     parser.add_argument("--rpc-timeout", type=int, default=45)
@@ -89,7 +88,7 @@ def main() -> int:
     metrics_path.write_text("utc\tstage\tworker\toperation\ttarget\telapsed_ms\tresult\n", encoding="utf-8")
     resources_path.write_text("utc\tstage\tconcurrency\tmem_available_mb\tload1\n", encoding="utf-8")
     (run_dir / "run.info").write_text(
-        f"started_utc={utc_now()}\nstore={args.store}\ntenant={args.tenant}\ndataset={args.dataset}\nstages={args.stages}\n",
+        f"started_utc={utc_now()}\nstore={args.store}\ntenant={args.tenant}\nstages={args.stages}\n",
         encoding="utf-8",
     )
 
@@ -142,7 +141,7 @@ def main() -> int:
             value = f"dubi-load:{run_id}:{stage}:{worker}:{iteration}"
             request_id = f"load-{run_id}-{stage}-{worker}-{iteration}"
             put_cmd = [binary, "record", "put", "--store", args.store, "--request-id", request_id,
-                       args.tenant, args.dataset, key, value]
+                       args.tenant, key, value]
             code, _, stderr, ms = run_command(put_cmd, args.rpc_timeout)
             record(stage, worker, "put", "local", ms, "ok" if code == 0 else stderr.strip()[:1000] or f"exit={code}")
             if code != 0 or stop.is_set():
@@ -152,7 +151,7 @@ def main() -> int:
                 get_cmd = [binary, "record", "get", "--store", args.store]
                 if server:
                     get_cmd += ["--server", server]
-                get_cmd += [args.tenant, args.dataset, key]
+                get_cmd += [args.tenant, key]
                 code, output, stderr, ms = run_command(get_cmd, args.rpc_timeout)
                 result = "ok"
                 if code == 0:

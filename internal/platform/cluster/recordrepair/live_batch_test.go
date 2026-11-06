@@ -113,7 +113,7 @@ func liveBatchFixture(t *testing.T, count, payloadBytes int, relocate bool) (*re
 	refs := make([]enginestate.RecordReference, count)
 	for i := range refs {
 		body := bytes.Repeat([]byte{byte(i + 1)}, payloadBytes)
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}, "origin", []byte(fmt.Sprintf("row-%03d", i)), body)
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"}, "origin", []byte(fmt.Sprintf("row-%03d", i)), body)
 		if err != nil {
 			t.Fatal(err)
 		}

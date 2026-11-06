@@ -74,7 +74,7 @@ func BuildRestoreIdentityMap(encoded []byte, destination []Node) (RestoreIdentit
 
 // RewriteSnapshotForRestore rewrites a Root snapshot's identity-bearing
 // fields and replaces its Raft membership with the new cluster membership.
-// Logical datasets, Groups, Ranges and Repository records remain unchanged.
+// Logical addresses, Groups, Ranges and Repository records remain unchanged.
 // The destination State.Restore call performs the complete semantic snapshot
 // validation before publishing the rewritten image.
 func RewriteSnapshotForRestore(encoded []byte, mapping RestoreIdentityMap, conf *raftpb.ConfState) ([]byte, error) {

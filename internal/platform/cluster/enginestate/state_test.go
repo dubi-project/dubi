@@ -139,7 +139,7 @@ func TestEngineStateAtomicallyFencesAndAppliesMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	activation, err := routedstate.EncodeActivateRange("activate-a", descriptor)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestEngineStateDiscardsRejectedWritesAndDeduplicates(t *testing.T) {
 	}
 	defer state.Close()
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	if err := state.ApplyRange(1, "activate-a", descriptor); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestEngineStateSnapshotRestoresFenceDataAndResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	if err := source.ApplyRange(2, "activate-a", descriptor); err != nil {
 		t.Fatal(err)
 	}

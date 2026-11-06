@@ -40,6 +40,58 @@ func New(host Host, root *rootstate.State) (*Coordinator, error) {
 	return &Coordinator{host: host, root: root}, nil
 }
 
+// EnsureInitial lets a first writer finish the existing placement publication
+// without waiting for the leader's periodic reconciliation. Any authenticated
+// Node may propose; Root Apply still validates the active Range and cohorts.
+// Existing placements are never refreshed or expanded by this path.
+func (c *Coordinator) EnsureInitial(ctx context.Context, rangeID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := c.host.ReadIndex(ctx, raft.RootGroupID); err != nil {
+		return err
+	}
+	r, found, err := c.root.Range(rangeID)
+	if err != nil {
+		return err
+	}
+	if !found || r.State != rootstate.RangeStateActive {
+		return errors.New("initial placement requires an active Range")
+	}
+	if prior, found, err := c.root.RangePlacement(rangeID); err != nil {
+		return err
+	} else if found {
+		if prior.RangeEpoch != r.Epoch || prior.OwnerGroupID != r.OwnerGroupID {
+			return errors.New("existing placement differs from active Range")
+		}
+		return nil
+	}
+	groups, err := c.root.Groups()
+	if err != nil {
+		return err
+	}
+	var progress []rootstate.RegionProgress
+	for _, group := range groups {
+		if group.GroupID == raft.RootGroupID || group.StateKind != rootstate.GroupStateEngine {
+			continue
+		}
+		view, found, err := c.root.RegionProgress(group.GroupID)
+		if err != nil {
+			return err
+		}
+		if found {
+			progress = append(progress, view)
+		}
+	}
+	placement, err := PlanRange(r, progress)
+	if err != nil {
+		// Formation/growth remains a background responsibility. The caller
+		// continues its bounded wait, without weakening cohort eligibility.
+		return nil
+	}
+	return c.publish(ctx, placement)
+}
+
 // PlanRange derives a placement only from stable, confirmed Region views.
 // The supplied progress set is expected to come from one Root applied cut.
 func PlanRange(r rootstate.Range, progress []rootstate.RegionProgress) (rootstate.RangePlacement, error) {

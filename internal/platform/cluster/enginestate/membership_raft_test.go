@@ -41,7 +41,7 @@ func TestMembershipCutRaftRejectsABAAfterReopenWithoutRejectingOrdinaryWrites(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	activation, err := routedstate.EncodeActivateRange("range", rootstate.Range{RangeID: "r", TenantID: "tenant", EngineID: "record", DatasetID: "data", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive})
+	activation, err := routedstate.EncodeActivateRange("range", rootstate.Range{RangeID: "r", TenantID: "tenant", EngineID: "record", ModuleID: "data", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive})
 	if err != nil {
 		t.Fatal(err)
 	}

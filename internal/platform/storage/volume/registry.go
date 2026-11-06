@@ -45,6 +45,8 @@ type owner struct {
 	Version int    `json:"version"`
 	NodeID  string `json:"node_id"`
 	RaftID  uint64 `json:"raft_id"`
+	// StoreID identifies this Node's durable storage instance. It is not an
+	// independently managed placement target or a per-Volume identity.
 	StoreID string `json:"store_id"`
 }
 

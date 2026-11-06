@@ -150,7 +150,7 @@ func publishedFixture(t *testing.T) (*testRoot, router.Target, records.Descripto
 	}
 	t.Cleanup(func() { _ = owner.Close() })
 	rangeDescriptor := rootstate.Range{RangeID: target.RangeID, TenantID: target.Keyspace.TenantID,
-		EngineID: target.Keyspace.EngineID, DatasetID: target.Keyspace.DatasetID,
+		EngineID: target.Keyspace.EngineID, ModuleID: target.Keyspace.ModuleID,
 		OwnerGroupID: target.OwnerGroupID, Epoch: target.Epoch, State: rootstate.RangeStateActive}
 	if err := owner.ApplyRange(1, "activate", rangeDescriptor); err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func readCurrentFixture(t *testing.T) (*testRoot, router.Target, enginestate.Rec
 		t.Fatal(err)
 	}
 	rangeDescriptor := rootstate.Range{RangeID: target.RangeID, TenantID: target.Keyspace.TenantID,
-		EngineID: target.Keyspace.EngineID, DatasetID: target.Keyspace.DatasetID,
+		EngineID: target.Keyspace.EngineID, ModuleID: target.Keyspace.ModuleID,
 		OwnerGroupID: target.OwnerGroupID, Epoch: target.Epoch, State: rootstate.RangeStateActive}
 	if err := owner.ApplyRange(2, "activate", rangeDescriptor); err != nil {
 		t.Fatal(err)

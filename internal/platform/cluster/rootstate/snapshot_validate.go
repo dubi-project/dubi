@@ -239,6 +239,17 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 		if decodeStreamJSON(value, &tenant) != nil || !validID(tenant.TenantID) || !bytes.Equal(key, tenantKey(tenant.TenantID)) {
 			return bad()
 		}
+	case strings.HasPrefix(name, "data/access-credential/"):
+		var credential AccessCredential
+		if decodeStreamJSON(value, &credential) != nil || credential.Validate() != nil || credential.RevokedIndex > index || !bytes.Equal(key, accessCredentialKey(credential.CredentialID)) {
+			return bad()
+		}
+		if credential.ParentID != "" {
+			var parent AccessCredential
+			if streamJSON(view, accessCredentialKey(credential.ParentID), &parent) != nil || parent.Role != "admin" || parent.ParentID != "" || credential.ExpiresUnix > parent.ExpiresUnix {
+				return bad()
+			}
+		}
 	case strings.HasPrefix(name, "data/tenant-credential/"):
 		var credential TenantCredential
 		if decodeStreamJSON(value, &credential) != nil || credential.Validate() != nil ||
@@ -278,21 +289,6 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 		if streamJSON(view, repositoryKey(string(value)), &configured) != nil || configured.Name != string(value) || configured.Validate() != nil {
 			return bad()
 		}
-	case strings.HasPrefix(name, "data/dataset/"):
-		var dataset Dataset
-		if decodeStreamJSON(value, &dataset) != nil || !bytes.Equal(key, datasetKey(dataset)) ||
-			(Command{Version: FormatVersion, RequestID: "snapshot", Type: CreateDataset, Dataset: &dataset}).validate() != nil {
-			return bad()
-		}
-		var tenant Tenant
-		var group Group
-		var descriptor Range
-		if streamJSON(view, tenantKey(dataset.TenantID), &tenant) != nil || tenant.TenantID != dataset.TenantID ||
-			streamJSON(view, groupKey(dataset.OwnerGroupID), &group) != nil || group.GroupID != dataset.OwnerGroupID ||
-			streamJSON(view, rangeKey(dataset), &descriptor) != nil || descriptor.Keyspace() != dataset.Keyspace() ||
-			descriptor.RangeID != dataset.RangeID || descriptor.OwnerGroupID != dataset.OwnerGroupID {
-			return bad()
-		}
 	case strings.HasPrefix(name, "data/range/"):
 		var descriptor Range
 		if decodeStreamJSON(value, &descriptor) != nil || descriptor.Validate() != nil ||
@@ -308,10 +304,10 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 			return bad()
 		}
 		// OwnerFenceIndex belongs to the OWNER Group, not this Root cut.
-		var dataset Dataset
-		if streamJSON(view, []byte("data/dataset/"+descriptor.Keyspace().path()), &dataset) != nil ||
-			dataset.Keyspace() != descriptor.Keyspace() || dataset.RangeID != descriptor.RangeID ||
-			dataset.OwnerGroupID != descriptor.OwnerGroupID {
+		var tenant Tenant
+		var group Group
+		if streamJSON(view, tenantKey(descriptor.TenantID), &tenant) != nil || tenant.TenantID != descriptor.TenantID ||
+			streamJSON(view, groupKey(descriptor.OwnerGroupID), &group) != nil || group.GroupID != descriptor.OwnerGroupID {
 			return bad()
 		}
 		reverse, err := streamValue(view, rangeIDKey(descriptor.RangeID))

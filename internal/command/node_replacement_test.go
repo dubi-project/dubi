@@ -120,7 +120,7 @@ func testManagedRemovalAndFreshJoin(t *testing.T, multiRegion bool) {
 		}
 		return true
 	})
-	space := rootstate.Keyspace{TenantID: "member-flow", EngineID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "member-flow", EngineID: "data-alpha", ModuleID: "shared"}
 	tenant, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
 		RequestID: "member-flow-tenant", Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: space.TenantID}})
 	if err != nil {
@@ -129,7 +129,7 @@ func testManagedRemovalAndFreshJoin(t *testing.T, multiRegion bool) {
 	if err := first.Runtime.Host.Submit(raft.RootGroupID, tenant); err != nil {
 		t.Fatal(err)
 	}
-	activateEngineTestDataset(t, ctx, first, groupID, space)
+	activateEngineTestRange(t, ctx, first, groupID, space)
 	key, body := []byte("survives-member-removal"), bytes.Repeat([]byte("member-data"), 24<<10)
 	written, err := first.EngineData.WriteLocal(ctx, enginedata.WriteRequest{RequestID: "before-member-removal",
 		Keyspace: space, Key: key, Body: body, Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) }})

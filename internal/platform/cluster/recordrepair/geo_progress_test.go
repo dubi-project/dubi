@@ -40,7 +40,7 @@ func (t *geoRetryTransport) FetchRecordOnNode(context.Context, rootstate.Node, r
 
 func geoRepairReference(t *testing.T) enginestate.RecordReference {
 	t.Helper()
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"region-west", []byte("geo-repair"), []byte("body"))
 	if err != nil {
 		t.Fatal(err)

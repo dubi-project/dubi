@@ -58,7 +58,7 @@ def run(config_path):
     def request(node, operation, key, value=None):
         args = [str(binary), 'record', operation, '--store', c['store'], '--server', node['address']]
         if operation == 'put': args += ['--request-id', c['run_id']+'-'+key]
-        args += [c['tenant'], c['dataset'], key]
+        args += [c['tenant'], key]
         if operation == 'put': args += [value]
         row = {'started_utc': now(), 'node': node['name'], 'operation': operation, 'key': key, 'expected': value}
         with lock:

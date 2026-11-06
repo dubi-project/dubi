@@ -78,7 +78,7 @@ func coordinatorFixture(t *testing.T) (*raft.Host, *rootstate.State, rootstate.R
 	}
 	apply := func(command rootstate.Command) {
 		t.Helper()
-		command.Version = 1
+		command.Version = rootstate.FormatVersion
 		if command.RequestID == "" {
 			command.RequestID = fmt.Sprintf("fixture-%d", root.AppliedIndex()+1)
 		}

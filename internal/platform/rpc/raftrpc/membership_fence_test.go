@@ -57,8 +57,8 @@ func membershipFenceFixture(t *testing.T) (*MembershipServer, *guardedMembership
 	index := root.AppliedIndex()
 	members := []rootstate.GroupMember{{RaftID: 1, Role: rootstate.GroupMemberVoter}, {RaftID: 2, Role: rootstate.GroupMemberVoter}, {RaftID: 3, Role: rootstate.GroupMemberVoter}}
 	for _, cmd := range []rootstate.Command{
-		{Version: 1, RequestID: "publish", Type: rootstate.PublishGroupMembers, Membership: &rootstate.GroupMembership{GroupID: "data-1", ExpectedEpoch: 1, Members: members}},
-		{Version: 1, RequestID: "plan", Type: rootstate.PlanGroupMembers, GroupPlan: &rootstate.GroupChangePlan{ChangeID: "add-node", GroupID: "data-1", ExpectedEpoch: 2, Members: append(members, rootstate.GroupMember{RaftID: 991, Role: rootstate.GroupMemberLearner})}},
+		{Version: rootstate.FormatVersion, RequestID: "publish", Type: rootstate.PublishGroupMembers, Membership: &rootstate.GroupMembership{GroupID: "data-1", ExpectedEpoch: 1, Members: members}},
+		{Version: rootstate.FormatVersion, RequestID: "plan", Type: rootstate.PlanGroupMembers, GroupPlan: &rootstate.GroupChangePlan{ChangeID: "add-node", GroupID: "data-1", ExpectedEpoch: 2, Members: append(members, rootstate.GroupMember{RaftID: 991, Role: rootstate.GroupMemberLearner})}},
 	} {
 		if r := applyRootCommand(t, root, &index, cmd); r.Error != "" {
 			t.Fatal(r)
@@ -148,7 +148,7 @@ func TestMembershipFenceRejectsUnboundAndStaleChanges(t *testing.T) {
 				want = codes.FailedPrecondition
 			case "completed-task":
 				index := b.root.AppliedIndex()
-				result := applyRootCommand(t, b.root, &index, rootstate.Command{Version: 1, RequestID: "complete", Type: rootstate.CompleteGroupMembers, GroupCompletion: &rootstate.GroupChangeCompletion{GroupID: "data-1", ChangeID: "add-node"}})
+				result := applyRootCommand(t, b.root, &index, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "complete", Type: rootstate.CompleteGroupMembers, GroupCompletion: &rootstate.GroupChangeCompletion{GroupID: "data-1", ChangeID: "add-node"}})
 				if result.Error != "" {
 					t.Fatal(result)
 				}
@@ -198,7 +198,7 @@ func TestMembershipFenceLocalControlRechecksAfterDataWait(t *testing.T) {
 				}
 				if mode == "completed" {
 					index := b.root.AppliedIndex()
-					r := applyRootCommand(t, b.root, &index, rootstate.Command{Version: 1, RequestID: "complete", Type: rootstate.CompleteGroupMembers, GroupCompletion: &rootstate.GroupChangeCompletion{GroupID: "data-1", ChangeID: "add-node"}})
+					r := applyRootCommand(t, b.root, &index, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "complete", Type: rootstate.CompleteGroupMembers, GroupCompletion: &rootstate.GroupChangeCompletion{GroupID: "data-1", ChangeID: "add-node"}})
 					if r.Error != "" {
 						t.Fatal(r)
 					}

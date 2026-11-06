@@ -27,7 +27,7 @@ class WatchTests(unittest.TestCase):
         self.status['local_repair'].update(repair_debt=0)
         self.config = {'run_dir': str(self.root/'workload'), 'output': str(self.root/'physical'),
                        'nodes': self.inventory['nodes'], 'entry': self.entry, 'store': self.entry['store'],
-                       'tenant': 'tenant', 'dataset': 'objects', 'owner_group_id': 'group-test',
+                       'tenant': 'tenant', 'owner_group_id': 'group-test',
                        'sha256': 'candidate', 'probe': '/fixture/probe', 'probe_sha256': 'probe',
                        'topology_sha256': fingerprint(self.status)}
         self.path = self.root/'config.json'
@@ -38,7 +38,7 @@ class WatchTests(unittest.TestCase):
         end = datetime.now(timezone.utc)-timedelta(minutes=10)
         start = end-timedelta(hours=6)
         self.info = {'started_utc': start.isoformat(), 'key_epoch': 'test-epoch',
-                     'tenant': 'tenant', 'dataset': 'objects', 'store': self.entry['store'],
+                     'tenant': 'tenant', 'store': self.entry['store'],
                      'duration_seconds': '21600'}
         self.final = {'finished_utc': end.isoformat(), 'exit_code': '0', 'termination_reason': 'duration'}
         self.write_info()

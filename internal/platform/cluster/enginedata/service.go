@@ -70,11 +70,12 @@ type WriteResult struct {
 // application authentication belongs to a separate external boundary: the
 // in-process caller must already be authorized to use its Keyspace.
 type Service struct {
-	runtime     *node.Runtime
-	client      *raftrpc.GroupClient
-	geoRetry    *recordwrite.GeoMetadataRetryStore
-	geoRecords  GeoRecordRetrySink
-	readRefresh readConfirmationRefresh
+	runtime          *node.Runtime
+	client           *raftrpc.GroupClient
+	geoRetry         *recordwrite.GeoMetadataRetryStore
+	geoRecords       GeoRecordRetrySink
+	readRefresh      readConfirmationRefresh
+	initialPlacement func(context.Context, string) error
 }
 
 // GeoRecordRetrySink persists an opaque publication hint, not a new quorum.
@@ -97,7 +98,9 @@ func NewWithGeoRetry(runtime *node.Runtime, client *raftrpc.GroupClient, geoRetr
 		runtime.Records == nil || runtime.Identity.RaftID == 0 || runtime.Identity.NodeID == "" || client == nil {
 		return nil, errors.New("engine data entry requires a complete local Node and Group client")
 	}
-	return &Service{runtime: runtime, client: client, geoRetry: geoRetry}, nil
+	s := &Service{runtime: runtime, client: client, geoRetry: geoRetry}
+	s.initialPlacement = s.prepareInitialPlacement
+	return s, nil
 }
 
 // Write is the any-Node entry. A forwarded request carries the same stable

@@ -142,7 +142,7 @@ func (s *State) writeSnapshotView(view *pebble.Snapshot, index uint64, encoder *
 }
 
 // Semantic checks use bounded point lookups in the same Pebble snapshot,
-// rather than retaining a map of every key, Range or Dataset in memory.
+// rather than retaining a map of every key or Range in memory.
 func (s *State) validateStreamEntry(view *pebble.Snapshot, index uint64, key, value []byte) error {
 	if len(key) > snapshot.MaxKeyBytes || len(value) > snapshot.MaxValueBytes {
 		return errors.New("snapshot logical record exceeds bound")
@@ -225,7 +225,7 @@ func (s *State) validateStreamEntry(view *pebble.Snapshot, index uint64, key, va
 		if len(parts) != 3 {
 			return errors.New("invalid snapshot Keyspace fence")
 		}
-		scope := rootstate.Keyspace{TenantID: parts[0], EngineID: parts[1], DatasetID: parts[2]}
+		scope := rootstate.Keyspace{TenantID: parts[0], ModuleID: parts[1], EngineID: parts[2]}
 		descriptor, err := readRange(string(value))
 		if err != nil {
 			return err

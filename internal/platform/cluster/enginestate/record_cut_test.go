@@ -714,7 +714,7 @@ func TestRecordCutRealThreeVoterBarrierAndColdRestart(t *testing.T) {
 	d := regionalDescriptor()
 	d.MembershipIndex = membership.Index
 	submit(routedstate.EncodeRegionFence("initial", d))
-	r := rootstate.Range{RangeID: "r", TenantID: "tenant", EngineID: "search", DatasetID: "index", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+	r := rootstate.Range{RangeID: "r", TenantID: "tenant", EngineID: "search", ModuleID: "index", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	submit(routedstate.EncodeActivateRange("range", r))
 	target := router.Target{Keyspace: r.Keyspace(), RangeID: r.RangeID, OwnerGroupID: r.OwnerGroupID, Epoch: 1, RoutingKey: []byte("item")}
 	submit(routedstate.EncodeMutation("publish", target, []byte("real payload")))

@@ -29,22 +29,24 @@ import (
 )
 
 const (
-	MaxRequestSize        = 32 << 10
-	MaxResponseSize       = 4 << 20
-	MaxPeers              = rootjoin.MaxViewPeers
-	maxRequestDocument    = 16 << 10
-	maxConcurrentRequests = 4
-	requestTimeout        = 30 * time.Second
+	MaxRequestSize           = 32 << 10
+	MaxResponseSize          = 4 << 20
+	MaxPeers                 = rootjoin.MaxViewPeers
+	maxRequestDocument       = 16 << 10
+	maxConcurrentRequests    = 4
+	maxConcurrentDiscoveries = 8
+	requestTimeout           = 30 * time.Second
 )
 
 type Server struct {
 	rootjoinwire.UnimplementedRootJoinServiceServer
-	host        rootjoin.Host
-	root        *rootstate.State
-	coordinator *rootjoin.Coordinator
-	clusterID   string
-	slots       chan struct{}
-	readRoot    func(context.Context) (uint64, error)
+	host           rootjoin.Host
+	root           *rootstate.State
+	coordinator    *rootjoin.Coordinator
+	clusterID      string
+	slots          chan struct{}
+	discoverySlots chan struct{}
+	readRoot       func(context.Context) (uint64, error)
 }
 
 func NewServer(host rootjoin.Host, root *rootstate.State, clusterID string) (*Server, error) {
@@ -55,7 +57,7 @@ func NewServer(host rootjoin.Host, root *rootstate.State, clusterID string) (*Se
 	if err != nil {
 		return nil, err
 	}
-	return &Server{host: host, root: root, coordinator: coordinator, clusterID: clusterID, slots: make(chan struct{}, maxConcurrentRequests)}, nil
+	return &Server{host: host, root: root, coordinator: coordinator, clusterID: clusterID, slots: make(chan struct{}, maxConcurrentRequests), discoverySlots: make(chan struct{}, maxConcurrentDiscoveries)}, nil
 }
 
 // SetRootReadIndex lets the owning Node route a Root barrier through an
@@ -76,6 +78,12 @@ func (s *Server) readRootIndex(ctx context.Context) (uint64, error) {
 // Like enrollment RPC, slots bound post-decode work. The listener's receive
 // limit is the pre-decode bound; this is not a global connection budget.
 func (s *Server) acquire(ctx context.Context, size int) (context.Context, func(), error) {
+	return acquireSlots(ctx, size, s.slots, "Root join is busy")
+}
+
+// Discovery is read-only and used before CLI data requests. Keep it bounded
+// independently so it cannot consume the slots reserved for membership changes.
+func acquireSlots(ctx context.Context, size int, slots chan struct{}, busy string) (context.Context, func(), error) {
 	if size > MaxRequestSize {
 		return nil, nil, status.Error(codes.ResourceExhausted, "Root join request exceeds limit")
 	}
@@ -83,11 +91,11 @@ func (s *Server) acquire(ctx context.Context, size int) (context.Context, func()
 		return nil, nil, status.FromContextError(err).Err()
 	}
 	select {
-	case s.slots <- struct{}{}:
+	case slots <- struct{}{}:
 		ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-		return ctx, func() { cancel(); <-s.slots }, nil
+		return ctx, func() { cancel(); <-slots }, nil
 	default:
-		return nil, nil, retryError("Root join is busy", time.Second)
+		return nil, nil, retryError(busy, time.Second)
 	}
 }
 
@@ -209,7 +217,7 @@ func (s *Server) DiscoverRoot(ctx context.Context, request *rootjoinwire.Discove
 	if request == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	ctx, release, err := s.acquire(ctx, proto.Size(request))
+	ctx, release, err := acquireSlots(ctx, proto.Size(request), s.discoverySlots, "Root discovery is busy")
 	if err != nil {
 		return nil, err
 	}

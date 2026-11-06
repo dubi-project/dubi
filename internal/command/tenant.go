@@ -15,13 +15,16 @@ import (
 )
 
 func runTenant(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "create" {
+		return runTenantCreate(ctx, args, stdout, stderr)
+	}
 	if len(args) < 2 || args[0] != "token" || args[1] != "create" && args[1] != "revoke" {
 		return errors.New("usage: dubi tenant token create|revoke [--store path] [--server host:port] [--request-id ID] <tenant|credential-id>")
 	}
 	operation := args[1]
 	flags := flag.NewFlagSet("tenant token "+operation, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "existing Node store")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	server := flags.String("server", "", "reachable Node RPC address")
 	requestID := flags.String("request-id", "", "stable ID for diagnosing an uncertain request")
 	var ttl *time.Duration

@@ -81,7 +81,7 @@ func rootFileFixture(t *testing.T) *State {
 	applyRootFileCommand(t, s, Command{Type: PlanGroupMembers, GroupPlan: &GroupChangePlan{ChangeID: "pending", GroupID: "data", ExpectedEpoch: 3, Members: members}})
 	applyRootFileCommand(t, s, Command{Type: RegisterTenant, Tenant: &Tenant{TenantID: "tenant"}})
 	for _, engine := range []string{"record", "search"} {
-		applyRootFileCommand(t, s, Command{Type: CreateDataset, Dataset: &Dataset{TenantID: "tenant", EngineID: engine, DatasetID: "items", RangeID: engine, OwnerGroupID: "data"}})
+		applyRootFileCommand(t, s, Command{Type: PrepareRange, InitialRange: &RangeSeed{TenantID: "tenant", EngineID: engine, ModuleID: "items", RangeID: engine, OwnerGroupID: "data"}})
 	}
 	// Owner index is deliberately greater than Root cut.
 	applyRootFileCommand(t, s, Command{Type: ActivateRange, Activation: &RangeActivation{RangeID: "record", OwnerGroupID: "data", Epoch: 1, OwnerRequestID: "owner-record", OwnerAppliedIndex: 100000}})
@@ -372,17 +372,17 @@ func TestRootFileSnapshotInvalidDirectoryLeavesStateUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]func(map[string][]byte){
-		"missing-node-reverse":   func(m map[string][]byte) { delete(m, string(nodeIDKey("node_00000000000000000000000000000001"))) },
-		"missing-node":           func(m map[string][]byte) { delete(m, string(nodeKey(11))) },
-		"missing-tenant":         func(m map[string][]byte) { delete(m, string(tenantKey("tenant"))) },
-		"missing-owner":          func(m map[string][]byte) { delete(m, string(groupKey("data"))) },
-		"missing-range":          func(m map[string][]byte) { delete(m, "data/range/tenant/record/items") },
-		"missing-dataset":        func(m map[string][]byte) { delete(m, "data/dataset/tenant/record/items") },
-		"missing-range-reverse":  func(m map[string][]byte) { delete(m, string(rangeIDKey("record"))) },
-		"missing-active-change":  func(m map[string][]byte) { delete(m, string(activeGroupChangeKey("data"))) },
-		"missing-pending-change": func(m map[string][]byte) { delete(m, string(groupChangeKey("pending"))) },
-		"unknown-key":            func(m map[string][]byte) { m["data/unsupported"] = []byte("{}") },
-		"metadata-in-stream":     func(m map[string][]byte) { m["meta/applied"] = []byte("bad") },
+		"missing-node-reverse":     func(m map[string][]byte) { delete(m, string(nodeIDKey("node_00000000000000000000000000000001"))) },
+		"missing-node":             func(m map[string][]byte) { delete(m, string(nodeKey(11))) },
+		"missing-tenant":           func(m map[string][]byte) { delete(m, string(tenantKey("tenant"))) },
+		"missing-owner":            func(m map[string][]byte) { delete(m, string(groupKey("data"))) },
+		"missing-range":            func(m map[string][]byte) { delete(m, "data/range/tenant/items/record") },
+		"missing-tenant-for-range": func(m map[string][]byte) { delete(m, "data/tenant/tenant") },
+		"missing-range-reverse":    func(m map[string][]byte) { delete(m, string(rangeIDKey("record"))) },
+		"missing-active-change":    func(m map[string][]byte) { delete(m, string(activeGroupChangeKey("data"))) },
+		"missing-pending-change":   func(m map[string][]byte) { delete(m, string(groupChangeKey("pending"))) },
+		"unknown-key":              func(m map[string][]byte) { m["data/unsupported"] = []byte("{}") },
+		"metadata-in-stream":       func(m map[string][]byte) { m["meta/applied"] = []byte("bad") },
 		"bad-node-reverse": func(m map[string][]byte) {
 			m[string(nodeIDKey("node_00000000000000000000000000000001"))] = []byte("011")
 		},

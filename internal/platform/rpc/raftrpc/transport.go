@@ -60,6 +60,7 @@ type outbound struct {
 	release   func()
 	reference *snapshot.Reference
 	rootRead  bool
+	deadline  time.Time // Regional control: queueing and RPC share one budget.
 }
 
 type peerLane struct {
@@ -270,6 +271,11 @@ func (t *Transport) Send(groupID string, message *raftpb.Message) error {
 		// elections and read barriers independent from regional Group control
 		// traffic so a busy data cohort cannot make Root appear unavailable.
 		queue = peer.control
+		// A stalled peer must not turn a short interruption into 64 fresh
+		// RPC timeouts worth of stale heartbeats ahead of the next election.
+		// Raft retries lost messages; expired work follows OnFailure just like
+		// a network timeout, without changing terms or quorum requirements.
+		request.deadline = time.Now().Add(t.options.RPCTimeout)
 	}
 	select {
 	case queue <- request:
@@ -405,6 +411,19 @@ func (t *Transport) deliver(peer *peerSender, request outbound, control bool) er
 }
 
 func (t *Transport) deliverMode(peer *peerSender, request outbound, control, root bool) error {
+	rpcTimeout := t.options.RPCTimeout
+	if root && rpcTimeout < DefaultRootRPCTimeout {
+		rpcTimeout = DefaultRootRPCTimeout
+	}
+	deadline := request.deadline
+	if deadline.IsZero() {
+		deadline = time.Now().Add(rpcTimeout)
+	}
+	ctx, cancel := context.WithDeadline(t.ctx, deadline)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	address, ok := t.options.Directory.Resolve(request.to)
 	if !ok {
 		return fmt.Errorf("Raft peer %d has no address", request.to)
@@ -430,12 +449,6 @@ func (t *Transport) deliverMode(peer *peerSender, request outbound, control, roo
 		lane.address, lane.conn, lane.client = address, conn, raftwire.NewRaftServiceClient(conn)
 	}
 	peer.mu.Unlock()
-	rpcTimeout := t.options.RPCTimeout
-	if root && rpcTimeout < DefaultRootRPCTimeout {
-		rpcTimeout = DefaultRootRPCTimeout
-	}
-	ctx, cancel := context.WithTimeout(t.ctx, rpcTimeout)
-	defer cancel()
 	// Keep the unary call in the bounded per-peer worker. A detached goroutine
 	// here would let a wedged HTTP/2 stream accumulate one goroutine per Raft
 	// message forever; under a WAN outage that can exhaust a small Node before

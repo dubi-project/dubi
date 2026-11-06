@@ -84,7 +84,7 @@ func TestExecutionPreflightRejectsObsoleteTargetsFromActualRootCatalog(t *testin
 	commands := []rootstate.Command{
 		{Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: "owner", StateKind: rootstate.GroupStateEngine}},
 		{Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: "tenant"}},
-		{Type: rootstate.CreateDataset, Dataset: &rootstate.Dataset{TenantID: "tenant", EngineID: "record", DatasetID: "data", RangeID: "range-a", OwnerGroupID: "owner"}},
+		{Type: rootstate.PrepareRange, InitialRange: &rootstate.RangeSeed{TenantID: "tenant", EngineID: "record", ModuleID: "data", RangeID: "range-a", OwnerGroupID: "owner"}},
 		{Type: rootstate.ActivateRange, Activation: &rootstate.RangeActivation{RangeID: "range-a", OwnerGroupID: "owner", Epoch: 1, OwnerRequestID: "activate-owner", OwnerAppliedIndex: 1}},
 	}
 	for i, command := range commands {
@@ -104,7 +104,7 @@ func TestExecutionPreflightRejectsObsoleteTargetsFromActualRootCatalog(t *testin
 	}
 	// No Host/client is present: successful preflight must not add a WAN barrier.
 	service := &Service{runtime: &node.Runtime{Root: root}}
-	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "data"}, RangeID: "range-a", OwnerGroupID: "owner", Epoch: 1, RoutingKey: []byte("key")}
+	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "data"}, RangeID: "range-a", OwnerGroupID: "owner", Epoch: 1, RoutingKey: []byte("key")}
 	if err := service.checkExecutionRoute(target); err != nil {
 		t.Fatal(err)
 	}

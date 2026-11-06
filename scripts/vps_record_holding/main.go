@@ -32,7 +32,6 @@ type input struct {
 		Root rootjoin.View `json:"root"`
 	} `json:"status"`
 	Tenant       string `json:"tenant"`
-	Dataset      string `json:"dataset"`
 	Key          string `json:"key"`
 	Value        string `json:"value"`
 	OwnerGroupID string `json:"owner_group_id"`
@@ -82,7 +81,7 @@ func run() error {
 	if *group != "" {
 		return inspectGroup(*store, in.Status.Root, *group)
 	}
-	descriptor, err := records.Describe(rootstate.Keyspace{TenantID: in.Tenant, EngineID: record.EngineID, DatasetID: in.Dataset}, in.OwnerGroupID, []byte(in.Key), []byte(in.Value))
+	descriptor, err := records.Describe(rootstate.Keyspace{TenantID: in.Tenant, EngineID: record.EngineID, ModuleID: record.ModuleID}, in.OwnerGroupID, []byte(in.Key), []byte(in.Value))
 	if err != nil {
 		return err
 	}

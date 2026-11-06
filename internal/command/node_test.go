@@ -61,7 +61,7 @@ func TestNodeRemoveByNameUsesManagedRPCAndRetainsMajorityCheck(t *testing.T) {
 	for i, name := range []string{"sh-01", "123"} {
 		raftID := process.Runtime.Identity.RaftID + uint64(i) + 1
 		node := rootstate.Node{NodeID: fmt.Sprintf("node_%032x", i+1), RaftID: raftID, Name: name, RegionID: "default", Address: fmt.Sprintf("n%d:7443", i+1)}
-		command := rootstate.Command{Version: 1, RequestID: fmt.Sprintf("register-test-%d", i), Type: rootstate.RegisterNode, Node: &node}
+		command := rootstate.Command{Version: rootstate.FormatVersion, RequestID: fmt.Sprintf("register-test-%d", i), Type: rootstate.RegisterNode, Node: &node}
 		encoded, err := rootstate.EncodeCommand(command)
 		if err != nil {
 			t.Fatal(err)

@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"time"
@@ -11,10 +9,8 @@ import (
 	"github.com/dubi-project/dubi/internal/engine/record"
 	"github.com/dubi-project/dubi/internal/platform/auth"
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginedata"
-	"github.com/dubi-project/dubi/internal/platform/cluster/rangebootstrap"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordrepair"
 	"github.com/dubi-project/dubi/internal/platform/cluster/recordwrite"
-	"github.com/dubi-project/dubi/internal/platform/cluster/regiongroups"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/node"
@@ -842,56 +838,20 @@ func (s *dataService) begin(ctx context.Context, cluster string, raftID uint64, 
 	}
 }
 
-func (s *dataService) CreateDataset(ctx context.Context, request *datawire.CreateDatasetRequest) (*datawire.CreateDatasetResponse, error) {
-	if request == nil || proto.Size(request) > 32<<10 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || len(request.GetRequestId()) > 100 ||
-		rootstate.ValidateTenantID(request.GetTenantId()) != nil ||
-		(rootstate.Keyspace{TenantID: request.GetTenantId(), EngineID: record.EngineID, DatasetID: request.GetDatasetId()}).Validate() != nil {
-		return nil, status.Error(codes.InvalidArgument, "invalid Dataset request")
+// CreateTenant is Node-authenticated administration, not a storage-container API.
+func (s *dataService) CreateTenant(ctx context.Context, request *datawire.CreateTenantRequest) (*datawire.CreateTenantResponse, error) {
+	if request == nil || proto.Size(request) > 32<<10 || len(request.ProtoReflect().GetUnknown()) != 0 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || rootstate.ValidateTenantID(request.GetTenantId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid Tenant request")
 	}
 	ctx, release, err := s.begin(ctx, request.GetClusterId(), request.GetFromRaftId(), proto.Size(request))
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	if existing, found, err := s.runtime.Root.Dataset(request.TenantId, record.EngineID, request.DatasetId); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "read Dataset: %v", err)
-	} else if found {
-		return s.activateDataset(ctx, existing)
+	if err := s.rootCommand(ctx, rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.RequestId, Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: request.TenantId}}); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "create Tenant: %v", err)
 	}
-	local, member, err := s.runtime.Root.RootMember(s.runtime.Identity.RaftID)
-	if err != nil || !member {
-		return nil, status.Error(codes.FailedPrecondition, "local Node is not a Root member")
-	}
-	ownerGroup := regiongroups.GroupID(local.RegionID)
-	progress, ready, err := s.runtime.Root.RegionProgress(ownerGroup)
-	if err != nil || !ready || !progress.Eligible || progress.Pending != nil {
-		return nil, status.Error(codes.FailedPrecondition, "local Region needs a confirmed data Group")
-	}
-	if _, found, err := s.runtime.Root.Tenant(request.TenantId); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "read Tenant: %v", err)
-	} else if !found {
-		command := rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.RequestId + "-tenant",
-			Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: request.TenantId}}
-		if err := s.rootCommand(ctx, command); err != nil {
-			// A concurrent creator may have registered the same Tenant.
-			if _, found, readErr := s.runtime.Root.Tenant(request.TenantId); readErr != nil || !found {
-				return nil, err
-			}
-		}
-	}
-	digest := sha256.Sum256([]byte(request.TenantId + "\x00" + request.DatasetId))
-	dataset := rootstate.Dataset{TenantID: request.TenantId, EngineID: record.EngineID,
-		DatasetID: request.DatasetId, RangeID: "range-" + hex.EncodeToString(digest[:16]), OwnerGroupID: ownerGroup}
-	command := rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.RequestId + "-dataset",
-		Type: rootstate.CreateDataset, Dataset: &dataset}
-	if err := s.rootCommand(ctx, command); err != nil {
-		if existing, found, readErr := s.runtime.Root.Dataset(request.TenantId, record.EngineID, request.DatasetId); readErr != nil || !found {
-			return nil, err
-		} else {
-			dataset = existing
-		}
-	}
-	return s.activateDataset(ctx, dataset)
+	return &datawire.CreateTenantResponse{RootIndex: s.runtime.Root.AppliedIndex()}, nil
 }
 
 // CreateTenantToken is a Node-authenticated administrative action. The
@@ -955,11 +915,15 @@ func (s *dataService) RevokeTenantToken(ctx context.Context, request *datawire.R
 }
 
 func (s *dataService) rootCommand(ctx context.Context, command rootstate.Command) error {
+	return s.rootCommandWithSubmit(ctx, command, s.runtime.Host.Submit)
+}
+
+func (s *dataService) rootCommandWithSubmit(ctx context.Context, command rootstate.Command, submit func(string, []byte) error) error {
 	encoded, err := rootstate.EncodeCommand(command)
 	if err != nil {
 		return err
 	}
-	if err := s.runtime.Host.Submit(raft.RootGroupID, encoded); err != nil {
+	if err := submit(raft.RootGroupID, encoded); err != nil {
 		return err
 	}
 	// A ReadIndex begun immediately after a forwarded proposal may precede the
@@ -988,55 +952,8 @@ func (s *dataService) rootCommand(ctx context.Context, command rootstate.Command
 	}
 }
 
-func (s *dataService) activateDataset(ctx context.Context, dataset rootstate.Dataset) (*datawire.CreateDatasetResponse, error) {
-	bootstrap, err := rangebootstrap.New(s.runtime.Host, s.runtime.Root, func(groupID string) (rangebootstrap.OwnerControl, bool) {
-		if state, found := s.runtime.Engines.Resolve(groupID); found {
-			owner, err := rangebootstrap.NewLocalOwner(s.runtime.Host, state)
-			return owner, err == nil
-		}
-		for _, candidate := range s.routes.Candidates(groupID) {
-			if candidate == s.runtime.Identity.RaftID {
-				continue
-			}
-			owner, err := s.client.Owner(candidate, groupID)
-			if err == nil {
-				return owner, true
-			}
-		}
-		return nil, false
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "prepare Range bootstrap: %v", err)
-	}
-	if err := bootstrap.Reconcile(ctx, dataset.RangeID); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "activate initial Range (retry create): %v", err)
-	}
-	return &datawire.CreateDatasetResponse{RangeId: dataset.RangeID,
-		OwnerGroupId: dataset.OwnerGroupID, RootIndex: s.runtime.Root.AppliedIndex()}, nil
-}
-
-func (s *dataService) target(ctx context.Context, tenant, dataset string, key []byte) (router.Target, error) {
-	space := rootstate.Keyspace{TenantID: tenant, EngineID: record.EngineID, DatasetID: dataset}
-	if space.Validate() != nil || len(key) == 0 || len(key) > 4096 {
-		return router.Target{}, status.Error(codes.InvalidArgument, "invalid Record identity or key")
-	}
-	resolver, err := router.New(s.runtime, s.runtime.Root)
-	if err != nil {
-		return router.Target{}, status.Errorf(codes.Internal, "prepare route: %v", err)
-	}
-	target, err := resolver.ResolveTarget(ctx, space, key)
-	if err != nil {
-		return router.Target{}, status.Errorf(codes.FailedPrecondition, "resolve Record Range: %v", err)
-	}
-	progress, ready, err := s.runtime.Root.RegionProgress(target.OwnerGroupID)
-	if err != nil || !ready || !progress.Eligible || progress.Pending != nil {
-		return router.Target{}, status.Error(codes.FailedPrecondition, "data Region is not confirmed")
-	}
-	return target, nil
-}
-
 func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecordRequest) (*datawire.PutRecordResponse, error) {
-	if request == nil || rootstate.ValidateRequestID(request.GetRequestId()) != nil || len(request.GetValue()) > maxDemoRecordBytes || proto.Size(request) > maxDemoRecordBytes+(32<<10) {
+	if request == nil || len(request.ProtoReflect().GetUnknown()) != 0 || rootstate.ValidateRequestID(request.GetRequestId()) != nil || len(request.GetValue()) > maxDemoRecordBytes || proto.Size(request) > maxDemoRecordBytes+(32<<10) {
 		return nil, status.Error(codes.InvalidArgument, "invalid Record mutation")
 	}
 	started := time.Now()
@@ -1056,9 +973,16 @@ func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecord
 	if s.geoRecords != nil {
 		entry.SetGeoRetryStores(s.geoRetry, s.geoRecords)
 	}
-	keyspace := rootstate.Keyspace{TenantID: request.TenantId, EngineID: record.EngineID, DatasetID: request.DatasetId}
+	binding, err := entry.Bind(record.ModuleID, record.EngineID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	bound, err := binding.ForTenant(request.TenantId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	phaseStarted = time.Now()
-	result, err := entry.Write(ctx, enginedata.WriteRequest{RequestID: request.RequestId, Keyspace: keyspace,
+	result, err := bound.Write(ctx, enginedata.BoundWrite{RequestID: request.RequestId,
 		Key: request.Key, Body: request.Value, Publish: func(descriptor records.Descriptor) ([]byte, error) {
 			return record.ReferencePutPayload(descriptor)
 		}})
@@ -1066,12 +990,12 @@ func (s *dataService) PutRecord(ctx context.Context, request *datawire.PutRecord
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "write Record with physical majority: %v", err)
 	}
-	return &datawire.PutRecordResponse{AppliedIndex: result.Local.Reference.Index, State: string(result.State),
+	return &datawire.PutRecordResponse{OwnerGroupId: result.Local.Reference.OwnerGroupID, RangeId: result.Local.Reference.RangeID, AppliedIndex: result.Local.Reference.Index, State: string(result.State),
 		ConfirmationIndex: result.Local.ConfirmationIndex, RegionGeneration: result.Local.RegionGeneration}, nil
 }
 
 func (s *dataService) GetRecord(ctx context.Context, request *datawire.GetRecordRequest) (*datawire.GetRecordResponse, error) {
-	if request == nil || proto.Size(request) > 32<<10 {
+	if request == nil || len(request.ProtoReflect().GetUnknown()) != 0 || proto.Size(request) > 32<<10 {
 		return nil, status.Error(codes.InvalidArgument, "invalid Record read")
 	}
 	started := time.Now()
@@ -1088,9 +1012,16 @@ func (s *dataService) GetRecord(ctx context.Context, request *datawire.GetRecord
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "prepare immutable Record entry: %v", err)
 	}
-	keyspace := rootstate.Keyspace{TenantID: request.TenantId, EngineID: record.EngineID, DatasetID: request.DatasetId}
+	binding, err := entry.Bind(record.ModuleID, record.EngineID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	bound, err := binding.ForTenant(request.TenantId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	phaseStarted = time.Now()
-	read, err := entry.Read(ctx, keyspace, request.Key)
+	read, err := bound.Read(ctx, request.Key)
 	recordwrite.Trace(ctx, "rpc.get.engine_read", phaseStarted)
 	if err != nil {
 		if errors.Is(err, router.ErrNoRoute) {

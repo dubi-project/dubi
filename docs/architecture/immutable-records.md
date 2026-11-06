@@ -1,5 +1,7 @@
 # 不可变数据记录与本地持有校验
 
+寻址实现已更新为 Tenant + Module + Engine 的可信绑定，独立 Dataset 已移除；详见 [数据寻址与隔离](data-addressing.md)。当前 Root/Routed Command 为 v2、Engine 为 v8、Records 索引为 v2；下文涉及旧版本的演进记录保留历史含义，不能据此打开旧数据目录。
+
 `internal/platform/storage/records` 是模块无关的本地存储原语，已接入正式 Node Runtime 的初始化、启动恢复及关闭生命周期。它使用节点既有共享 `pack.Pool`，不引入 File/CID、Replica 数、Engine 专属目录或 Pack。enginestate 已提供独立的权威引用事务接口；认证远端逐条持有观察、主动发送及拉取数据已接通。区域扩容时新增节点的单次自动补齐已接入确认路径；预发布物理多数准备及发布后复核已经作为内部原语接通，但持久多数确认尚未接通。没有新增部署参数，也没有迁移已有数据。
 
 ## 为什么不能只看 Result 或 applied index
@@ -39,7 +41,7 @@ Store/Volume 元数据现为 v2：`DUBI_VOLUMES` 在首次创建 StoreID 时同�
 
 ## 权威逻辑引用（enginestate v7）
 
-`Transaction.SetRecordReference` 将完整描述与当前 Owner Group、Range/epoch、原始路由 Key、RequestID、命令摘要、发布 index 一起写入 `data/record-reference/<Tenant>/<Engine>/<Dataset>/<opaque-key>`。描述的来源 Group 可以不同于当前 Owner，但 Keyspace 和 Key 必须精确匹配事务；路由 Key 允许与逻辑 Key 不同，用于后续 Range 路由与后台 Repair。不得携带本地 Store/Volume/Pack/Offset。引用、普通 KV、成功 Result、applied 在同一个同步 Batch 发布。请求重放保留原发布位置；同一内容先后再次发布仍有新的发布位置，不能只按 RecordID 判断当前权威。v7 的引用记录内部版本为 2，不接受旧版本混用。
+`Transaction.SetRecordReference` 将完整描述与当前 Owner Group、Range/epoch、原始路由 Key、RequestID、命令摘要、发布 index 一起写入 `data/record-reference/<Tenant>/<Module>/<Engine>/<opaque-key>`。描述的来源 Group 可以不同于当前 Owner，但 Keyspace 和 Key 必须精确匹配事务；路由 Key 允许与逻辑 Key 不同，用于后续 Range 路由与后台 Repair。不得携带本地 Store/Volume/Pack/Offset。引用、普通 KV、成功 Result、applied 在同一个同步 Batch 发布。请求重放保留原发布位置；同一内容先后再次发布仍有新的发布位置，不能只按 RecordID 判断当前权威。v7 的引用记录内部版本为 2，不接受旧版本混用。
 
 事务内支持读到本次修改、显式删除、覆盖与回滚，最多修改 256 个不同引用键。`ReadView.RecordReference` 在既有 Owner Group ReadIndex 和 Range 检查之内读取，核对当前 Range/Keyspace fence 与原成功 Result 的请求、摘要、位置。Result 不能单独证明当前引用。普通 `Set/Delete` 和引用 API 是两个独立命名空间：删除 KV 不隐式删除引用；`DeleteRecordReference` 也不删除物理记录。调用者不能保留 Transaction/ReadView 跨回调使用。
 
@@ -49,7 +51,7 @@ Result 在任何事务 Pack 写入前检查完整编码不超过 64 MiB，包含
 
 内联与文件快照均保存逻辑引用和关联 Result，在同一切点校验后才恢复；不复制 `records/index`、数据载荷或物理位置。文件快照用有界逐项查找验证关联，支持大于 64 KiB 的 Result 值。恢复引用成功但本机 `records.Verify` 返回未持有，是需要数据传输/修复的状态，不能宣告数据就绪。当前 GC 只依据本地当前索引回收整 Pack 无引用的物理文件；快照/备份引入历史物理保留后，必须扩展统一保护集合，才能启用相应删除。
 
-当前状态标记 `meta/format=7`、文件头 `enginestate-v7`；v6 及更早开发状态/快照明确拒绝，不自动迁移。v6 增加权威引用命名空间与关联检查；v7 增加绑定精确引用发布位置和 Region fence 的本地多数确认记录。物理 Pack/本地位置格式不变。协议协商、滚动升级和迁移工具尚未完成。
+当前状态标记 `meta/format=7`、文件头 `enginestate-v8`；v7 及更早开发状态/快照明确拒绝，不自动迁移。v6 增加权威引用命名空间与关联检查；v7 增加绑定精确引用发布位置和 Region fence 的本地多数确认记录。物理 Pack/本地位置格式不变。协议协商、滚动升级和迁移工具尚未完成。
 
 ## 封口代际的固定引用清单
 

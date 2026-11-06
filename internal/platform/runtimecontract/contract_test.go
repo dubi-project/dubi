@@ -36,7 +36,7 @@ func (executor *testExecutor) Read(_ context.Context, read Read) (ReadResult, er
 }
 
 func testRoute() (rootstate.Keyspace, router.Target) {
-	keyspace := rootstate.Keyspace{TenantID: "tenant", EngineID: "state", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant", EngineID: "state", ModuleID: "items"}
 	return keyspace, router.Target{Keyspace: keyspace, RangeID: "range-1", OwnerGroupID: "data-1", Epoch: 3, RoutingKey: []byte("key")}
 }
 

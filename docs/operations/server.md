@@ -1,8 +1,17 @@
 # 启动 DUBI 节点
 
-当前入口开放 Node 认证的内部集群服务和开发验证用 Record RPC；可选的独立 Tenant HTTPS 端口目前只有身份探针，仍没有面向租户的公开数据 API。正式进程注册了最小 `record` Engine，可在三节点同区域确认数据 Group 后，经 CLI 完成 Dataset 创建、Record 写读；其他 Engine 未注册。Node 证书持有者相当于集群内部操作者，不构成租户身份和权限隔离。
+当前入口开放 Node 认证的内部集群服务和开发验证用 Record RPC；可选的独立 Tenant HTTPS 端口目前只有身份探针，仍没有面向租户的公开数据 API。正式进程注册了最小 `record` Engine，可在三节点同区域确认数据 Group 后，经 CLI 登记 Tenant 并完成 Record 写读；首次写入由 Runtime 自动建立初始 Range；其他 Engine 未注册。Node 证书持有者相当于集群内部操作者，不构成租户身份和权限隔离。
 
 ## 1. 初始化首节点
+
+`--store` 指定节点元数据目录，默认 `/var/lib/dubi`，由 `init/join` 记住供后续命令使用。这里保存身份、证书、Raft 日志、状态机数据、索引和卷登记，不能作为可随意清理的缓存目录。一个 Node 只有一套节点存储实例，不需要创建或管理 Store 资源。
+
+- 首次不指定 `--volume`：自动登记 `<store>/volume`，默认即 `/var/lib/dubi/volume`，单盘部署只用一个根目录。
+- 首次显式指定一个或多个 `--volume <空目录>`：只使用这些 Volume，不创建默认 `volume/`。
+- 后续添加 Volume：原默认卷仍保留并参与均衡，除非管理员安全移除。
+- 重启按登记恢复；丢失的卷、已移除的默认卷不会被补建为空目录。指定外部卷后，节点元数据仍保存在 `--store`，该文件系统同样需要容量与健康保障。
+
+内部 `StoreID` 用于资源归属校验，`VolumeID` 用于卷身份校验，均自动生成；它们不是用户需要填写的配置。
 
 ```sh
 dubi init
@@ -14,7 +23,7 @@ dubi init
 
 Group/日志现在有独立持久登记，已登记目录或日志丢失时拒绝重建。旧开发格式没有自动迁移通道，不要直接覆盖重要 Store 升级，也不要手工删除登记让初始化通过；详见 [Group 存储边界](../architecture/group-storage.md)。
 
-当前 Store/Volume 元数据为 v2，首次 init 自动在既有 Store 清单中登记并建立不可变记录索引；启动和加入使用同一持久意图恢复，不增加参数。v1 开发目录明确拒绝打开，未提供自动迁移。已 active 的记录登记/索引丢失，重复 init 也不能重新创建空资源；应保留故障现场，不要删改身份文件来绕过检查。Pack 容器仍为 `DUBIPK02`，Engine 状态当前为 v7；见[不可变记录与资源生命周期](../architecture/immutable-records.md)。
+当前 Store/Volume 元数据为 v2，首次 init 自动在既有 Store 清单中登记并建立不可变记录索引；启动和加入使用同一持久意图恢复，不增加参数。v1 开发目录明确拒绝打开，未提供自动迁移。已 active 的记录登记/索引丢失，重复 init 也不能重新创建空资源；应保留故障现场，不要删改身份文件来绕过检查。Pack 容器仍为 `DUBIPK02`，Engine 状态当前为 v8；见[不可变记录与资源生命周期](../architecture/immutable-records.md)。
 
 小规格 VPS：节点启动时会根据 cgroup 或物理内存设置 Go heap 软上限，所有 Pebble 实例共享受控 Cache，并限制文件句柄、MemTable 和 Compaction 并发，避免 Root/Raft 恢复阶段的瞬时内存峰值直接触发 OOM。低于 2GB 内存时仍建议配置一定 swap；swap 只能缓冲启动峰值，不能替代多数节点和独立故障域。
 
@@ -99,13 +108,25 @@ CA 私钥不会以裸 `node-ca.key` 落盘，而是保存在绑定 Cluster/Node/
 dubi server
 ```
 
-如需验证独立的应用认证边界，可显式启用身份探针：
+如需访问应用 API、身份探针和监控，可显式启用公共 HTTPS 入口：
 
 ```sh
 dubi server --api-listen 127.0.0.1:7444
 ```
 
-该端口使用集群 CA 签发、由节点自动续期的 TLS 服务端证书；客户端须信任该 CA，并以 `dubi.internal` 为 TLS 验证名称。请求 `GET /v1/me` 时使用 `Authorization: Bearer <Token>`，无需 Node 客户端证书。Token 由 `dubi tenant token create <tenant>` 创建，撤销使用 `dubi tenant token revoke <credential-id>`。`dubi join` 也接受同一 `--api-listen` 参数，已加入节点可直接使用 `dubi server --api-listen ...`。该端口不注册任何内部 RPC 或数据操作，当前默认不开放；不要把身份探针当作可用的应用读写 API。若要从其他机器访问，需要明确指定可达的 `--api-listen` 地址并安全分发 CA；不提供 `InsecureSkipVerify` 之类的绕过选项。
+默认使用集群 CA 签发、由节点自动续期的 TLS 服务端证书；客户端须信任该 CA，并以 `dubi.internal` 为 TLS 验证名称。该内部证书使用 Ed25519，部分浏览器和旧 TLS 客户端无法协商，不能把默认入口视为可直接用公网 IP 浏览的 HTTPS 网站。
+
+浏览器或外部应用访问时，提供覆盖实际域名或 IP 的独立服务端证书，例如公共 CA 签发的 ECDSA 证书：
+
+```sh
+dubi server --api-listen 0.0.0.0:7444 \
+  --api-cert /etc/dubi/https/fullchain.pem \
+  --api-key /etc/dubi/https/privkey.pem
+```
+
+`--api-cert` 与 `--api-key` 必须一起指定，且需要 `--api-listen`。证书链和私钥只用于公共 HTTPS，不改变 Node 身份或内部 mTLS。私钥应由服务账号读取并限制为 `0600`，父目录限制访问。新握手检查更新，错误候选不会覆盖仍有效的当前证书；应在受保护目录准备完整的一对文件，再原子切换目录符号链接。外部证书由部署方续期；入口设置自动保存在节点 `gateway.json`，重启复用。也可使用 `--api-host <域名或公网IP> --api-acme` 由 DUBI 托管签发与续期，需要公网 HTTP-01 端口 80 可达。详情见 [Gateway 使用与证书管理](../architecture/http-gateway.md#9-首版骨架使用与后续接入)。
+
+请求 `GET /v1/me` 或 `/api/v1/config/entry?key=...` 时使用 `Authorization: Bearer <Token>`，无需 Node 客户端证书。Token 由 `dubi tenant token create <tenant>` 创建，撤销使用 `dubi tenant token revoke <credential-id>`。`dubi join` 也接受上述公共入口和证书参数。该端口不注册内部 RPC，当前默认不开放；Config 的 GET/PUT/DELETE 已接入真实 State/Runtime，已有最小登录与入口状态接线页，正式 Web UI 待 Stitch 设计接入。`/metrics` 需要通过 `dubi access create --role monitor` 创建监控 Token；管理凭据使用 `--role admin`，可登录接线页，但不获得 Tenant 数据权限。`GET /healthz` 可直接浏览，但它只证明 HTTP 进程能响应。不提供绕过 TLS 校验的选项。
 
 最常见的完整流程就是：
 

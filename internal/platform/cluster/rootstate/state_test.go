@@ -62,8 +62,8 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 	if err := group.Campaign(); err != nil {
 		t.Fatal(err)
 	}
-	missing := Command{Version: FormatVersion, RequestID: "missing-tenant", Type: CreateDataset,
-		Dataset: &Dataset{TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+	missing := Command{Version: FormatVersion, RequestID: "missing-tenant", Type: PrepareRange,
+		InitialRange: &RangeSeed{TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 			RangeID: "range-a", OwnerGroupID: "data-1"}}
 	submit(t, group, missing)
 	if result, found, err := state.Result(missing.RequestID); err != nil || !found || result.Error == "" {
@@ -125,15 +125,15 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 	submit(t, group, Command{Version: FormatVersion, RequestID: "tenant-1", Type: RegisterTenant,
 		Tenant: &Tenant{TenantID: "tenant-a"}})
 	created := missing
-	created.RequestID = "dataset-1"
+	created.RequestID = "module-1"
 	encoded := submit(t, group, created)
-	// Replaying a RequestID does not create a second Dataset or overwrite the
+	// Replaying a RequestID does not create a second RangeSeed or overwrite the
 	// original command's durable result.
 	if err := group.Submit(encoded); err != nil {
 		t.Fatal(err)
 	}
 	if result, found, err := state.Result(created.RequestID); err != nil || !found || result.Error != "" {
-		t.Fatalf("create Dataset result = %+v, %v, %v", result, found, err)
+		t.Fatalf("create RangeSeed result = %+v, %v, %v", result, found, err)
 	}
 	if _, found, err := state.Route("tenant-a", "record", "items", nil); err != nil || found {
 		t.Fatalf("pending Range was routable: found=%v err=%v", found, err)
@@ -170,11 +170,11 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 	}
 	submit(t, group, Command{Version: FormatVersion, RequestID: "tenant-2", Type: RegisterTenant,
 		Tenant: &Tenant{TenantID: "tenant-b"}})
-	submit(t, group, Command{Version: FormatVersion, RequestID: "dataset-2", Type: CreateDataset,
-		Dataset: &Dataset{TenantID: "tenant-b", EngineID: "search", DatasetID: "items",
+	submit(t, group, Command{Version: FormatVersion, RequestID: "module-2", Type: PrepareRange,
+		InitialRange: &RangeSeed{TenantID: "tenant-b", EngineID: "search", ModuleID: "items",
 			RangeID: "range-b", OwnerGroupID: "data-1"}})
-	submit(t, group, Command{Version: FormatVersion, RequestID: "dataset-3", Type: CreateDataset,
-		Dataset: &Dataset{TenantID: "tenant-a", EngineID: "search", DatasetID: "items",
+	submit(t, group, Command{Version: FormatVersion, RequestID: "module-3", Type: PrepareRange,
+		InitialRange: &RangeSeed{TenantID: "tenant-a", EngineID: "search", ModuleID: "items",
 			RangeID: "range-c", OwnerGroupID: "data-1"}})
 	for _, activation := range []RangeActivation{
 		{RangeID: "range-b", OwnerGroupID: "data-1", Epoch: 1, OwnerRequestID: "owner-range-b", OwnerAppliedIndex: 8},
@@ -191,7 +191,7 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 	for _, check := range []struct{ tenant, engine, rangeID string }{
 		{"tenant-b", "search", "range-b"}, {"tenant-a", "search", "range-c"},
 	} {
-		keyspace := Keyspace{TenantID: check.tenant, EngineID: check.engine, DatasetID: "items"}
+		keyspace := Keyspace{TenantID: check.tenant, EngineID: check.engine, ModuleID: "items"}
 		value, found, err := state.RouteKeyspace(keyspace, []byte("same-key"))
 		if err != nil || !found || value.RangeID != check.rangeID {
 			t.Fatalf("isolated route %s/%s = %+v, %v, %v", check.tenant, check.engine, value, found, err)
@@ -211,8 +211,8 @@ func TestRootStateRaftApplyRestartAndSnapshot(t *testing.T) {
 	if registered, found, err := state.Tenant("tenant-a"); err != nil || !found || registered.TenantID != "tenant-a" {
 		t.Fatalf("registered Tenant = %+v, %v, %v", registered, found, err)
 	}
-	if registered, found, err := state.Dataset("tenant-a", "record", "items"); err != nil || !found || registered.RangeID != "range-a" {
-		t.Fatalf("registered Dataset = %+v, %v, %v", registered, found, err)
+	if registered, found, err := state.InitialRange(Keyspace{TenantID: "tenant-a", ModuleID: "items", EngineID: "record"}); err != nil || !found || registered.RangeID != "range-a" {
+		t.Fatalf("registered RangeSeed = %+v, %v, %v", registered, found, err)
 	}
 	image, index, conf, err := state.Snapshot()
 	if err != nil || index != state.AppliedIndex() {

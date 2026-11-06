@@ -282,7 +282,7 @@ func (s *State) validateSnapshotEntries(image snapshotImage) error {
 			if len(parts) != 3 {
 				return errors.New("engine snapshot contains invalid Keyspace fence")
 			}
-			keyspace := rootstate.Keyspace{TenantID: parts[0], EngineID: parts[1], DatasetID: parts[2]}
+			keyspace := rootstate.Keyspace{TenantID: parts[0], ModuleID: parts[1], EngineID: parts[2]}
 			if keyspace.Validate() != nil || rootstate.ValidateRangeID(string(entry.Value)) != nil {
 				return errors.New("engine snapshot contains invalid Keyspace fence")
 			}

@@ -42,7 +42,7 @@ func pipelineReferences(t *testing.T, count int) []enginestate.RecordReference {
 	t.Helper()
 	var refs []enginestate.RecordReference
 	for i := 0; i < count; i++ {
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "t", EngineID: "record", DatasetID: "d"}, "region-west", []byte(fmt.Sprintf("key-%04d", i)), []byte("data"))
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "t", EngineID: "record", ModuleID: "d"}, "region-west", []byte(fmt.Sprintf("key-%04d", i)), []byte("data"))
 		if err != nil {
 			t.Fatal(err)
 		}

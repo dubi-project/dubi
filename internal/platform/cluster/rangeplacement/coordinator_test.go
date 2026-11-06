@@ -15,7 +15,7 @@ func progressFixture(region, group string, generation uint64) rootstate.RegionPr
 }
 
 func TestPlanRangeUsesOnlyStableConfirmedRegions(t *testing.T) {
-	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 		OwnerGroupID: "region-east", Epoch: 3, State: rootstate.RangeStateActive}
 	placement, err := PlanRange(r, []rootstate.RegionProgress{
 		progressFixture("west", "region-west", 1), progressFixture("east", "region-east", 2),
@@ -37,7 +37,7 @@ func TestPlanRangeUsesOnlyStableConfirmedRegions(t *testing.T) {
 }
 
 func TestRefreshPlacementAdvancesOnlyTheCompleteExistingRegionSet(t *testing.T) {
-	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items", OwnerGroupID: "region-east", Epoch: 3, State: rootstate.RangeStateActive}
+	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items", OwnerGroupID: "region-east", Epoch: 3, State: rootstate.RangeStateActive}
 	prior, err := PlanRange(r, []rootstate.RegionProgress{progressFixture("east", "region-east", 2), progressFixture("west", "region-west", 1)})
 	if err != nil {
 		t.Fatal(err)

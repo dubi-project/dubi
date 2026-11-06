@@ -111,7 +111,7 @@ func (f *repairSourceFake) RepairRecord(ctx context.Context, source rootstate.No
 
 func TestRemoteRepairUsesAnotherCurrentCohortNode(t *testing.T) {
 	plan := repairTestPlan(t)
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("remote-key"), []byte("remote-body"))
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestRepairReferenceRetainsLocalFailureAfterRemoteFallback(t *testing.T) {
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("remote fallback preserves the local destination failure")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("remote-fallback"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +150,7 @@ func TestRepairReferenceRemoteFallbackDoesNotClearUnavailableLocalStore(t *testi
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("closed-local"), []byte("remote bytes"))
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestRepairReferenceTriesOtherLocalSourceAfterRemoteFallback(t *testing.T) {
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("repair the actual local destination")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("retry-local"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestRepairReferenceRechecksLocalHoldingAfterRemoteFallback(t *testing.T) {
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("another worker completed local publication")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("concurrent-local"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestRepairReferenceDoesNotHideFetchAuthorityFailureBehindRemoteFallback(t *
 		t.Run(code.String(), func(t *testing.T) {
 			plan, store := repairTestPlan(t), repairTestStore(t)
 			body := []byte("authority failure")
-			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+			d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 				"origin-group", []byte("fenced-fetch"), body)
 			if err != nil {
 				t.Fatal(err)
@@ -272,7 +272,7 @@ func TestRepairReferenceFallbackAndRetryWithoutOverwritingLocalDamage(t *testing
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("repair-from-another-confirmed-Node")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("key"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -382,7 +382,7 @@ func TestRepairReferenceRelocatesLostPackFromConfirmedSource(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	body := []byte("recovered-from-confirmed-source")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("lost-key"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -436,7 +436,7 @@ func TestInterruptedRepairRetriesTheSameReferenceFromConfirmedSources(t *testing
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("repair-after-an-interrupted-source-stream")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("interrupted"), body)
 	if err != nil {
 		t.Fatal(err)
@@ -472,7 +472,7 @@ func TestLiveRepairLeavesTimeForFallbackWhenFirstSourceStalls(t *testing.T) {
 	plan := repairTestPlan(t)
 	store := repairTestStore(t)
 	body := []byte("fallback-after-stalled-source")
-	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", DatasetID: "items"},
+	d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "search", ModuleID: "items"},
 		"origin-group", []byte("stalled"), body)
 	if err != nil {
 		t.Fatal(err)

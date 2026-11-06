@@ -17,7 +17,7 @@ import (
 func runJoinGrant(ctx context.Context, operation string, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("join "+operation, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "existing managed Node store for local operator authentication")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	address := flags.String("server", "", "existing enrollment authority RPC address")
 	var ttl *time.Duration
 	var grantID *string

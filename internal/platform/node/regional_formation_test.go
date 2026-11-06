@@ -54,7 +54,7 @@ func TestRuntimeRegionFormationRestartsBeforeRoutingPublication(t *testing.T) {
 		if peer == id.RaftID {
 			nodeID = id.NodeID
 		}
-		applyRoot(t, r, rootstate.Command{Version: 1, RequestID: fmt.Sprintf("node-%d", peer), Type: rootstate.RegisterNode, Node: &rootstate.Node{NodeID: nodeID, RaftID: peer, RegionID: "west", Address: "localhost:7443"}})
+		applyRoot(t, r, rootstate.Command{Version: rootstate.FormatVersion, RequestID: fmt.Sprintf("node-%d", peer), Type: rootstate.RegisterNode, Node: &rootstate.Node{NodeID: nodeID, RaftID: peer, RegionID: "west", Address: "localhost:7443"}})
 		if peer != id.RaftID {
 			if err := r.Host.AddLearner(raft.RootGroupID, peer); err != nil {
 				t.Fatal(err)
@@ -63,13 +63,13 @@ func TestRuntimeRegionFormationRestartsBeforeRoutingPublication(t *testing.T) {
 	}
 	slices.Sort(peers)
 	group := regiongroups.GroupID("west")
-	applyRoot(t, r, rootstate.Command{Version: 1, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: group, StateKind: rootstate.GroupStateEngine}})
+	applyRoot(t, r, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group", Type: rootstate.RegisterGroup, Group: &rootstate.Group{GroupID: group, StateKind: rootstate.GroupStateEngine}})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := r.JoinManager.PrepareJoining(ctx, rootstate.GroupTaskReference{GroupID: group, ChangeID: "missing", ExpectedEpoch: 1}, id.RaftID); err == nil || r.Host.HasGroup(group) {
 		t.Fatal("learner opened without Root membership task", err)
 	}
-	applyRoot(t, r, rootstate.Command{Version: 1, RequestID: "plan", Type: rootstate.PlanRegionCohort, RegionPlan: &rootstate.RegionCohortPlan{RegionID: "west", GroupID: group, Nodes: peers}})
+	applyRoot(t, r, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "plan", Type: rootstate.PlanRegionCohort, RegionPlan: &rootstate.RegionCohortPlan{RegionID: "west", GroupID: group, Nodes: peers}})
 	if err := r.JoinManager.PrepareJoining(ctx, rootstate.GroupTaskReference{GroupID: group, ChangeID: "missing", ExpectedEpoch: 1}, id.RaftID); err == nil || r.Host.HasGroup(group) {
 		t.Fatal("learner preempted initial formation", err)
 	}

@@ -33,7 +33,7 @@ const recordIndexVersion = protocol.RecordIndexFormatVersion
 // IndexSnapshotVersion identifies the portable immutable-record index image.
 // It contains descriptors and old physical locations; restore must provide a
 // location mapper after the corresponding Pack images have been imported.
-const IndexSnapshotVersion = 1
+const IndexSnapshotVersion = 2
 
 type IndexSnapshot struct {
 	Version int                  `json:"version"`
@@ -691,7 +691,7 @@ func classifyIndexRead(err error) error {
 }
 
 func indexKey(id string) []byte  { return []byte("record/" + id) }
-func recordKey(id string) []byte { return []byte("DUBI immutable record v1/" + id) }
+func recordKey(id string) []byte { return []byte("DUBI immutable record v2/" + id) }
 func strictJSON(data []byte, v any) error {
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()

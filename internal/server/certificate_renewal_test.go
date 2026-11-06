@@ -280,7 +280,7 @@ func TestManagedCertificateRenewalRetriesAndCancels(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, Type: rootstate.RegisterNode, RequestID: "renewal-retry-node", Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: "127.0.0.1:7443"}})
+	command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, Type: rootstate.RegisterNode, RequestID: "renewal-retry-node", Node: &rootstate.Node{NodeID: id.NodeID, RaftID: id.RaftID, RegionID: "local", Address: "127.0.0.1:7443"}})
 	if err != nil {
 		t.Fatal(err)
 	}

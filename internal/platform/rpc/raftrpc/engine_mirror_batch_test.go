@@ -63,7 +63,7 @@ func mirrorBatchCommands(t *testing.T, n int) [][]byte {
 	var out [][]byte
 	for i := 0; i < n; i++ {
 		k := []byte(fmt.Sprintf("item-%02d", i))
-		scope := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+		scope := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"}
 		d, e := records.Describe(scope, "origin", k, []byte("body"))
 		if e != nil {
 			t.Fatal(e)

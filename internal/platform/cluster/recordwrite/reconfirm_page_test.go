@@ -67,7 +67,7 @@ func confirmationPageFixture(t *testing.T) (*testRoot, *enginestate.State, []eng
 		t.Fatal(err)
 	}
 	if err := owner.ApplyRange(2, "activate", rootstate.Range{RangeID: target.RangeID, TenantID: target.Keyspace.TenantID,
-		EngineID: target.Keyspace.EngineID, DatasetID: target.Keyspace.DatasetID, OwnerGroupID: target.OwnerGroupID,
+		EngineID: target.Keyspace.EngineID, ModuleID: target.Keyspace.ModuleID, OwnerGroupID: target.OwnerGroupID,
 		Epoch: target.Epoch, State: rootstate.RangeStateActive}); err != nil {
 		t.Fatal(err)
 	}

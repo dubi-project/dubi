@@ -149,7 +149,7 @@ func RestoreClusterToRuntimes(ctx context.Context, point repository.RecoveryPoin
 						}
 						return runtime.ImportRestoreArtifact(applyCtx, artifact.Name, artifact.Kind, reader, size, placements[sourceID])
 					case "records-index":
-						if artifact.Format != "DUBI_RECORD_INDEX_V1" {
+						if artifact.Format != "DUBI_RECORD_INDEX_V2" {
 							return fmt.Errorf("unsupported records index artifact format %q", artifact.Format)
 						}
 						image, readErr := io.ReadAll(io.LimitReader(reader, size+1))

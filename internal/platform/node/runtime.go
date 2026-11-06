@@ -31,6 +31,8 @@ import (
 )
 
 type Options struct {
+	// StoreRoot holds Node identity, consensus state, indexes and the volume
+	// registry. One Node owns one metadata root and may register many Volumes.
 	StoreRoot          string
 	TickInterval       time.Duration
 	Transport          raft.Transport

@@ -268,7 +268,7 @@ func TestManagedRootTopologyAutomaticQuorumFailoverAndColdRestart(t *testing.T) 
 				t.Fatal("failure changed durable voter denominator")
 			}
 			poll("regional quorum after Node loss", func() bool { return checkRegional(survivors) })
-			command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "after-root-failover", Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: "survived"}})
+			command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "after-root-failover", Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: "survived"}})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -89,8 +89,8 @@ func TestLiveRepairRetriesOnlyTransientRowsAtPageTail(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer owner.Close()
-			space := rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}
-			if err := owner.ApplyRange(1, "range-activate", rootstate.Range{RangeID: "range-west", TenantID: space.TenantID, EngineID: space.EngineID, DatasetID: space.DatasetID, OwnerGroupID: "region-west", Epoch: 1, State: rootstate.RangeStateActive}); err != nil {
+			space := rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"}
+			if err := owner.ApplyRange(1, "range-activate", rootstate.Range{RangeID: "range-west", TenantID: space.TenantID, EngineID: space.EngineID, ModuleID: space.ModuleID, OwnerGroupID: "region-west", Epoch: 1, State: rootstate.RangeStateActive}); err != nil {
 				t.Fatal(err)
 			}
 			target := router.Target{Keyspace: space, RangeID: "range-west", OwnerGroupID: "region-west", Epoch: 1}

@@ -1,5 +1,7 @@
 # 底座实现采用记录
 
+寻址实现已更新：取消独立 Dataset，使用 Tenant + Module + Engine 的可信绑定，Module 不管理 Keyspace/Range；详见 [数据寻址与隔离](data-addressing.md)。下表保留采用时的验收历史，当前格式和本次 VPS 迁移验证以该文档与生产就绪记录为准。
+
 DUBI 是独立项目。下表追踪从 Byfile 纳入的实现与测试；记录代码来源不表示 DUBI 依赖 Byfile 的模块、协议或磁盘格式。后续纳入的包须更新此表，并在 DUBI 仓库内独立验收。
 
 | DUBI 位置 | Byfile 来源 | 改造边界 | 当前验证 |

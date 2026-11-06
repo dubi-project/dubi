@@ -3,9 +3,10 @@ module github.com/dubi-project/dubi
 go 1.26.0
 
 require (
+	golang.org/x/crypto v0.58.0
 	github.com/cockroachdb/pebble v1.1.5
 	go.etcd.io/raft/v3 v3.7.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.49.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12
@@ -35,6 +36,6 @@ require (
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect
-	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )

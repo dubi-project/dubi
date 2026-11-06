@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dubi-project/dubi/internal/gateway/httpapi"
 	"github.com/dubi-project/dubi/internal/platform/auth"
 	"github.com/dubi-project/dubi/internal/platform/node"
 )
@@ -19,10 +20,18 @@ func newPublicHTTPServer(verifier auth.Verifier) *http.Server {
 }
 
 func newPublicHTTPServerWithMonitoring(verifier auth.Verifier, runtime *node.Runtime, ready <-chan struct{}, repairSnapshot func() repairObservation) *http.Server {
+	return newPublicHTTPServerWithConfig(verifier, runtime, ready, repairSnapshot, nil)
+}
+
+func newPublicHTTPServerWithConfig(verifier auth.Verifier, runtime *node.Runtime, ready <-chan struct{}, repairSnapshot func() repairObservation, config http.Handler) *http.Server {
 	slots := make(chan struct{}, 32)
 	monitoring := monitoringView{runtime: runtime, ready: ready, repairSnapshot: repairSnapshot}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		if config != nil && r.URL.Path == httpapi.ConfigPath {
+			config.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
 			writeMonitoringEndpoint(w, r, monitoring)
 			return
@@ -66,6 +75,6 @@ func newPublicHTTPServerWithMonitoring(verifier auth.Verifier, runtime *node.Run
 		}{TenantID: principal.TenantID(), CredentialID: principal.CredentialID()})
 	})
 	return &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second,
+		ReadTimeout: 15 * time.Second, WriteTimeout: 65 * time.Second,
 		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10}
 }

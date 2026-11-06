@@ -159,11 +159,11 @@ retry_command() {
 # rejected readiness attempt and keep the stable IDs for the actual success
 # path once the Group is writable.
 retry_record_put() {
-	local label=$1 store=$2 address=$3 request_prefix=$4 tenant=$5 dataset=$6 key=$7 value=$8
+	local label=$1 store=$2 address=$3 request_prefix=$4 tenant=$5 key=$6 value=$7
 	local out="$lab_dir/$label.json" err="$lab_dir/$label.err"
 	for attempt in $(seq 1 240); do
 		if "$binary" record put --store "$store" --server "$address" \
-			--request-id "${request_prefix}-${attempt}" "$tenant" "$dataset" "$key" "$value" >"$out" 2>"$err"; then
+			--request-id "${request_prefix}-${attempt}" "$tenant" "$key" "$value" >"$out" 2>"$err"; then
 			return 0
 		fi
 		sleep 0.5
@@ -176,7 +176,7 @@ wait_record() {
 	local label=$1 store=$2 address=$3 key=$4 expected=$5
 	local out="$lab_dir/$label.get.json" err="$lab_dir/$label.get.err"
 	for _ in $(seq 1 240); do
-		if "$binary" record get --store "$store" --server "$address" demo items "$key" >"$out" 2>"$err" &&
+		if "$binary" record get --store "$store" --server "$address" demo "$key" >"$out" 2>"$err" &&
 			python3 -c 'import base64,json,sys; d=json.load(open(sys.argv[1])); want=base64.b64encode(sys.argv[2].encode()).decode(); sys.exit(0 if d.get("found") is True and d.get("value") == want else 1)' "$out" "$expected"; then
 			return 0
 		fi
@@ -224,16 +224,16 @@ if ! old_id=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=nex
 fi
 printf 'identity gate: captured sh-03 as %s\n' "$old_id"
 
-retry_command "dataset create" "$lab_dir/dataset.json" "$lab_dir/dataset.err" \
-	"$binary" dataset create --store "$n1_store" --server "$n1_addr" --request-id removal-dataset demo items
-retry_record_put "before" "$n1_store" "$n1_addr" removal-before demo items before survives
+retry_command "tenant create" "$lab_dir/tenant.json" "$lab_dir/tenant.err" \
+	"$binary" tenant create --store "$n1_store" --server "$n1_addr" --request-id removal-tenant demo
+retry_record_put "before" "$n1_store" "$n1_addr" removal-before demo before survives
 wait_record before-from-n3 "$n3_store" "$n3_addr" before survives
 printf 'data gate: old three-Node cohort holds the initial record\n'
 
 kill "$n3_pid" 2>/dev/null || true
 wait "$n3_pid" 2>/dev/null || true
 n3_pid=""
-retry_record_put "offline" "$n1_store" "$n1_addr" removal-offline demo items offline majority
+retry_record_put "offline" "$n1_store" "$n1_addr" removal-offline demo offline majority
 
 retry_command "manual node removal" "$lab_dir/remove.json" "$lab_dir/remove.err" \
 	"$binary" node remove --store "$n1_store" --server "$n1_addr" sh-03

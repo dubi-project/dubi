@@ -144,7 +144,7 @@ func TestMutationOutcomeLimitRealRaftKeepsApplyingAfterRejection(t *testing.T) {
 	}
 	s, g := openGroup()
 	defer func() { g.Close() }()
-	r := rootstate.Range{RangeID: "r", TenantID: "t", EngineID: "record", DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+	r := rootstate.Range{RangeID: "r", TenantID: "t", EngineID: "record", ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	activate, err := routedstate.EncodeActivateRange("activate", r)
 	if err != nil {
 		t.Fatal(err)

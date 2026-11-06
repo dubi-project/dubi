@@ -38,8 +38,8 @@ func TestRouterResolvesTenantScopedKeyspaceAfterRootReadIndex(t *testing.T) {
 			Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}},
 		{Version: rootstate.FormatVersion, RequestID: "tenant-a", Type: rootstate.RegisterTenant,
 			Tenant: &rootstate.Tenant{TenantID: "tenant-a"}},
-		{Version: rootstate.FormatVersion, RequestID: "dataset-a", Type: rootstate.CreateDataset,
-			Dataset: &rootstate.Dataset{TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+		{Version: rootstate.FormatVersion, RequestID: "module-a", Type: rootstate.PrepareRange,
+			InitialRange: &rootstate.RangeSeed{TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 				RangeID: "range-a", OwnerGroupID: "data-1"}},
 		{Version: rootstate.FormatVersion, RequestID: "activate-a", Type: rootstate.ActivateRange,
 			Activation: &rootstate.RangeActivation{RangeID: "range-a", OwnerGroupID: "data-1", Epoch: 1,
@@ -63,7 +63,7 @@ func TestRouterResolvesTenantScopedKeyspaceAfterRootReadIndex(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"}
 	value, err := router.Resolve(ctx, keyspace, []byte("key-1"))
 	if err != nil || value.RangeID != "range-a" || value.OwnerGroupID != "data-1" || value.Epoch != 1 {
 		t.Fatalf("Root route = %+v, %v", value, err)
@@ -100,9 +100,9 @@ func (f *fakeCatalog) RouteKeyspace(rootstate.Keyspace, []byte) (rootstate.Range
 }
 
 func TestRouterFailsClosedWithoutConfirmedRootView(t *testing.T) {
-	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"}
 	catalog := &fakeCatalog{applied: 10, found: true, value: rootstate.Range{
-		RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+		RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 		OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}}
 	router, err := New(fakeBarrier{err: context.DeadlineExceeded}, catalog)
 	if err != nil {
@@ -150,9 +150,9 @@ func TestContainsHalfOpenRange(t *testing.T) {
 }
 
 func TestResolveTargetDetachesRoutingKey(t *testing.T) {
-	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"}
 	catalog := &fakeCatalog{applied: 4, found: true, value: rootstate.Range{
-		RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+		RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 		OwnerGroupID: "data-1", Epoch: 3, State: rootstate.RangeStateActive}}
 	router, err := New(fakeBarrier{index: 4}, catalog)
 	if err != nil {
@@ -170,9 +170,9 @@ func TestResolveTargetDetachesRoutingKey(t *testing.T) {
 }
 
 func TestResolveTargetAtConfirmedIndexAvoidsSecondBarrier(t *testing.T) {
-	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"}
 	catalog := &fakeCatalog{applied: 18, found: true, value: rootstate.Range{
-		RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+		RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 		OwnerGroupID: "data-1", Epoch: 3, State: rootstate.RangeStateActive}}
 	routes, err := New(fakeBarrier{err: errors.New("unexpected second Root ReadIndex")}, catalog)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestResolveTargetAtConfirmedIndexAvoidsSecondBarrier(t *testing.T) {
 
 func TestCheckOwnerRequiresExactAppliedGeneration(t *testing.T) {
 	current := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", Start: []byte("b"), End: []byte("m"), OwnerGroupID: "data-1", Epoch: 3,
+		ModuleID: "items", Start: []byte("b"), End: []byte("m"), OwnerGroupID: "data-1", Epoch: 3,
 		State: rootstate.RangeStateActive}
 	target := Target{Keyspace: current.Keyspace(), RangeID: current.RangeID, OwnerGroupID: current.OwnerGroupID,
 		Epoch: current.Epoch, RoutingKey: []byte("key")}

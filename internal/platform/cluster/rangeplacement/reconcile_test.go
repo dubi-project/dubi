@@ -72,7 +72,7 @@ func placementFixture(t *testing.T, count int) (*Coordinator, *placementHost) {
 	apply(rootstate.Command{Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: "tenant"}})
 	for i := 0; i < count; i++ {
 		id := fmt.Sprintf("range-%03d", i)
-		apply(rootstate.Command{Type: rootstate.CreateDataset, Dataset: &rootstate.Dataset{TenantID: "tenant", EngineID: "record", DatasetID: fmt.Sprintf("dataset-%03d", i), RangeID: id, OwnerGroupID: "regional-west"}})
+		apply(rootstate.Command{Type: rootstate.PrepareRange, InitialRange: &rootstate.RangeSeed{TenantID: "tenant", EngineID: "record", ModuleID: fmt.Sprintf("module-%03d", i), RangeID: id, OwnerGroupID: "regional-west"}})
 		apply(rootstate.Command{Type: rootstate.ActivateRange, Activation: &rootstate.RangeActivation{RangeID: id, OwnerGroupID: "regional-west", Epoch: 1, OwnerRequestID: "owner-" + id, OwnerAppliedIndex: 1000}})
 	}
 	h := &placementHost{root: s, applyAfter: 1}
@@ -149,6 +149,71 @@ func TestPlacementWaitsForExactDurableResultWithoutResubmission(t *testing.T) {
 	}
 	if h.submissions != 1 || h.reads != 3 {
 		t.Fatal(h.submissions, h.reads)
+	}
+}
+
+func TestInitialPlacementPublishesOnlyRequestedRangeAndWaitsForCommit(t *testing.T) {
+	c, h := placementFixture(t, 3)
+	h.applyAfter = 3
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := c.EnsureInitial(ctx, "range-001"); err != nil {
+		t.Fatal(err)
+	}
+	if h.submissions != 1 || h.reads != 3 {
+		t.Fatal("returned before exact result, or repeated proposal", h.submissions, h.reads)
+	}
+	for i := 0; i < 3; i++ {
+		_, found, err := h.root.RangePlacement(fmt.Sprintf("range-%03d", i))
+		if err != nil || found != (i == 1) {
+			t.Fatal("unexpected placement", i, found, err)
+		}
+	}
+	if err := c.EnsureInitial(ctx, "range-001"); err != nil || h.submissions != 1 {
+		t.Fatal("existing placement was rewritten", err, h.submissions)
+	}
+}
+
+func TestInitialPlacementRejectsMissingRangeAndHonorsCancellation(t *testing.T) {
+	c, h := placementFixture(t, 1)
+	if err := c.EnsureInitial(context.Background(), "missing"); err == nil || h.submissions != 0 {
+		t.Fatal("created placement for missing Range", err)
+	}
+	h.applyAfter = 0
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := c.EnsureInitial(ctx, "range-000"); !errors.Is(err, context.DeadlineExceeded) || h.submissions != 1 {
+		t.Fatal("uncommitted placement accepted or retried", err, h.submissions)
+	}
+	if _, found, err := h.root.RangePlacement("range-000"); err != nil || found {
+		t.Fatal("uncommitted placement became visible", found, err)
+	}
+}
+
+type initialFollowerHost struct{ *placementHost }
+
+func (initialFollowerHost) Status(string) (raft.GroupStatus, error) {
+	return raft.GroupStatus{}, errors.New("initial placement must not depend on local leadership")
+}
+
+func TestInitialPlacementUsesConsensusWithoutLocalLeaderRequirement(t *testing.T) {
+	c, h := placementFixture(t, 1)
+	c.host = initialFollowerHost{h}
+	if err := c.EnsureInitial(context.Background(), "range-000"); err != nil || h.submissions != 1 {
+		t.Fatal("first writer cannot publish through consensus", err, h.submissions)
+	}
+}
+
+func TestInitialPlacementDoesNotBypassPendingOwnerCohort(t *testing.T) {
+	c, h := placementFixture(t, 1)
+	applyPlacementFixture(t, h.root, rootstate.Command{Type: rootstate.PlanRegionCohort,
+		RegionPlan: &rootstate.RegionCohortPlan{RegionID: "west", ExpectedGeneration: 1,
+			GroupID: "regional-west", Nodes: []uint64{1, 2, 3, 4}}})
+	if err := c.EnsureInitial(context.Background(), "range-000"); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := h.root.RangePlacement("range-000"); err != nil || found || h.submissions != 0 {
+		t.Fatal("pending cohort was counted as ready", found, err, h.submissions)
 	}
 }
 

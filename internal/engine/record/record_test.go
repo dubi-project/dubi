@@ -10,7 +10,7 @@ import (
 )
 
 func TestReferencePutPayloadRoundTrip(t *testing.T) {
-	space := rootstate.Keyspace{TenantID: "tenant", EngineID: EngineID, DatasetID: "dataset"}
+	space := rootstate.Keyspace{TenantID: "tenant", EngineID: EngineID, ModuleID: "module"}
 	descriptor, err := records.Describe(space, "group-00000000000000000000000000000001", []byte("key"), []byte("value"))
 	if err != nil {
 		t.Fatal(err)

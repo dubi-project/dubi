@@ -57,6 +57,7 @@ func writeMonitoringEndpoint(w http.ResponseWriter, r *http.Request, view monito
 }
 
 func writePrometheusMetrics(w http.ResponseWriter, view monitoringView) {
+	writeRuntimeMemoryMetrics(w)
 	writeGauge := func(name string, value float64, labels string) {
 		if labels != "" {
 			_, _ = fmt.Fprintf(w, "%s{%s} %s\n", name, labels, strconv.FormatFloat(value, 'f', -1, 64))

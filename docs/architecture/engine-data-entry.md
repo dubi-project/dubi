@@ -1,14 +1,16 @@
 # 进程内 Engine 数据入口
 
+当前入口已切换为 Tenant + Module + Engine 的可信绑定，Module 不管理 Keyspace/Range；详见 [数据寻址与隔离](data-addressing.md)。底层显式 Keyspace 的 Write/Read 供 Runtime 适配使用，正式探针使用绑定入口。旧开发格式拒绝自动迁移。
+
 `internal/platform/cluster/enginedata.Service` 是模块与不可变数据底座之间的进程内契约，可以在任意健康 Node 上调用；它不是公开 RPC，也不负责 Tenant 应用身份认证。Server 在启动时用本 Node 的 Root、Owner、共享 Records/Pack 和内部 Group Client 装配它；调用者必须已经获准使用目标 Keyspace。当前 `record put/get` 探针已经通过这条底座入口，实际发布不可变引用并经过物理持有门禁；它仍不是最终 Tenant API。
 
-写入者提供完整内部 Keyspace、路由 Key、不透明 Body、稳定 RequestID 和一个模块定义的 `Publication` 编码函数。底座先通过 Root ReadIndex 找当前 Range/Owner，构造带 Keyspace/来源 Group/Key/摘要的不可变 Descriptor，并将 Descriptor 交给模块编码能力命令。模块 Handler 必须在 Owner 事务里调用 `Transaction.SetRecordReference` 发布**完全相同**的描述；业务元数据由模块自己管理。底座将 Body 持久写到当前稳定 Region 的独立 Node 多数，发布引用后重新观察物理持有，再经 Owner Raft 保存代际绑定的本地确认并做最后复核。只有这些全部成功，`WriteResult.State` 才是 `local_ready`。当集群有多个已确认 Region 时，Owner 还要在本地写入前确认至少一个其它 Region 能建立自己的 Raft 多数；此判断来自 Root 当前已确认的集群 Region，而不是单个 Range 的固定 placement。所有其它 Region 都失去多数时拒绝 local-ready 写入，即便该 Range 的旧 placement 只含本地区域。此探测不等待远端数据复制，也不能排除探测后立刻发生区域故障的竞态；集群持久拓扑本来只有一个已确认 Region 时仍按本地多数确认。
+服务端先固定 Module/Engine 并绑定已授权 Tenant；写入者提供 Key、不透明 Body、稳定 RequestID 和 Engine 定义的 `Publication` 编码函数。底座先通过 Root ReadIndex 找当前 Range/Owner，构造带 Keyspace/来源 Group/Key/摘要的不可变 Descriptor，并将 Descriptor 交给模块编码能力命令。模块 Handler 必须在 Owner 事务里调用 `Transaction.SetRecordReference` 发布**完全相同**的描述；业务元数据由模块自己管理。底座将 Body 持久写到当前稳定 Region 的独立 Node 多数，发布引用后重新观察物理持有，再经 Owner Raft 保存代际绑定的本地确认并做最后复核。只有这些全部成功，`WriteResult.State` 才是 `local_ready`。当集群有多个已确认 Region 时，Owner 还要在本地写入前确认至少一个其它 Region 能建立自己的 Raft 多数；此判断来自 Root 当前已确认的集群 Region，而不是单个 Range 的固定 placement。所有其它 Region 都失去多数时拒绝 local-ready 写入，即便该 Range 的旧 placement 只含本地区域。此探测不等待远端数据复制，也不能排除探测后立刻发生区域故障的竞态；集群持久拓扑本来只有一个已确认 Region 时仍按本地多数确认。
 
 失败返回 `unknown`，或在新的 Owner 读切点能确认该请求的精确当前引用时返回 `published_unconfirmed`。后者**不是**已证明不持久：确认可能已经提交但响应丢失；它也绝不是可对用户宣告的 `LocalReady`。调用方用同一 RequestID 和相同内容重试。无法完成读屏障、路由已变或请求被取消时，保守返回 `unknown`；不得把它解释成“肯定没有发布”。没有发布精确引用的 Handler 即使 Raft mutation 已 Applied，也不会得到 `local_ready`。
 
 托管节点还在多 Region 的本地写入返回成功前，同步保存不透明引用的 Geo 补齐提示，覆盖进程内 Engine 入口和跨节点转发接收端。若本地确认已完成而提示同步失败，返回错误并保留已确认引用；即使结果中仍有 `local_ready`，调用方也必须检查错误，并以原 RequestID 重试，不能向用户报告整个操作成功。单 Region 不产生此 Geo 提示，小 Region 仍使用同步 GeoReady 路径。补齐提示使新写入无需等待历史记录全量扫描，不等于远端已持有数据。
 
-读取者提供 Keyspace 和 Key。入口重查 Root 路由，按当前 Owner 引用、持久确认与实时物理多数门禁读取；执行读的 Owner 成员缺字节时，先从当前已确认 Cohort 中已认证的成员拉取到同一个共享 Pack，然后重新证明真实多数并复核引用与区域时效。拉取本身不授权返回数据；只有一份缓存、来源失联、未完整落盘或期间发生覆盖/区域变化，均不能作为成功读取。先补本地缺失副本也避免静默失联节点耗尽持有探测期限，导致在线节点一直无法补齐。两个 Engine 的同名 Key 依完整 Keyspace 隔离，Pack 不按 Engine 划分。
+读取者通过绑定入口提供 Key。入口重查 Root 路由，按当前 Owner 引用、持久确认与实时物理多数门禁读取；执行读的 Owner 成员缺字节时，先从当前已确认 Cohort 中已认证的成员拉取到同一个共享 Pack，然后重新证明真实多数并复核引用与区域时效。拉取本身不授权返回数据；只有一份缓存、来源失联、未完整落盘或期间发生覆盖/区域变化，均不能作为成功读取。先补本地缺失副本也避免静默失联节点耗尽持有探测期限，导致在线节点一直无法补齐。两个 Engine 的同名 Key 依完整 Keyspace 隔离，Pack 不按 Engine 划分。
 
 成员计划切换后，若当前引用已有持久本地确认，但仅 Cohort/Group epoch/fence 已过期，读取先证明当前实际物理多数，再允许当前 Owner leader 按需刷新这一条确认，复用 `EnsureCurrentLocalConfirmation` 的持久提案、精确 Result 和最终计划复核。随后丢弃旧读结果并完整重读一次；回调成功或仅 Submit ACK 都不能直接授权返回字节。无确认、发布身份不符、缺少多数、成员未确认、权限错误等不触发此路径。每个 Node 最多一个同步尝试，不排队，不新建后台任务；只处理不超过 4 MiB 的记录，尝试上下文最多 5 秒且服从调用方更短期限。忙碌、非 leader 或较大记录继续原有 Geo/成员转送和后台修复路径；正常已确认读没有额外确认提交。
 

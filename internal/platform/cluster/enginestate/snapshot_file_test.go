@@ -48,8 +48,8 @@ func TestFileSnapshotCapturesScopedLogicalCutIndependentOfPacking(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer source.Close()
-	a := activateKeyspace(t, source, rootstate.Keyspace{TenantID: "a", EngineID: "record", DatasetID: "items"})
-	b := activateKeyspace(t, source, rootstate.Keyspace{TenantID: "b", EngineID: "search", DatasetID: "items"})
+	a := activateKeyspace(t, source, rootstate.Keyspace{TenantID: "a", EngineID: "record", ModuleID: "items"})
+	b := activateKeyspace(t, source, rootstate.Keyspace{TenantID: "b", EngineID: "search", ModuleID: "items"})
 	if err := source.ApplyRouted(3, "write-a", a, old); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestFileSnapshotCapturesScopedLogicalCutIndependentOfPacking(t *testing.T) 
 		reader.Close()
 		t.Fatal(err)
 	}
-	if header := decoder.Header(); header.Index != index || header.GroupID != "data-1" || header.Format != "enginestate-v7" {
+	if header := decoder.Header(); header.Index != index || header.GroupID != "data-1" || header.Format != "enginestate-v8" {
 		t.Fatal(header)
 	}
 	values := make(map[string][]byte)

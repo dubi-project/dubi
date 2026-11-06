@@ -120,15 +120,15 @@ func TestRecordReferenceStagingScopeAndRollback(t *testing.T) {
 				if err != nil {
 					return Outcome{}, err
 				}
-				for _, bad := range []string{"tenant", "engine", "dataset", "key", "digest"} {
+				for _, bad := range []string{"tenant", "engine", "module", "key", "digest"} {
 					v := d
 					switch bad {
 					case "tenant":
 						v.Keyspace.TenantID = "other"
 					case "engine":
 						v.Keyspace.EngineID = "other"
-					case "dataset":
-						v.Keyspace.DatasetID = "other"
+					case "module":
+						v.Keyspace.ModuleID = "other"
 					case "key":
 						v.Key = []byte("other")
 					case "digest":
@@ -555,7 +555,7 @@ func TestRecordReferenceRealRaftReplayAndOwnerFence(t *testing.T) {
 	}
 	s, g := openGroup()
 	defer func() { g.Close() }()
-	r := rootstate.Range{RangeID: "r", TenantID: "t", EngineID: "record", DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+	r := rootstate.Range{RangeID: "r", TenantID: "t", EngineID: "record", ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	command, err := routedstate.EncodeActivateRange("activate", r)
 	if err != nil {
 		t.Fatal(err)
@@ -713,7 +713,7 @@ func TestRecordReferenceProcessCrashAtomicPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "t", EngineID: "record", DatasetID: "items"}, OwnerGroupID: "data-1", RangeID: "range-1", Epoch: 1, RoutingKey: []byte("item")}
+			target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "t", EngineID: "record", ModuleID: "items"}, OwnerGroupID: "data-1", RangeID: "range-1", Epoch: 1, RoutingKey: []byte("item")}
 			ref, found, err := readRecordReference(t, s, target)
 			want := point == "after-sync"
 			if err != nil || found != want {

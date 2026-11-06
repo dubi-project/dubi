@@ -87,7 +87,7 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	space := rootstate.Keyspace{TenantID: "volume-repair", EngineID: "data-alpha", DatasetID: "shared"}
+	space := rootstate.Keyspace{TenantID: "volume-repair", EngineID: "data-alpha", ModuleID: "shared"}
 	tenant, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion,
 		RequestID: "volume-repair-tenant", Type: rootstate.RegisterTenant,
 		Tenant: &rootstate.Tenant{TenantID: space.TenantID}})
@@ -112,7 +112,7 @@ func testManagedRepairRelocatesLostVolume(t *testing.T, online bool) {
 			break
 		}
 	}
-	activateEngineTestDataset(t, ctx, first, group, space)
+	activateEngineTestRange(t, ctx, first, group, space)
 	key, body := []byte("lost-volume-key"), []byte("repair-on-restart-body")
 	request := enginedata.WriteRequest{RequestID: "write-before-volume-loss", Keyspace: space,
 		Key: key, Body: body, Publish: func(d records.Descriptor) ([]byte, error) { return json.Marshal(d) }}

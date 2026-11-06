@@ -185,17 +185,17 @@ func TestRoutedMembershipControlFollowsNewLeaderBeforeRootPublication(t *testing
 		{NodeID: fmt.Sprintf("node_%032x", newLeaderID), RaftID: newLeaderID, RegionID: "r1", Address: "n3"},
 		{NodeID: fmt.Sprintf("node_%032x", clientID), RaftID: clientID, RegionID: "r1", Address: "caller"},
 	} {
-		applyMembershipRoot(t, rootControl, rootstate.Command{Version: 1,
+		applyMembershipRoot(t, rootControl, rootstate.Command{Version: rootstate.FormatVersion,
 			RequestID: fmt.Sprintf("node-%d", node.RaftID), Type: rootstate.RegisterNode, Node: &node})
 	}
 	rootControl.index++
 	if err := root.ApplyMembership(rootControl.index, &raftpb.ConfState{Voters: []uint64{leaderID}, Learners: []uint64{newLeaderID, clientID}}); err != nil {
 		t.Fatal(err)
 	}
-	applyMembershipRoot(t, rootControl, rootstate.Command{Version: 1, RequestID: "group-data",
+	applyMembershipRoot(t, rootControl, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "group-data",
 		Type:  rootstate.RegisterGroup,
 		Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}})
-	applyMembershipRoot(t, rootControl, rootstate.Command{Version: 1, RequestID: "members-initial",
+	applyMembershipRoot(t, rootControl, rootstate.Command{Version: rootstate.FormatVersion, RequestID: "members-initial",
 		Type: rootstate.PublishGroupMembers, Membership: &rootstate.GroupMembership{GroupID: "data-1",
 			ExpectedEpoch: 1, Members: []rootstate.GroupMember{{RaftID: leaderID, Role: rootstate.GroupMemberVoter}}}})
 

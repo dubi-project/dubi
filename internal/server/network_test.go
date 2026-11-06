@@ -27,7 +27,7 @@ func TestLocalNetworkResolutionPreservesRegistrationAndRejectsFlagChanges(t *tes
 		t.Fatal("resolution prematurely published registration", found, err)
 	}
 	initial.RegionID, initial.Address = "west", "stable.example:17443"
-	command, err := rootstate.EncodeCommand(rootstate.Command{Version: 1, RequestID: "registered-node", Type: rootstate.RegisterNode, Node: &initial})
+	command, err := rootstate.EncodeCommand(rootstate.Command{Version: rootstate.FormatVersion, RequestID: "registered-node", Type: rootstate.RegisterNode, Node: &initial})
 	if err != nil {
 		t.Fatal(err)
 	}

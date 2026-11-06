@@ -44,7 +44,7 @@ func runVolume(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	flags := flag.NewFlagSet("volume "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	store := flags.String("store", "", "durable Node store root")
+	store := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	server := flags.String("server", "", "local running Node RPC address (automatically remembered)")
 	rewrite := flags.Bool("rewrite", false, "relocate live records before collecting mixed Packs")
 	if err := flags.Parse(args[1:]); err != nil {

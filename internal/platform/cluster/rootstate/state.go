@@ -57,6 +57,9 @@ func Open(root string) (*State, error) {
 		return nil, err
 	}
 	state := &State{db: db, conf: &raftpb.ConfState{}, root: root, closeDone: make(chan struct{})}
+	if err := state.checkStateFormat(); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
 	if encoded, found, err := state.get(appliedKey); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -364,6 +367,8 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		return s.applyRootJoin(batch, command)
 	case CreateJoinGrant, ConsumeJoinGrant, RevokeJoinGrant:
 		return s.applyJoinGrant(batch, command)
+	case CreateAccessCredential, RevokeAccessCredential:
+		return s.applyAccessCredential(batch, command)
 	case CreateTenantCredential, RevokeTenantCredential:
 		return s.applyTenantCredential(batch, command)
 	case RegisterNode:
@@ -669,8 +674,8 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 			return "TenantID is already registered", nil
 		}
 		return "", setJSON(batch, tenantKey(value.TenantID), value)
-	case CreateDataset:
-		value := command.Dataset
+	case PrepareRange:
+		value := command.InitialRange
 		if _, found, err := s.get(tenantKey(value.TenantID)); err != nil {
 			return "", err
 		} else if !found {
@@ -681,10 +686,10 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		} else if !found {
 			return "owner Group is not registered", nil
 		}
-		if _, found, err := s.get(datasetKey(*value)); err != nil {
+		if _, found, err := s.get(rangeKey(*value)); err != nil {
 			return "", err
 		} else if found {
-			return "Dataset is already registered", nil
+			return "initial Range is already registered", nil
 		}
 		if _, found, err := s.get(rangeIDKey(value.RangeID)); err != nil {
 			return "", err
@@ -692,11 +697,8 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 			return "RangeID is already registered", nil
 		}
 		initial := Range{RangeID: value.RangeID, TenantID: value.TenantID,
-			EngineID: value.EngineID, DatasetID: value.DatasetID,
+			EngineID: value.EngineID, ModuleID: value.ModuleID,
 			OwnerGroupID: value.OwnerGroupID, Epoch: 1, State: RangeStatePending}
-		if err := setJSON(batch, datasetKey(*value), value); err != nil {
-			return "", err
-		}
 		if err := setJSON(batch, rangeKey(*value), initial); err != nil {
 			return "", err
 		}
@@ -772,10 +774,9 @@ func repositoryKey(name string) []byte           { return []byte("data/repositor
 var defaultRepositoryKey = []byte("data/repository-default")
 
 func (value Keyspace) path() string {
-	return value.TenantID + "/" + value.EngineID + "/" + value.DatasetID
+	return value.TenantID + "/" + value.ModuleID + "/" + value.EngineID
 }
-func datasetKey(value Dataset) []byte { return []byte("data/dataset/" + value.Keyspace().path()) }
-func rangeKey(value Dataset) []byte {
+func rangeKey(value RangeSeed) []byte {
 	return keyspaceRangeKey(value.Keyspace())
 }
 func keyspaceRangeKey(value Keyspace) []byte { return []byte("data/range/" + value.path()) }
@@ -1110,23 +1111,27 @@ func (s *State) DefaultRepository() (repository.Repository, bool, error) {
 	return value, true, nil
 }
 
-func (s *State) Dataset(tenantID, engineID, datasetID string) (Dataset, bool, error) {
+// InitialRange returns the persisted Range, including Pending, for internal bootstrap.
+func (s *State) InitialRange(space Keyspace) (Range, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.closed || !validID(tenantID) || !validID(engineID) || !validID(datasetID) {
-		return Dataset{}, false, errors.New("Root state is closed or Dataset identity is invalid")
+	if err := s.usable(); err != nil {
+		return Range{}, false, err
 	}
-	encoded, found, err := s.get(datasetKey(Dataset{TenantID: tenantID, EngineID: engineID, DatasetID: datasetID}))
+	if err := space.Validate(); err != nil {
+		return Range{}, false, err
+	}
+	encoded, found, err := s.get(keyspaceRangeKey(space))
 	if !found || err != nil {
-		return Dataset{}, found, err
+		return Range{}, found, err
 	}
-	var value Dataset
+	var value Range
 	err = json.Unmarshal(encoded, &value)
 	return value, err == nil, err
 }
 
-func (s *State) Route(tenantID, engineID, datasetID string, routingKey []byte) (Range, bool, error) {
-	return s.RouteKeyspace(Keyspace{TenantID: tenantID, EngineID: engineID, DatasetID: datasetID}, routingKey)
+func (s *State) Route(tenantID, engineID, moduleID string, routingKey []byte) (Range, bool, error) {
+	return s.RouteKeyspace(Keyspace{TenantID: tenantID, EngineID: engineID, ModuleID: moduleID}, routingKey)
 }
 
 // RouteKeyspace currently resolves the initial complete Range. Split and move

@@ -365,7 +365,7 @@ class SafetyTests(unittest.TestCase):
         plan = faults.make_plan(fleet, fleet.state["entry_host"], "a3", case, self.binary)
         scenario = faults.Scenario(fleet, plan)
         scenario.group = "region-a"
-        scenario.fixtures = [{"tenant": scenario.tenant, "dataset": "probe", "key": "before", "value": "original", "owner_group_id": "region-a"}]
+        scenario.fixtures = [{"tenant": scenario.tenant, "key": "before", "value": "original", "owner_group_id": "region-a"}]
         scenario.status = lambda: deepcopy(scenario.entry["status"])
         return scenario
 

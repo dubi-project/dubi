@@ -12,7 +12,7 @@ import (
 var ErrStateFormat = errors.New("unsupported engine state format; explicit migration is required")
 var stateFormatKey = []byte("meta/format")
 
-// Old engine-local keys cannot be attributed to Tenant/Dataset safely.
+// Old engine-local keys cannot be attributed to Tenant/Module safely.
 // Never silently reinterpret them, hide them behind the new namespace, or
 // guess ownership from the most recently active Range. Only an empty DB can
 // receive a new format marker; no automatic migration happens on open.

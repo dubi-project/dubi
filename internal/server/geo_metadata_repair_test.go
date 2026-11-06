@@ -32,7 +32,7 @@ func TestEmptyGeoMirrorRetryDoesNotWaitForRoot(t *testing.T) {
 		t.Fatal("empty retry queue attempted remote authority", report, err)
 	}
 	key := []byte("key")
-	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"},
+	target := router.Target{Keyspace: rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"},
 		RangeID: "range-items", OwnerGroupID: "region-west", Epoch: 1, RoutingKey: key}
 	descriptor, err := records.Describe(target.Keyspace, "origin-group", key, []byte("body"))
 	if err != nil {
@@ -170,7 +170,7 @@ func TestGeoReconfirmationRestoresDurableHintsWhenOwnerIsUnavailable(t *testing.
 	var refs []enginestate.RecordReference
 	for i := 0; i < 3; i++ {
 		key := []byte(fmt.Sprintf("key-%d", i))
-		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", DatasetID: "items"}, "region-west", key, []byte("body"))
+		d, err := records.Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "record", ModuleID: "items"}, "region-west", key, []byte("body"))
 		if err != nil {
 			t.Fatal(err)
 		}

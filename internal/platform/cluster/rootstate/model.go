@@ -13,7 +13,7 @@ import (
 	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
 )
 
-const FormatVersion = 1
+const FormatVersion = 2
 
 const (
 	RegisterNode               = "register_node"
@@ -21,9 +21,11 @@ const (
 	FenceNode                  = "fence_node"
 	RegisterGroup              = "register_group"
 	RegisterTenant             = "register_tenant"
+	CreateAccessCredential     = "create_access_credential"
+	RevokeAccessCredential     = "revoke_access_credential"
 	CreateTenantCredential     = "create_tenant_credential"
 	RevokeTenantCredential     = "revoke_tenant_credential"
-	CreateDataset              = "create_dataset"
+	PrepareRange               = "prepare_range"
 	ActivateRange              = "activate_range"
 	PublishGroupMembers        = "publish_group_members"
 	PlanGroupMembers           = "plan_group_members"
@@ -200,18 +202,19 @@ type TenantCredentialRevocation struct {
 	CredentialID string `json:"credential_id"`
 }
 
-// Keyspace is an internal routing domain, not a user-facing resource or a
-// separately allocated persistent ID. A Tenant may own many Keyspaces.
+// Keyspace is a trusted internal address prefix, never a resource to create.
+// Module and Engine are fixed by server assembly; Tenant is authorized at ingress.
 type Keyspace struct {
-	TenantID  string
-	EngineID  string
-	DatasetID string
+	TenantID string
+	EngineID string
+	ModuleID string
 }
 
-type Dataset struct {
+// RangeSeed is a PrepareRange command payload, never a separately persisted resource.
+type RangeSeed struct {
 	TenantID     string `json:"tenant_id"`
 	EngineID     string `json:"engine_id"`
-	DatasetID    string `json:"dataset_id"`
+	ModuleID     string `json:"module_id"`
 	RangeID      string `json:"range_id"`
 	OwnerGroupID string `json:"owner_group_id"`
 }
@@ -228,15 +231,15 @@ type RepositoryDefault struct {
 	Name string `json:"name"`
 }
 
-func (value Dataset) Keyspace() Keyspace {
-	return Keyspace{TenantID: value.TenantID, EngineID: value.EngineID, DatasetID: value.DatasetID}
+func (value RangeSeed) Keyspace() Keyspace {
+	return Keyspace{TenantID: value.TenantID, EngineID: value.EngineID, ModuleID: value.ModuleID}
 }
 
 type Range struct {
 	RangeID             string `json:"range_id"`
 	TenantID            string `json:"tenant_id"`
 	EngineID            string `json:"engine_id"`
-	DatasetID           string `json:"dataset_id"`
+	ModuleID            string `json:"module_id"`
 	Start               []byte `json:"start"`
 	End                 []byte `json:"end"`
 	OwnerGroupID        string `json:"owner_group_id"`
@@ -271,11 +274,11 @@ type RangePlacement struct {
 }
 
 func (value Range) Keyspace() Keyspace {
-	return Keyspace{TenantID: value.TenantID, EngineID: value.EngineID, DatasetID: value.DatasetID}
+	return Keyspace{TenantID: value.TenantID, EngineID: value.EngineID, ModuleID: value.ModuleID}
 }
 
 func (value Keyspace) Validate() error {
-	if !validID(value.TenantID) || !validID(value.EngineID) || !validID(value.DatasetID) {
+	if !validID(value.TenantID) || !validID(value.EngineID) || !validID(value.ModuleID) {
 		return errors.New("invalid internal Keyspace identity")
 	}
 	return nil
@@ -346,9 +349,11 @@ type Command struct {
 	NodeFence           *NodeFenceRequest           `json:"node_fence,omitempty"`
 	Group               *Group                      `json:"group,omitempty"`
 	Tenant              *Tenant                     `json:"tenant,omitempty"`
+	AccessCredential    *AccessCredential           `json:"access_credential,omitempty"`
+	AccessRevocation    *TenantCredentialRevocation `json:"access_revocation,omitempty"`
 	TenantCredential    *TenantCredential           `json:"tenant_credential,omitempty"`
 	TenantRevocation    *TenantCredentialRevocation `json:"tenant_revocation,omitempty"`
-	Dataset             *Dataset                    `json:"dataset,omitempty"`
+	InitialRange        *RangeSeed                  `json:"initial_range,omitempty"`
 	Activation          *RangeActivation            `json:"activation,omitempty"`
 	Membership          *GroupMembership            `json:"membership,omitempty"`
 	GroupPlan           *GroupChangePlan            `json:"group_plan,omitempty"`
@@ -398,7 +403,7 @@ func (command Command) validate() error {
 	}
 	payloads := 0
 	for _, present := range []bool{command.Node != nil, command.NodeRename != nil, command.NodeFence != nil, command.Group != nil, command.Tenant != nil,
-		command.TenantCredential != nil, command.TenantRevocation != nil, command.Dataset != nil,
+		command.AccessCredential != nil, command.AccessRevocation != nil, command.TenantCredential != nil, command.TenantRevocation != nil, command.InitialRange != nil,
 		command.Activation != nil, command.Membership != nil, command.GroupPlan != nil, command.GroupCompletion != nil,
 		command.JoinGrant != nil, command.JoinConsumption != nil, command.JoinRevocation != nil,
 		command.RootJoinStart != nil, command.RootJoinFinish != nil, command.RegionPlan != nil, command.RegionConfirmation != nil, command.RegionGrowth != nil, command.EnrollmentAuthority != nil, command.RangePlacement != nil, command.GroupRetirement != nil, command.GroupRebuild != nil, command.NodeReady != nil, command.Repository != nil, command.RepositoryDelete != nil, command.RepositoryDefault != nil, command.BackupJob != nil, command.BackupJobClaim != nil, command.BackupJobCompletion != nil, command.BackupJobFailure != nil, command.BackupJobReference != nil} {
@@ -413,6 +418,16 @@ func (command Command) validate() error {
 	case FenceNode:
 		if command.NodeFence == nil || !nodeIdentity.MatchString(command.NodeFence.NodeID) || command.NodeFence.RaftID == 0 {
 			return errors.New("invalid Node fence request")
+		}
+		return nil
+	case CreateAccessCredential:
+		if command.AccessCredential == nil || command.AccessCredential.RevokedIndex != 0 {
+			return errors.New("invalid access credential creation")
+		}
+		return command.AccessCredential.Validate()
+	case RevokeAccessCredential:
+		if command.AccessRevocation == nil || !validTenantCredentialID(command.AccessRevocation.CredentialID) {
+			return errors.New("invalid access revocation")
 		}
 		return nil
 	case CreateTenantCredential:
@@ -469,7 +484,7 @@ func (command Command) validate() error {
 			return errors.New("invalid Join Grant revocation")
 		}
 	case RegisterNode:
-		if command.Node == nil || command.Group != nil || command.Tenant != nil || command.Dataset != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
+		if command.Node == nil || command.Group != nil || command.Tenant != nil || command.InitialRange != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
 			return errors.New("register_node requires only Node payload")
 		}
 		value := command.Node
@@ -481,7 +496,7 @@ func (command Command) validate() error {
 			return errors.New("invalid Node rename")
 		}
 	case RegisterGroup:
-		if command.Group == nil || command.Node != nil || command.Tenant != nil || command.Dataset != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
+		if command.Group == nil || command.Node != nil || command.Tenant != nil || command.InitialRange != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
 			return errors.New("register_group requires only Group payload")
 		}
 		if err := raft.ValidateGroupID(command.Group.GroupID); err != nil {
@@ -491,25 +506,25 @@ func (command Command) validate() error {
 			return errors.New("new Group cannot supply membership state")
 		}
 	case RegisterTenant:
-		if command.Tenant == nil || command.Node != nil || command.Group != nil || command.Dataset != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil || !validID(command.Tenant.TenantID) {
+		if command.Tenant == nil || command.Node != nil || command.Group != nil || command.InitialRange != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil || !validID(command.Tenant.TenantID) {
 			return errors.New("invalid Tenant registration")
 		}
-	case CreateDataset:
-		if command.Dataset == nil || command.Node != nil || command.Group != nil || command.Tenant != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
-			return errors.New("create_dataset requires only Dataset payload")
+	case PrepareRange:
+		if command.InitialRange == nil || command.Node != nil || command.Group != nil || command.Tenant != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
+			return errors.New("prepare_range requires only RangeSeed payload")
 		}
-		value := command.Dataset
-		if !validID(value.TenantID) || !validID(value.EngineID) || !validID(value.DatasetID) || !validID(value.RangeID) {
-			return errors.New("invalid Dataset or initial Range ID")
+		value := command.InitialRange
+		if !validID(value.TenantID) || !validID(value.EngineID) || !validID(value.ModuleID) || !validID(value.RangeID) {
+			return errors.New("invalid RangeSeed or initial Range ID")
 		}
 		if err := raft.ValidateGroupID(value.OwnerGroupID); err != nil {
-			return fmt.Errorf("invalid Dataset owner Group: %w", err)
+			return fmt.Errorf("invalid RangeSeed owner Group: %w", err)
 		}
 		if value.OwnerGroupID == raft.RootGroupID {
-			return errors.New("Dataset owner must be a non-Root Group")
+			return errors.New("RangeSeed owner must be a non-Root Group")
 		}
 	case ActivateRange:
-		if command.Activation == nil || command.Node != nil || command.Group != nil || command.Tenant != nil || command.Dataset != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
+		if command.Activation == nil || command.Node != nil || command.Group != nil || command.Tenant != nil || command.InitialRange != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
 			return errors.New("activate_range requires only RangeActivation payload")
 		}
 		value := command.Activation
@@ -520,7 +535,7 @@ func (command Command) validate() error {
 		}
 	case PublishGroupMembers:
 		if command.Membership == nil || command.Node != nil || command.Group != nil || command.Tenant != nil ||
-			command.Dataset != nil || command.Activation != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
+			command.InitialRange != nil || command.Activation != nil || command.GroupPlan != nil || command.GroupCompletion != nil {
 			return errors.New("publish_group_members requires only GroupMembership payload")
 		}
 		value := command.Membership
@@ -530,7 +545,7 @@ func (command Command) validate() error {
 		}
 	case PlanGroupMembers:
 		if command.GroupPlan == nil || command.Node != nil || command.Group != nil || command.Tenant != nil ||
-			command.Dataset != nil || command.Activation != nil || command.Membership != nil || command.GroupCompletion != nil {
+			command.InitialRange != nil || command.Activation != nil || command.Membership != nil || command.GroupCompletion != nil {
 			return errors.New("plan_group_members requires only GroupChangePlan payload")
 		}
 		value := command.GroupPlan
@@ -540,7 +555,7 @@ func (command Command) validate() error {
 		}
 	case CompleteGroupMembers:
 		if command.GroupCompletion == nil || command.Node != nil || command.Group != nil || command.Tenant != nil ||
-			command.Dataset != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil {
+			command.InitialRange != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil {
 			return errors.New("complete_group_members requires only GroupChangeCompletion payload")
 		}
 		value := command.GroupCompletion

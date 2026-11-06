@@ -6,7 +6,6 @@ set -uo pipefail
 binary=${DUBI_BINARY:-/usr/local/bin/dubi}
 store=${DUBI_STORE:-/var/lib/dubi-lab6-ready}
 tenant=${DUBI_SOAK_TENANT:-rootread}
-dataset=${DUBI_SOAK_DATASET:-smoke}
 duration=${DUBI_SOAK_DURATION_SECONDS:-21600}
 interval=${DUBI_SOAK_INTERVAL_SECONDS:-30}
 max_iterations=${DUBI_SOAK_MAX_ITERATIONS:-0}
@@ -48,8 +47,8 @@ mkdir -- "$run_dir" || exit 2
 metrics="$run_dir/metrics.tsv"
 failures="$run_dir/failures.log"
 printf 'utc\tevent\titeration\ttarget\telapsed_ms\tresult\n' >"$metrics"
-printf 'started_utc=%s\nkey_epoch=%s\nstore=%s\ntenant=%s\ndataset=%s\nduration_seconds=%s\ninterval_seconds=%s\n' \
-	"$(date -u +%FT%TZ)" "$epoch" "$store" "$tenant" "$dataset" "$duration" "$interval" >"$run_dir/run.info"
+printf 'started_utc=%s\nkey_epoch=%s\nstore=%s\ntenant=%s\nduration_seconds=%s\ninterval_seconds=%s\n' \
+	"$(date -u +%FT%TZ)" "$epoch" "$store" "$tenant" "$duration" "$interval" >"$run_dir/run.info"
 printf 'DUBI cross-Region soak started: %s\n' "$run_dir"
 printf 'pid=%d\nallow_geo_degraded=%s\n' "$$" "$allow_geo_degraded" >>"$run_dir/run.info"
 printf 'geo_settle_seconds=%s\n' "$geo_settle_seconds" >>"$run_dir/run.info"
@@ -177,7 +176,7 @@ while (( SECONDS < deadline )); do
 	put_err="$run_dir/current-put.err"
 	put_started=$(date +%s%3N)
 	if timeout 90 "$binary" record put --store "$store" --request-id "$request_id" \
-		"$tenant" "$dataset" "$key" "$value" >"$put_out" 2>"$put_err"; then
+		"$tenant" "$key" "$value" >"$put_out" 2>"$put_err"; then
 		put_elapsed=$(( $(date +%s%3N) - put_started ))
 		printf '%s\tput\t%d\tlocal\t%d\tok\n' "$(date -u +%FT%TZ)" "$iteration" "$put_elapsed" >>"$metrics"
 		consecutive_write_failures=0
@@ -207,9 +206,9 @@ while (( SECONDS < deadline )); do
 			get_err="$run_dir/current-get.err"
 			get_started=$(date +%s%3N)
 			if [[ "$target" == "local" ]]; then
-				get_cmd=("$binary" record get --store "$store" "$tenant" "$dataset" "$key")
+				get_cmd=("$binary" record get --store "$store" "$tenant" "$key")
 			else
-				get_cmd=("$binary" record get --store "$store" --server "$target" "$tenant" "$dataset" "$key")
+				get_cmd=("$binary" record get --store "$store" --server "$target" "$tenant" "$key")
 			fi
 			if timeout 90 "${get_cmd[@]}" >"$get_out" 2>"$get_err" && \
 				python3 - "$get_out" "$value" 2>>"$get_err" <<'PY'

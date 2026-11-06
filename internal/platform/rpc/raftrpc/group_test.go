@@ -269,7 +269,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	// This deadline covers the whole multi-RPC scenario, including creation and
 	// fsync of another Root Host below. It is not a per-RPC latency assertion;
 	// concurrent race-enabled package tests can take more than one second.
@@ -288,7 +288,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 		t.Fatalf("persistent Owner result = %+v, %v, %v", result, found, err)
 	}
 	conflict := descriptor
-	conflict.DatasetID = "other"
+	conflict.ModuleID = "other"
 	if _, err := remote.EnsureInitialRange(ctx, conflict); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("conflicting remote Fence error = %v", err)
 	}
@@ -309,12 +309,12 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootCommands := []rootstate.Command{
-		{Version: 1, RequestID: "group-data", Type: rootstate.RegisterGroup,
+		{Version: rootstate.FormatVersion, RequestID: "group-data", Type: rootstate.RegisterGroup,
 			Group: &rootstate.Group{GroupID: "data-1", StateKind: rootstate.GroupStateEngine}},
-		{Version: 1, RequestID: "tenant-a", Type: rootstate.RegisterTenant,
+		{Version: rootstate.FormatVersion, RequestID: "tenant-a", Type: rootstate.RegisterTenant,
 			Tenant: &rootstate.Tenant{TenantID: "tenant-a"}},
-		{Version: 1, RequestID: "dataset-a", Type: rootstate.CreateDataset,
-			Dataset: &rootstate.Dataset{TenantID: "tenant-a", EngineID: "record", DatasetID: "items",
+		{Version: rootstate.FormatVersion, RequestID: "module-a", Type: rootstate.PrepareRange,
+			InitialRange: &rootstate.RangeSeed{TenantID: "tenant-a", EngineID: "record", ModuleID: "items",
 				RangeID: "range-a", OwnerGroupID: "data-1"}},
 	}
 	for _, command := range rootCommands {
@@ -336,7 +336,7 @@ func TestRangeControlRPCConfirmsPersistentOwnerResult(t *testing.T) {
 	if err := bootstrapper.Reconcile(ctx, "range-a"); err != nil {
 		t.Fatalf("cross-Node Range bootstrap = %v", err)
 	}
-	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"}
+	keyspace := rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"}
 	if published, found, err := rootState.RouteKeyspace(keyspace, []byte("key")); err != nil || !found ||
 		published.OwnerFenceRequestID != proof.RequestID || published.OwnerFenceIndex != proof.AppliedIndex {
 		t.Fatalf("cross-Node published Range = %+v, %v, %v", published, found, err)

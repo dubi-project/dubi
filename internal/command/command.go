@@ -3,6 +3,7 @@ package command
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dubi-project/dubi/internal/engine/record"
+	stateengine "github.com/dubi-project/dubi/internal/engine/state"
 	"github.com/dubi-project/dubi/internal/platform/cluster/engineruntime"
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/config"
@@ -46,10 +48,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = runStatus(ctx, args[1:], stdout, stderr)
 	case "doctor":
 		err = runDoctor(ctx, args[1:], stdout, stderr)
-	case "dataset":
-		err = runDataset(ctx, args[1:], stdout, stderr)
 	case "record":
 		err = runRecord(ctx, args[1:], stdout, stderr)
+	case "gateway":
+		err = runGateway(args[1:], stdout, stderr)
+	case "access":
+		err = runAccess(ctx, args[1:], stdout, stderr)
 	case "tenant":
 		err = runTenant(ctx, args[1:], stdout, stderr)
 	case "join":
@@ -92,11 +96,11 @@ func runJoin(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	case "prepare":
 		flags := flag.NewFlagSet("join prepare", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		storeRoot := flags.String("store", "", "durable Node store root")
+		storeRoot := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 		region := flags.String("region", "default", "deployment region")
 		advertise := flags.String("advertise", "", "advertised internal host:port")
 		var volumes volumePaths
-		flags.Var(&volumes, "volume", "existing empty data directory; repeat for multiple volumes")
+		flags.Var(&volumes, "volume", "existing empty data volume directory; repeat for multiple volumes (initial default: <store>/volume)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -131,7 +135,7 @@ func runJoin(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	case "install":
 		flags := flag.NewFlagSet("join install", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		storeRoot := flags.String("store", "", "durable Node store root")
+		storeRoot := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 		bundlePath := flags.String("bundle", "", "issued enrollment bundle JSON")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
@@ -181,9 +185,9 @@ func runJoin(ctx context.Context, args []string, stdout, stderr io.Writer) error
 func runInit(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	storeRoot := flags.String("store", "", "durable Node store root")
+	storeRoot := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	var volumes volumePaths
-	flags.Var(&volumes, "volume", "existing empty data directory; repeat for multiple volumes")
+	flags.Var(&volumes, "volume", "existing empty data volume directory; repeat for multiple volumes (initial default: <store>/volume)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -254,9 +258,15 @@ func openServer(args []string, stderr io.Writer) (*server.Server, error) {
 func openServerWithMux(args []string, stderr io.Writer, mux *engineruntime.Mux) (*server.Server, error) {
 	flags := flag.NewFlagSet("server", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	storeRoot := flags.String("store", "", "durable Node store root")
+	storeRoot := flags.String("store", "", "Node metadata directory (default /var/lib/dubi; remembered after init/join)")
 	listen := flags.String("listen", "", "internal RPC listen address")
 	apiListen := flags.String("api-listen", "", "optional Tenant HTTPS and monitoring listen address")
+	apiCert := flags.String("api-cert", "", "public HTTPS certificate chain PEM (independent of Node identity)")
+	apiKey := flags.String("api-key", "", "public HTTPS private key PEM")
+	flags.String("api-host", "", "public DNS name or IP for HTTPS")
+	flags.Bool("api-acme", false, "manage public certificate automatically; accepts ACME CA terms")
+	flags.String("acme-directory", "", "ACME directory override (default Let's Encrypt)")
+	flags.String("acme-listen", "", "HTTP-01 listener (default 0.0.0.0:80)")
 	advertise := flags.String("advertise", "", "published host:port; automatically derived or reused by default")
 	region := flags.String("region", "", "deployment region; reuse registration or default to default")
 	name := flags.String("name", "", "optional operator-facing Node name")
@@ -268,6 +278,14 @@ func openServerWithMux(args []string, stderr io.Writer, mux *engineruntime.Mux) 
 		return nil, err
 	}
 	*storeRoot = resolved
+	gatewaySettings, err := resolveGatewaySettings(flags, *storeRoot, apiListen, apiCert, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	publicTLS, err := config.PrepareGatewayTLS(resolved, gatewaySettings)
+	if err != nil {
+		return nil, err
+	}
 	bound, err := resolveListen(flags, *listen, *storeRoot)
 	if err != nil {
 		return nil, err
@@ -279,7 +297,7 @@ func openServerWithMux(args []string, stderr io.Writer, mux *engineruntime.Mux) 
 	}
 	*advertise = knownAddress
 	if flags.NArg() != 0 || strings.TrimSpace(*storeRoot) == "" {
-		return nil, errors.New("usage: dubi server [--store <path>] [--listen <host:port>] [--api-listen <host:port>] [--advertise <host:port>] [--region <region>] [--name <name>]")
+		return nil, errors.New("usage: dubi server [--store <path>] [--listen <host:port>] [--api-listen <host:port>] [--api-cert <chain.pem> --api-key <key.pem>] [--advertise <host:port>] [--region <region>] [--name <name>]")
 	}
 	if err := rootstate.ValidateNodeName(*name); err != nil {
 		return nil, err
@@ -304,8 +322,19 @@ func openServerWithMux(args []string, stderr io.Writer, mux *engineruntime.Mux) 
 			return nil, fmt.Errorf("listen for Tenant HTTPS: %w", err)
 		}
 	}
-	return openManagedServerWithMuxAndPublic(*storeRoot, listener, publicListener,
-		server.NetworkOptions{Advertise: *advertise, Region: *region, Name: *name}, stderr, mux)
+	process, err := openManagedServerWithMuxAndPublic(*storeRoot, listener, publicListener,
+		server.NetworkOptions{Advertise: *advertise, Region: *region, Name: *name}, stderr, mux, publicTLS)
+	if err != nil {
+		return nil, err
+	}
+	if publicListener != nil {
+		gatewaySettings.Listen = publicListener.Addr().String()
+	}
+	if err := config.SaveGateway(*storeRoot, gatewaySettings); err != nil {
+		_ = process.Close()
+		return nil, err
+	}
+	return process, nil
 }
 
 // Takes ownership of listener on success and failure. Joining orchestration
@@ -318,7 +347,7 @@ func openManagedServerWithMux(storeRoot string, listener net.Listener, network s
 	return openManagedServerWithMuxAndPublic(storeRoot, listener, nil, network, stderr, mux)
 }
 
-func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListener net.Listener, network server.NetworkOptions, stderr io.Writer, mux *engineruntime.Mux) (_ *server.Server, returnErr error) {
+func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListener net.Listener, network server.NetworkOptions, stderr io.Writer, mux *engineruntime.Mux, publicCertificate ...*config.GatewayTLS) (_ *server.Server, returnErr error) {
 	defer func() {
 		if returnErr != nil {
 			_ = listener.Close()
@@ -363,13 +392,24 @@ func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListene
 		if err := registry.Register(record.EngineID, record.Handler{}); err != nil {
 			return nil, err
 		}
+		if err := registry.Register(stateengine.EngineID, stateengine.Handler{}); err != nil {
+			return nil, err
+		}
 		mux, err = registry.Seal()
 		if err != nil {
 			_ = listener.Close()
 			return nil, err
 		}
 	}
-	process, err := server.Open(server.Options{StoreRoot: storeRoot, Listener: listener, PublicListener: publicListener,
+	var publicTLS *tls.Config
+	var maintenance func(context.Context)
+	var certificateInfo func() any
+	if len(publicCertificate) != 0 && publicCertificate[0] != nil {
+		publicTLS = publicCertificate[0].TLS
+		maintenance = publicCertificate[0].Run
+		certificateInfo = publicCertificate[0].Status
+	}
+	process, err := server.Open(server.Options{StoreRoot: storeRoot, Listener: listener, PublicListener: publicListener, PublicTLS: publicTLS, PublicMaintenance: maintenance, PublicCertificateInfo: certificateInfo,
 		ServerTLS: serverTLS, ClientTLS: clientTLS, AuthorizePeer: authorize, EngineMux: mux,
 		EnrollmentSigner: signer, Network: &network,
 		ReportError: func(err error) { _, _ = fmt.Fprintf(stderr, "dubi: background: %v\n", err) }})
@@ -381,5 +421,5 @@ func openManagedServerWithMuxAndPublic(storeRoot string, listener, publicListene
 }
 
 func usage(writer io.Writer) {
-	_, _ = io.WriteString(writer, "usage: dubi <command>\n\ncommands:\n  init     initialize the first node and cluster automatically\n  join     enroll and run a node; token/revoke manage credentials\n  server   run the DUBI node process\n  status   query the live Root directory using this Node's identity\n  doctor   explain whether the current Node and Cluster need attention\n  node remove <name-or-raft-id>  manually remove a failed Node and fence its old identity\n  node rename <name>     set the optional operator-facing Node name\n  tenant token create|revoke  manage Tenant application Tokens using Node identity\n  dataset create  register a Record Dataset (three-Node Region required)\n  record put|get  verify Record writes and reads using Node identity\n  volume   list/add/drain/remove/compact local data Volumes and Packs\n  repository add|list|show|update|remove|set-default  manage Backup/Restore destinations\n  backup   run/list/status cluster-level Backup jobs\n  version  print build version\n\nstart a new cluster:\n  dubi init\n  dubi server\n  dubi status\n  dubi doctor\n  dubi volume list\n\njoin another node:\n  dubi join --ticket-file <private-file>\n  dubi join   # resume after durable receipt, or run an admitted node\n\ninit/join select a local Node in ~/.dubi/current.json; server remembers its actual listen address.\nDefaults: --store, DUBI_STORE, local selection, /var/lib/dubi (in that order).\n--server overrides the remembered local endpoint for remote/debug access.\ninit and join accept repeatable --volume paths; otherwise use <store>/volume.\n")
+	_, _ = io.WriteString(writer, "usage: dubi <command>\n\ncommands:\n  init     initialize the first node and cluster automatically\n  join     enroll and run a node; token/revoke manage credentials\n  server   run the DUBI node process\n  status   query the live Root directory using this Node's identity\n  doctor   explain whether the current Node and Cluster need attention\n  node remove <name-or-raft-id>  manually remove a failed Node and fence its old identity\n  node rename <name>     set the optional operator-facing Node name\n  tenant token create|revoke  manage Tenant application Tokens using Node identity\n  tenant create  register a Tenant\n  access create|revoke  manage admin and monitor credentials\n  gateway status  show saved public endpoint and certificate state\n  record put|get  verify Record writes and reads using Node identity\n  volume   list/add/drain/remove/compact local data Volumes and Packs\n  repository add|list|show|update|remove|set-default  manage Backup/Restore destinations\n  backup   run/list/status cluster-level Backup jobs\n  version  print build version\n\nstart a new cluster:\n  dubi init\n  dubi server\n  dubi status\n  dubi doctor\n  dubi volume list\n\njoin another node:\n  dubi join --ticket-file <private-file>\n  dubi join   # resume after durable receipt, or run an admitted node\n\ninit/join select a local Node in ~/.dubi/current.json; server remembers its actual listen address.\nDefaults: --store, DUBI_STORE, local selection, /var/lib/dubi (in that order).\n--server overrides the remembered local endpoint for remote/debug access.\ninit and join accept repeatable --volume paths; otherwise use <store>/volume.\n")
 }

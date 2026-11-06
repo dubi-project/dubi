@@ -163,7 +163,7 @@ func (machine *testMachine) Close() error {
 
 func validTarget() router.Target {
 	return router.Target{
-		Keyspace: rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", DatasetID: "items"},
+		Keyspace: rootstate.Keyspace{TenantID: "tenant-a", EngineID: "record", ModuleID: "items"},
 		RangeID:  "range-a", OwnerGroupID: "data-1", Epoch: 3, RoutingKey: []byte("key"),
 	}
 }
@@ -214,7 +214,7 @@ func TestAdapterAppliesInitialRangeActivation(t *testing.T) {
 	machine := &testMachine{conf: &raftpb.ConfState{Voters: []uint64{1}}}
 	adapter, _ := New(machine)
 	descriptor := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record",
-		DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+		ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	encoded, err := EncodeActivateRange("activate-1", descriptor)
 	if err != nil {
 		t.Fatal(err)

@@ -86,7 +86,7 @@ func splitValueKey(key []byte) (rootstate.Keyspace, error) {
 	if len(parts) != 4 {
 		return rootstate.Keyspace{}, errors.New("invalid engine value key")
 	}
-	keyspace := rootstate.Keyspace{TenantID: string(parts[0]), EngineID: string(parts[1]), DatasetID: string(parts[2])}
+	keyspace := rootstate.Keyspace{TenantID: string(parts[0]), ModuleID: string(parts[1]), EngineID: string(parts[2])}
 	if keyspace.Validate() != nil || validateEngineKey(parts[3]) != nil {
 		return rootstate.Keyspace{}, errors.New("invalid engine value key")
 	}

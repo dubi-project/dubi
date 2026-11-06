@@ -94,18 +94,26 @@ func CheckCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner 
 
 // observeCommittedLocal establishes a fresh physical majority and verifies
 // that the persisted claim still describes that exact publication and plan.
-// Reader uses this before reading bytes, then defers the receipt's final
-// currentness check to CheckReadCurrent after the bytes have been verified.
+// Durability retries use the full Root check here. Reader instead defers that
+// check to CheckReadCurrent after reading bytes and verifying physical holdings.
 func observeCommittedLocal(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
 	localID uint64, localNodeID string, store Verifier, observer Observer, target router.Target,
 	descriptor records.Descriptor, referenceRequestID string, referenceIndex uint64,
 	confirmationRequestID string, claim routedstate.LocalConfirmation) (PublishedObservation, error) {
+	return observeCommitted(ctx, barrier, root, owner, localID, localNodeID, store, observer, target,
+		descriptor, referenceRequestID, referenceIndex, confirmationRequestID, claim, false)
+}
+
+func observeCommitted(ctx context.Context, barrier Barrier, root Root, owner *enginestate.State,
+	localID uint64, localNodeID string, store Verifier, observer Observer, target router.Target,
+	descriptor records.Descriptor, referenceRequestID string, referenceIndex uint64,
+	confirmationRequestID string, claim routedstate.LocalConfirmation, deferRootCheck bool) (PublishedObservation, error) {
 	if claim.Validate() != nil || rootstate.ValidateRequestID(confirmationRequestID) != nil ||
 		claim.ReferenceRequestID != referenceRequestID || claim.ReferenceIndex != referenceIndex {
 		return PublishedObservation{}, errors.New("invalid committed local confirmation identity")
 	}
-	observed, err := ObservePublishedLocal(ctx, barrier, root, owner, localID, localNodeID,
-		store, observer, target, descriptor, referenceRequestID, referenceIndex)
+	observed, err := observePublishedLocal(ctx, barrier, root, owner, localID, localNodeID,
+		store, observer, target, descriptor, referenceRequestID, referenceIndex, deferRootCheck)
 	if err != nil {
 		return PublishedObservation{}, err
 	}
@@ -118,6 +126,13 @@ func observeCommittedLocal(ctx context.Context, barrier Barrier, root Root, owne
 		!slices.Equal(claim.Nodes, fresh.Nodes) || claim.RecordID != fresh.RecordID {
 		if claim.RegionID == fresh.RegionID && claim.RecordID == fresh.RecordID &&
 			reflect.DeepEqual(claim.Target, fresh.Target) && bytes.Equal(claim.Key, fresh.Key) {
+			if deferRootCheck {
+				// Refresh is a rare side effect. Before allowing it, obtain the
+				// full fresh observation just as the durability retry path does.
+				return observeCommittedLocal(ctx, barrier, root, owner, localID, localNodeID,
+					store, observer, target, descriptor, referenceRequestID, referenceIndex,
+					confirmationRequestID, claim)
+			}
 			return PublishedObservation{}, errStaleLocalCohort
 		}
 		return PublishedObservation{}, errors.New("committed local confirmation is for an obsolete Region plan or publication")

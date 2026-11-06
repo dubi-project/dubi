@@ -12,7 +12,7 @@ import (
 
 func descriptor(t *testing.T, key, payload string) Descriptor {
 	t.Helper()
-	d, err := Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "cache", DatasetID: "data"}, "group-records", []byte(key), []byte(payload))
+	d, err := Describe(rootstate.Keyspace{TenantID: "tenant", EngineID: "cache", ModuleID: "data"}, "group-records", []byte(key), []byte(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,13 +26,13 @@ func TestDescriptorIdentityAndOwnership(t *testing.T) {
 		t.Fatal(id, err)
 	}
 	for name, change := range map[string]func(*Descriptor){
-		"tenant":  func(v *Descriptor) { v.Keyspace.TenantID += "2" },
-		"engine":  func(v *Descriptor) { v.Keyspace.EngineID += "2" },
-		"dataset": func(v *Descriptor) { v.Keyspace.DatasetID += "2" },
-		"group":   func(v *Descriptor) { v.GroupID += "2" },
-		"key":     func(v *Descriptor) { v.Key = []byte("another") },
-		"size":    func(v *Descriptor) { v.Size++ },
-		"digest":  func(v *Descriptor) { v.SHA256 = strings.Repeat("0", 64) },
+		"tenant": func(v *Descriptor) { v.Keyspace.TenantID += "2" },
+		"engine": func(v *Descriptor) { v.Keyspace.EngineID += "2" },
+		"module": func(v *Descriptor) { v.Keyspace.ModuleID += "2" },
+		"group":  func(v *Descriptor) { v.GroupID += "2" },
+		"key":    func(v *Descriptor) { v.Key = []byte("another") },
+		"size":   func(v *Descriptor) { v.Size++ },
+		"digest": func(v *Descriptor) { v.SHA256 = strings.Repeat("0", 64) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			other := d.clone()
@@ -72,7 +72,7 @@ func TestDescriptorValidation(t *testing.T) {
 	for name, change := range map[string]func(*Descriptor){
 		"tenant":       func(v *Descriptor) { v.Keyspace.TenantID = "" },
 		"engine":       func(v *Descriptor) { v.Keyspace.EngineID = "../file" },
-		"dataset":      func(v *Descriptor) { v.Keyspace.DatasetID = "" },
+		"module":       func(v *Descriptor) { v.Keyspace.ModuleID = "" },
 		"group":        func(v *Descriptor) { v.GroupID = "../raft" },
 		"root":         func(v *Descriptor) { v.GroupID = raft.RootGroupID },
 		"key":          func(v *Descriptor) { v.Key = nil },

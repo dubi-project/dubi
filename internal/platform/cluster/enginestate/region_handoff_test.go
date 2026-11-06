@@ -40,7 +40,7 @@ func handoffFixture(t *testing.T, root string) (*State, regionfence.HandoffInten
 	if err := s.ApplyMembership(1, &raftpb.ConfState{Voters: []uint64{1, 2, 3}}); err != nil {
 		t.Fatal(err)
 	}
-	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+	r := rootstate.Range{RangeID: "range-a", TenantID: "tenant-a", EngineID: "record", ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 	if err := s.ApplyRange(2, "range", r); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestRegionalHandoffRejectsUnsealedOrWrongCandidateAndMembershipABA(t *testi
 			}
 			handoffApply(t, s, "seal", regionfence.HandoffCommand{Action: regionfence.Seal, Intent: &intent}, true)
 			if mode == "range" {
-				r := rootstate.Range{RangeID: "new-range", TenantID: "another", EngineID: "record", DatasetID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+				r := rootstate.Range{RangeID: "new-range", TenantID: "another", EngineID: "record", ModuleID: "items", OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
 				if err := s.ApplyRange(s.AppliedIndex()+1, "new-range", r); err != nil {
 					t.Fatal(err)
 				}
