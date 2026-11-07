@@ -77,7 +77,7 @@ func TestGatewaySessionCSRFRevocationAndMonitoring(t *testing.T) {
 		g.ServeHTTP(w, r)
 		return w
 	}
-	for _, path := range []string{"/", "/assets/gateway.js", "/healthz"} {
+	for _, path := range []string{"/", "/ui/nodes", "/healthz"} {
 		if w := request(a, "GET", path, "", "", "", "", nil); w.Code != 200 {
 			t.Fatal(path, w.Code)
 		}

@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "source_revision": "7f2fa781d8263b44bf7e87fe109065a76126c4f8",
+  "source_dirty": false,
+  "source_sha256": "33276d1980cd90a407abf9efac49b59daf7c2d843db5438a45f718790ac710f2",
+  "files": {
+    "assets/index-ce_KMuuR.js": "29f4039ff9e6de992a967591dcdeb1207539bc3443db105b1a28b7b1f1ae1224",
+    "assets/index-JyLYhL3G.css": "65bd06aa5f83f565f6cd9c264872e40ec81bb29cf82afadf4f65c07bfe337a48",
+    "index.html": "15267c386fb977555e74ab705207f6078391cab2963d676fea67023abff769c3"
+  }
+}

@@ -299,8 +299,19 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		return s.applyRegionGroupRebuild(batch, *command.GroupRebuild)
 	case MarkNodeReady:
 		return s.applyNodeReady(batch, *command.NodeReady)
+	case DeleteAdminAccount:
+		return s.applyDeleteAdminAccount(batch, *command.AdminAccountDelete)
+	case PutAdminAccount:
+		return s.applyAdminAccount(batch, *command.AdminAccountUpdate)
+	case UpdateNotifications:
+		return s.applyNotificationUpdate(batch, *command.NotificationUpdate)
+	case MarkNotifications:
+		return s.applyNotificationMark(batch, *command.NotificationMark)
+	case SaveDiagnostic:
+		return s.applyDiagnostic(batch, *command.Diagnostic)
 	case CreateRepository:
-		value := command.Repository
+		value := *command.Repository
+		value.CreatedIndex = s.applied + 1
 		if _, found, err := s.get(repositoryKey(value.Name)); err != nil {
 			return "", err
 		} else if found {
@@ -308,7 +319,7 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		}
 		return "", setJSON(batch, repositoryKey(value.Name), value)
 	case UpdateRepository:
-		value := command.Repository
+		value := *command.Repository
 		encoded, found, err := s.get(repositoryKey(value.Name))
 		if err != nil {
 			return "", err
@@ -322,6 +333,27 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		var previous repository.Repository
 		if err := decodeStreamJSON(encoded, &previous); err != nil {
 			return "", err
+		}
+
+		value.CreatedIndex = previous.CreatedIndex
+		if command.RepositoryIfMatch != "" && command.RepositoryIfMatch != previous.Revision() {
+			return "Repository revision conflict", nil
+		}
+		// Existing recovery points depend on their original destination. Credential
+		// rotation is allowed; changing the namespace would orphan those points.
+		jobs, err := s.backupJobs()
+		if err != nil {
+			return "", err
+		}
+		for _, j := range jobs {
+			if j.Repository == value.Name {
+				if j.State == BackupJobPending || j.State == BackupJobRunning {
+					return "Repository has an active backup", nil
+				}
+				if value.Type != previous.Type || value.Path != previous.Path || value.Bucket != previous.Bucket || value.Prefix != previous.Prefix || value.Endpoint != previous.Endpoint || value.Region != previous.Region || value.PathStyle != previous.PathStyle {
+					return "Repository destination is used by backups; create a new repository", nil
+				}
+			}
 		}
 		if len(value.EncryptedCredentials) == 0 {
 			value.EncryptedCredentials = append([]byte(nil), previous.EncryptedCredentials...)
@@ -367,12 +399,17 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 		return s.applyRootJoin(batch, command)
 	case CreateJoinGrant, ConsumeJoinGrant, RevokeJoinGrant:
 		return s.applyJoinGrant(batch, command)
-	case CreateAccessCredential, RevokeAccessCredential:
+	case CreateAccessCredential, RevokeAccessCredential, DeleteAccessCredential:
 		return s.applyAccessCredential(batch, command)
-	case CreateTenantCredential, RevokeTenantCredential:
+	case ReportTenantUsage:
+		return s.applyUsageReports(batch, command.UsageReports)
+	case ReserveTenantQuota, CloseTenantQuota, FinishTenantQuota:
+		return s.applyQuota(batch, command)
+	case CreateTenantCredential, RevokeTenantCredential, DeleteTenantCredential:
 		return s.applyTenantCredential(batch, command)
 	case RegisterNode:
-		value := command.Node
+		value := *command.Node
+		value.CreatedIndex = s.applied + 1
 		if _, found, err := s.get(nodeKey(value.RaftID)); err != nil {
 			return "", err
 		} else if found {
@@ -666,14 +703,8 @@ func (s *State) applyMutation(batch *pebble.Batch, command Command, hash string)
 			return "", err
 		}
 		return "", batch.Delete(activeGroupChangeKey(change.GroupID), nil)
-	case RegisterTenant:
-		value := command.Tenant
-		if _, found, err := s.get(tenantKey(value.TenantID)); err != nil {
-			return "", err
-		} else if found {
-			return "TenantID is already registered", nil
-		}
-		return "", setJSON(batch, tenantKey(value.TenantID), value)
+	case RegisterTenant, UpdateTenant:
+		return s.applyTenant(batch, command)
 	case PrepareRange:
 		value := command.InitialRange
 		if _, found, err := s.get(tenantKey(value.TenantID)); err != nil {

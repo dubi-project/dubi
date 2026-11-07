@@ -32,7 +32,7 @@ type View struct {
 	LeaderID       uint64           `json:"leader_id,omitempty"`
 }
 
-var nodeName = regexp.MustCompile(`^node_[0-9a-f]{32}$`)
+var nodeName = regexp.MustCompile(`^node_([0-9a-f]{12}|[0-9a-f]{32})$`)
 var regionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 func (view View) Validate(clusterID string) error {
@@ -102,6 +102,11 @@ func (view View) CloneCanonical() View {
 		slices.Sort(ids)
 	}
 	view.Peers = slices.Clone(view.Peers)
+	// Creation order is management metadata, absent from the routing wire
+	// contract. Normalize it on both local and remote cuts before comparison.
+	for i := range view.Peers {
+		view.Peers[i].CreatedIndex = 0
+	}
 	slices.SortFunc(view.Peers, func(a, b rootstate.Node) int { return cmp.Compare(a.RaftID, b.RaftID) })
 	return view
 }

@@ -12,13 +12,18 @@ import (
 
 // Handler is the narrow deterministic adapter to the Runtime state machine.
 type Handler struct{}
+
 type publication struct {
 	Operation  operation          `json:"operation"`
 	Descriptor records.Descriptor `json:"descriptor"`
+	Abort      *abortOperation    `json:"abort,omitempty"`
 }
 
 func (Handler) Apply(tx *enginestate.Transaction, target router.Target, payload []byte) (enginestate.Outcome, error) {
 	var p publication
+	if len(payload) <= 8192 && decode(payload, &p) == nil && p.Abort != nil {
+		return applyAbort(tx, target, *p.Abort)
+	}
 	if len(payload) > 128<<10 || decode(payload, &p) != nil || p.Operation.validate() != nil || target.Keyspace.EngineID != EngineID || !bytes.Equal(target.RoutingKey, dataKey(p.Operation.Key)) {
 		return enginestate.Outcome{Rejection: ErrInvalid.Error()}, nil
 	}
@@ -82,13 +87,23 @@ func (Handler) Apply(tx *enginestate.Transaction, target router.Target, payload 
 				}
 			}
 		}
-		b, _ = json.Marshal(head{Version: r.Version, Deleted: o.Delete, RequestID: o.RequestID})
+		size := o.logicalValue().Bytes
+		nextHead := head{Version: r.Version, Deleted: o.Delete, RequestID: o.RequestID, Bytes: &size}
+		if err := updateListIndex(tx, o.Key, old, live, &nextHead); err != nil {
+			return enginestate.Outcome{}, err
+		}
+		b, _ = json.Marshal(nextHead)
 		if err := tx.Set(target.RoutingKey, b); err != nil {
 			return enginestate.Outcome{}, err
 		}
-		if err := tx.SetRecordReference(target.RoutingKey, p.Descriptor); err != nil {
+		if err := tx.PublishRecord(target.RoutingKey, p.Descriptor, o.RequestID, o.logicalValue()); err != nil {
 			return enginestate.Outcome{}, err
 		}
+		ref, _, err := tx.RecordReference(target.RoutingKey)
+		if err != nil {
+			return enginestate.Outcome{}, err
+		}
+		r.Usage = ref.Usage
 	}
 	// Business conflicts are durable outcomes too. No reference or head is
 	// changed for them; the physical writer cannot acknowledge a publication.
@@ -104,6 +119,12 @@ func (Handler) Read(view enginestate.ReadView, target router.Target, payload []b
 	if len(payload) > 4096 || decode(payload, &q) != nil || q.Format != 1 || target.Keyspace.EngineID != EngineID || !bytes.HasPrefix(target.RoutingKey, []byte("v/")) {
 		return enginestate.Outcome{Rejection: ErrInvalid.Error()}, nil
 	}
+	if q.List != nil {
+		if q.RequestID != "" || q.Version != "" {
+			return enginestate.Outcome{Rejection: ErrInvalid.Error()}, nil
+		}
+		return readList(view, *q.List)
+	}
 	var result queryResult
 	b, found, err := view.Get(target.RoutingKey)
 	if err != nil {
@@ -113,6 +134,15 @@ func (Handler) Read(view enginestate.ReadView, target router.Target, payload []b
 		result.Head = new(head)
 		if decode(b, result.Head) != nil {
 			return enginestate.Outcome{}, errors.New("invalid State head")
+		}
+	}
+	if result.Head != nil {
+		ref, ok, err := view.RecordReference(target.RoutingKey)
+		if err != nil {
+			return enginestate.Outcome{}, err
+		}
+		if ok {
+			result.Usage = ref.Usage
 		}
 	}
 	if q.RequestID != "" {

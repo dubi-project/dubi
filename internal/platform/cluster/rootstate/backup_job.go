@@ -34,9 +34,10 @@ const (
 // membership cut captured at creation time; a later node join does not change
 // an in-flight job.
 type BackupJob struct {
-	JobID      string `json:"job_id"`
-	Repository string `json:"repository"`
-	ClusterID  string `json:"cluster_id"`
+	CreatedUnix int64  `json:"created_unix,omitempty"`
+	JobID       string `json:"job_id"`
+	Repository  string `json:"repository"`
+	ClusterID   string `json:"cluster_id"`
 	// Epoch is the immutable Recovery Point namespace allocated at creation.
 	// Worker lease/state changes must not rewrite it; manifests use this value
 	// as their collision-free repository key.
@@ -100,7 +101,7 @@ type BackupJobReference struct {
 }
 
 func (value BackupJob) ValidateForCreate() error {
-	if !validID(value.JobID) || repositoryNameValid(value.Repository) != nil || identity.ValidateClusterID(value.ClusterID) != nil {
+	if value.CreatedUnix < 0 || !validID(value.JobID) || repositoryNameValid(value.Repository) != nil || identity.ValidateClusterID(value.ClusterID) != nil {
 		return errors.New("invalid Backup job identity")
 	}
 	if value.Epoch != 0 || value.State != "" || value.CreatedIndex != 0 || value.CompletedIndex != 0 || value.LastError != "" || len(value.Workers) != 0 {
@@ -112,7 +113,7 @@ func (value BackupJob) ValidateForCreate() error {
 // ValidateStored validates the self-contained shape of a persisted job. An
 // index of zero skips the applied-index upper-bound checks for live reads.
 func (value BackupJob) ValidateStored(index uint64) error {
-	if !validID(value.JobID) || repositoryNameValid(value.Repository) != nil || identity.ValidateClusterID(value.ClusterID) != nil || value.Epoch == 0 || value.CreatedIndex == 0 || (index != 0 && value.CreatedIndex > index) {
+	if value.CreatedUnix < 0 || !validID(value.JobID) || repositoryNameValid(value.Repository) != nil || identity.ValidateClusterID(value.ClusterID) != nil || value.Epoch == 0 || value.CreatedIndex == 0 || (index != 0 && value.CreatedIndex > index) {
 		return errors.New("invalid Backup job identity or epoch")
 	}
 	switch value.State {
@@ -442,6 +443,9 @@ func (s *State) BackupJobs() ([]BackupJob, error) {
 	if err := s.usable(); err != nil {
 		return nil, err
 	}
+	return s.backupJobs()
+}
+func (s *State) backupJobs() ([]BackupJob, error) {
 	iterator, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/backup-job/"), UpperBound: []byte("data/backup-job0")})
 	if err != nil {
 		return nil, err

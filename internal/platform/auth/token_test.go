@@ -89,3 +89,36 @@ func TestTenantTokenVerifiedAgainstCurrentRootAndTenant(t *testing.T) {
 		t.Fatal("revoked Token was accepted", err)
 	}
 }
+
+func TestTenantModulePolicyRevokesExistingTokenAccess(t *testing.T) {
+	s, err := rootstate.Open(filepath.Join(t.TempDir(), "root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	applyAuthCommand(t, s, rootstate.Command{RequestID: "register", Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: "test", Name: "测试", Modules: []string{"config"}}})
+	token, c, err := Generate("test", time.Now(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyAuthCommand(t, s, rootstate.Command{RequestID: "issue", Type: rootstate.CreateTenantCredential, TenantCredential: &c})
+	v := Verifier{Barrier: fixedBarrier{index: 1}, Catalog: s}
+	p, err := v.Verify(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	space := rootstate.Keyspace{TenantID: "test", ModuleID: "config", EngineID: "state"}
+	if err := p.Authorize(space); err != nil {
+		t.Fatal(err)
+	}
+	tenant, _, _ := s.Tenant("test")
+	tenant.Modules = []string{}
+	applyAuthCommand(t, s, rootstate.Command{RequestID: "disable-module", Type: rootstate.UpdateTenant, Tenant: &tenant})
+	p, err = v.Verify(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(p.Authorize(space), ErrForbiddenTenant) {
+		t.Fatal("existing Token bypassed module policy")
+	}
+}

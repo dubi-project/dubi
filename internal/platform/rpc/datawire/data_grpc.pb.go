@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	DataService_ObserveMonitor_FullMethodName         = "/dubi.internal.data.v1.DataService/ObserveMonitor"
 	DataService_MutateAccessCredential_FullMethodName = "/dubi.internal.data.v1.DataService/MutateAccessCredential"
 	DataService_CreateTenant_FullMethodName           = "/dubi.internal.data.v1.DataService/CreateTenant"
 	DataService_PutRecord_FullMethodName              = "/dubi.internal.data.v1.DataService/PutRecord"
@@ -49,6 +50,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DataServiceClient interface {
+	ObserveMonitor(ctx context.Context, in *MonitorRequest, opts ...grpc.CallOption) (*MonitorResponse, error)
 	MutateAccessCredential(ctx context.Context, in *AccessCredentialRequest, opts ...grpc.CallOption) (*AccessCredentialResponse, error)
 	CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*CreateTenantResponse, error)
 	PutRecord(ctx context.Context, in *PutRecordRequest, opts ...grpc.CallOption) (*PutRecordResponse, error)
@@ -94,6 +96,16 @@ type dataServiceClient struct {
 
 func NewDataServiceClient(cc grpc.ClientConnInterface) DataServiceClient {
 	return &dataServiceClient{cc}
+}
+
+func (c *dataServiceClient) ObserveMonitor(ctx context.Context, in *MonitorRequest, opts ...grpc.CallOption) (*MonitorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MonitorResponse)
+	err := c.cc.Invoke(ctx, DataService_ObserveMonitor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *dataServiceClient) MutateAccessCredential(ctx context.Context, in *AccessCredentialRequest, opts ...grpc.CallOption) (*AccessCredentialResponse, error) {
@@ -340,6 +352,7 @@ func (c *dataServiceClient) ClusterRepairStatus(ctx context.Context, in *LocalRe
 // All implementations must embed UnimplementedDataServiceServer
 // for forward compatibility.
 type DataServiceServer interface {
+	ObserveMonitor(context.Context, *MonitorRequest) (*MonitorResponse, error)
 	MutateAccessCredential(context.Context, *AccessCredentialRequest) (*AccessCredentialResponse, error)
 	CreateTenant(context.Context, *CreateTenantRequest) (*CreateTenantResponse, error)
 	PutRecord(context.Context, *PutRecordRequest) (*PutRecordResponse, error)
@@ -387,6 +400,9 @@ type DataServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDataServiceServer struct{}
 
+func (UnimplementedDataServiceServer) ObserveMonitor(context.Context, *MonitorRequest) (*MonitorResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ObserveMonitor not implemented")
+}
 func (UnimplementedDataServiceServer) MutateAccessCredential(context.Context, *AccessCredentialRequest) (*AccessCredentialResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MutateAccessCredential not implemented")
 }
@@ -478,6 +494,24 @@ func RegisterDataServiceServer(s grpc.ServiceRegistrar, srv DataServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&DataService_ServiceDesc, srv)
+}
+
+func _DataService_ObserveMonitor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MonitorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).ObserveMonitor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_ObserveMonitor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).ObserveMonitor(ctx, req.(*MonitorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _DataService_MutateAccessCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -919,6 +953,10 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "dubi.internal.data.v1.DataService",
 	HandlerType: (*DataServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ObserveMonitor",
+			Handler:    _DataService_ObserveMonitor_Handler,
+		},
 		{
 			MethodName: "MutateAccessCredential",
 			Handler:    _DataService_MutateAccessCredential_Handler,

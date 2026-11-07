@@ -2657,11 +2657,12 @@ func (x *CompactStoreResponse) GetRewritten() bool {
 }
 
 type LocalRepairStatusRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId            string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId           uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	IncludeVolumeDetails bool                   `protobuf:"varint,3,opt,name=include_volume_details,json=includeVolumeDetails,proto3" json:"include_volume_details,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *LocalRepairStatusRequest) Reset() {
@@ -2706,6 +2707,13 @@ func (x *LocalRepairStatusRequest) GetFromRaftId() uint64 {
 		return x.FromRaftId
 	}
 	return 0
+}
+
+func (x *LocalRepairStatusRequest) GetIncludeVolumeDetails() bool {
+	if x != nil {
+		return x.IncludeVolumeDetails
+	}
+	return false
 }
 
 type LocalRepairIssue struct {
@@ -2884,10 +2892,17 @@ type LocalRepairStatusResponse struct {
 	CapacitySupported     bool                 `protobuf:"varint,18,opt,name=capacity_supported,json=capacitySupported,proto3" json:"capacity_supported,omitempty"`
 	MaintenanceIo         *MaintenanceIOStatus `protobuf:"bytes,19,opt,name=maintenance_io,json=maintenanceIo,proto3" json:"maintenance_io,omitempty"`
 	// Deduplicated healthy Active filesystems; observations, not reservations.
-	CapacityTotalBytes     uint64 `protobuf:"varint,20,opt,name=capacity_total_bytes,json=capacityTotalBytes,proto3" json:"capacity_total_bytes,omitempty"`
-	CapacityAvailableBytes uint64 `protobuf:"varint,21,opt,name=capacity_available_bytes,json=capacityAvailableBytes,proto3" json:"capacity_available_bytes,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	CapacityTotalBytes       uint64 `protobuf:"varint,20,opt,name=capacity_total_bytes,json=capacityTotalBytes,proto3" json:"capacity_total_bytes,omitempty"`
+	CapacityAvailableBytes   uint64 `protobuf:"varint,21,opt,name=capacity_available_bytes,json=capacityAvailableBytes,proto3" json:"capacity_available_bytes,omitempty"`
+	ObservedUnix             int64  `protobuf:"varint,22,opt,name=observed_unix,json=observedUnix,proto3" json:"observed_unix,omitempty"`
+	VolumeDetailsSupported   bool   `protobuf:"varint,23,opt,name=volume_details_supported,json=volumeDetailsSupported,proto3" json:"volume_details_supported,omitempty"`
+	TotalVolumes             uint32 `protobuf:"varint,24,opt,name=total_volumes,json=totalVolumes,proto3" json:"total_volumes,omitempty"`
+	FilesystemTotalBytes     uint64 `protobuf:"varint,25,opt,name=filesystem_total_bytes,json=filesystemTotalBytes,proto3" json:"filesystem_total_bytes,omitempty"`
+	FilesystemAvailableBytes uint64 `protobuf:"varint,26,opt,name=filesystem_available_bytes,json=filesystemAvailableBytes,proto3" json:"filesystem_available_bytes,omitempty"`
+	RebalanceSupported       bool   `protobuf:"varint,27,opt,name=rebalance_supported,json=rebalanceSupported,proto3" json:"rebalance_supported,omitempty"`
+	RebalancePhase           string `protobuf:"bytes,28,opt,name=rebalance_phase,json=rebalancePhase,proto3" json:"rebalance_phase,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *LocalRepairStatusResponse) Reset() {
@@ -3065,6 +3080,55 @@ func (x *LocalRepairStatusResponse) GetCapacityAvailableBytes() uint64 {
 		return x.CapacityAvailableBytes
 	}
 	return 0
+}
+
+func (x *LocalRepairStatusResponse) GetObservedUnix() int64 {
+	if x != nil {
+		return x.ObservedUnix
+	}
+	return 0
+}
+
+func (x *LocalRepairStatusResponse) GetVolumeDetailsSupported() bool {
+	if x != nil {
+		return x.VolumeDetailsSupported
+	}
+	return false
+}
+
+func (x *LocalRepairStatusResponse) GetTotalVolumes() uint32 {
+	if x != nil {
+		return x.TotalVolumes
+	}
+	return 0
+}
+
+func (x *LocalRepairStatusResponse) GetFilesystemTotalBytes() uint64 {
+	if x != nil {
+		return x.FilesystemTotalBytes
+	}
+	return 0
+}
+
+func (x *LocalRepairStatusResponse) GetFilesystemAvailableBytes() uint64 {
+	if x != nil {
+		return x.FilesystemAvailableBytes
+	}
+	return 0
+}
+
+func (x *LocalRepairStatusResponse) GetRebalanceSupported() bool {
+	if x != nil {
+		return x.RebalanceSupported
+	}
+	return false
+}
+
+func (x *LocalRepairStatusResponse) GetRebalancePhase() string {
+	if x != nil {
+		return x.RebalancePhase
+	}
+	return ""
 }
 
 type MaintenanceIOStatus struct {
@@ -3364,13 +3428,20 @@ func (x *ResourceBudgetStatus) GetRejected() uint64 {
 }
 
 type VolumeHealthStatus struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VolumeId      string                 `protobuf:"bytes,1,opt,name=volume_id,json=volumeId,proto3" json:"volume_id,omitempty"`
-	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
-	Health        string                 `protobuf:"bytes,3,opt,name=health,proto3" json:"health,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	VolumeId                 string                 `protobuf:"bytes,1,opt,name=volume_id,json=volumeId,proto3" json:"volume_id,omitempty"`
+	State                    string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	Health                   string                 `protobuf:"bytes,3,opt,name=health,proto3" json:"health,omitempty"`
+	Error                    string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	Path                     string                 `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`
+	CapacityKnown            bool                   `protobuf:"varint,6,opt,name=capacity_known,json=capacityKnown,proto3" json:"capacity_known,omitempty"`
+	FilesystemTotalBytes     uint64                 `protobuf:"varint,7,opt,name=filesystem_total_bytes,json=filesystemTotalBytes,proto3" json:"filesystem_total_bytes,omitempty"`
+	FilesystemAvailableBytes uint64                 `protobuf:"varint,8,opt,name=filesystem_available_bytes,json=filesystemAvailableBytes,proto3" json:"filesystem_available_bytes,omitempty"`
+	WriteIsolated            bool                   `protobuf:"varint,9,opt,name=write_isolated,json=writeIsolated,proto3" json:"write_isolated,omitempty"`
+	WriteError               string                 `protobuf:"bytes,10,opt,name=write_error,json=writeError,proto3" json:"write_error,omitempty"`
+	CreatedUnixNano          int64                  `protobuf:"varint,11,opt,name=created_unix_nano,json=createdUnixNano,proto3" json:"created_unix_nano,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *VolumeHealthStatus) Reset() {
@@ -3429,6 +3500,55 @@ func (x *VolumeHealthStatus) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *VolumeHealthStatus) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *VolumeHealthStatus) GetCapacityKnown() bool {
+	if x != nil {
+		return x.CapacityKnown
+	}
+	return false
+}
+
+func (x *VolumeHealthStatus) GetFilesystemTotalBytes() uint64 {
+	if x != nil {
+		return x.FilesystemTotalBytes
+	}
+	return 0
+}
+
+func (x *VolumeHealthStatus) GetFilesystemAvailableBytes() uint64 {
+	if x != nil {
+		return x.FilesystemAvailableBytes
+	}
+	return 0
+}
+
+func (x *VolumeHealthStatus) GetWriteIsolated() bool {
+	if x != nil {
+		return x.WriteIsolated
+	}
+	return false
+}
+
+func (x *VolumeHealthStatus) GetWriteError() string {
+	if x != nil {
+		return x.WriteError
+	}
+	return ""
+}
+
+func (x *VolumeHealthStatus) GetCreatedUnixNano() int64 {
+	if x != nil {
+		return x.CreatedUnixNano
+	}
+	return 0
 }
 
 type AccessCredentialRequest struct {
@@ -3549,6 +3669,126 @@ func (x *AccessCredentialResponse) GetRootIndex() uint64 {
 		return x.RootIndex
 	}
 	return 0
+}
+
+type MonitorRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	FromRaftId    uint64                 `protobuf:"varint,2,opt,name=from_raft_id,json=fromRaftId,proto3" json:"from_raft_id,omitempty"`
+	EndUnix       int64                  `protobuf:"varint,3,opt,name=end_unix,json=endUnix,proto3" json:"end_unix,omitempty"`
+	Seconds       int64                  `protobuf:"varint,4,opt,name=seconds,proto3" json:"seconds,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MonitorRequest) Reset() {
+	*x = MonitorRequest{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MonitorRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MonitorRequest) ProtoMessage() {}
+
+func (x *MonitorRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MonitorRequest.ProtoReflect.Descriptor instead.
+func (*MonitorRequest) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *MonitorRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *MonitorRequest) GetFromRaftId() uint64 {
+	if x != nil {
+		return x.FromRaftId
+	}
+	return 0
+}
+
+func (x *MonitorRequest) GetEndUnix() int64 {
+	if x != nil {
+		return x.EndUnix
+	}
+	return 0
+}
+
+func (x *MonitorRequest) GetSeconds() int64 {
+	if x != nil {
+		return x.Seconds
+	}
+	return 0
+}
+
+type MonitorResponse struct {
+	state         protoimpl.MessageState     `protogen:"open.v1"`
+	TelemetryJson []byte                     `protobuf:"bytes,1,opt,name=telemetry_json,json=telemetryJson,proto3" json:"telemetry_json,omitempty"`
+	Status        *LocalRepairStatusResponse `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MonitorResponse) Reset() {
+	*x = MonitorResponse{}
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MonitorResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MonitorResponse) ProtoMessage() {}
+
+func (x *MonitorResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_platform_rpc_datawire_data_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MonitorResponse.ProtoReflect.Descriptor instead.
+func (*MonitorResponse) Descriptor() ([]byte, []int) {
+	return file_internal_platform_rpc_datawire_data_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *MonitorResponse) GetTelemetryJson() []byte {
+	if x != nil {
+		return x.TelemetryJson
+	}
+	return nil
+}
+
+func (x *MonitorResponse) GetStatus() *LocalRepairStatusResponse {
+	if x != nil {
+		return x.Status
+	}
+	return nil
 }
 
 var File_internal_platform_rpc_datawire_data_proto protoreflect.FileDescriptor
@@ -3836,12 +4076,13 @@ const file_internal_platform_rpc_datawire_data_proto_rawDesc = "" +
 	"\rscanned_packs\x18\x01 \x01(\x04R\fscannedPacks\x12#\n" +
 	"\rremoved_packs\x18\x02 \x01(\x04R\fremovedPacks\x12'\n" +
 	"\x0freclaimed_bytes\x18\x03 \x01(\x03R\x0ereclaimedBytes\x12\x1c\n" +
-	"\trewritten\x18\x04 \x01(\bR\trewritten\"[\n" +
+	"\trewritten\x18\x04 \x01(\bR\trewritten\"\x91\x01\n" +
 	"\x18LocalRepairStatusRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
 	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
-	"fromRaftId\"C\n" +
+	"fromRaftId\x124\n" +
+	"\x16include_volume_details\x18\x03 \x01(\bR\x14includeVolumeDetails\"C\n" +
 	"\x10LocalRepairIssue\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\xa4\x02\n" +
@@ -3855,7 +4096,7 @@ const file_internal_platform_rpc_datawire_data_proto_rawDesc = "" +
 	"\x11needs_clean_sweep\x18\x05 \x01(\bR\x0fneedsCleanSweep\x12!\n" +
 	"\fstarted_unix\x18\x06 \x01(\x03R\vstartedUnix\x12,\n" +
 	"\x12last_progress_unix\x18\a \x01(\x03R\x10lastProgressUnix\x12&\n" +
-	"\x0flast_clean_unix\x18\b \x01(\x03R\rlastCleanUnix\"\xc4\t\n" +
+	"\x0flast_clean_unix\x18\b \x01(\x03R\rlastCleanUnix\"\x96\f\n" +
 	"\x19LocalRepairStatusResponse\x12%\n" +
 	"\x0eworker_enabled\x18\x01 \x01(\bR\rworkerEnabled\x12&\n" +
 	"\x0flast_check_unix\x18\x02 \x01(\x03R\rlastCheckUnix\x12?\n" +
@@ -3878,7 +4119,14 @@ const file_internal_platform_rpc_datawire_data_proto_rawDesc = "" +
 	"\x12capacity_supported\x18\x12 \x01(\bR\x11capacitySupported\x12Q\n" +
 	"\x0emaintenance_io\x18\x13 \x01(\v2*.dubi.internal.data.v1.MaintenanceIOStatusR\rmaintenanceIo\x120\n" +
 	"\x14capacity_total_bytes\x18\x14 \x01(\x04R\x12capacityTotalBytes\x128\n" +
-	"\x18capacity_available_bytes\x18\x15 \x01(\x04R\x16capacityAvailableBytes\"\xbc\x01\n" +
+	"\x18capacity_available_bytes\x18\x15 \x01(\x04R\x16capacityAvailableBytes\x12#\n" +
+	"\robserved_unix\x18\x16 \x01(\x03R\fobservedUnix\x128\n" +
+	"\x18volume_details_supported\x18\x17 \x01(\bR\x16volumeDetailsSupported\x12#\n" +
+	"\rtotal_volumes\x18\x18 \x01(\rR\ftotalVolumes\x124\n" +
+	"\x16filesystem_total_bytes\x18\x19 \x01(\x04R\x14filesystemTotalBytes\x12<\n" +
+	"\x1afilesystem_available_bytes\x18\x1a \x01(\x04R\x18filesystemAvailableBytes\x12/\n" +
+	"\x13rebalance_supported\x18\x1b \x01(\bR\x12rebalanceSupported\x12'\n" +
+	"\x0frebalance_phase\x18\x1c \x01(\tR\x0erebalancePhase\"\xbc\x01\n" +
 	"\x13MaintenanceIOStatus\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\tR\x06active\x12\x1e\n" +
 	"\n" +
@@ -3907,12 +4155,21 @@ const file_internal_platform_rpc_datawire_data_proto_rawDesc = "" +
 	"used_bytes\x18\x02 \x01(\x04R\tusedBytes\x12\x1d\n" +
 	"\n" +
 	"peak_bytes\x18\x03 \x01(\x04R\tpeakBytes\x12\x1a\n" +
-	"\brejected\x18\x04 \x01(\x04R\brejected\"u\n" +
+	"\brejected\x18\x04 \x01(\x04R\brejected\"\x98\x03\n" +
 	"\x12VolumeHealthStatus\x12\x1b\n" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x16\n" +
 	"\x06health\x18\x03 \x01(\tR\x06health\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xbf\x01\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12\x12\n" +
+	"\x04path\x18\x05 \x01(\tR\x04path\x12%\n" +
+	"\x0ecapacity_known\x18\x06 \x01(\bR\rcapacityKnown\x124\n" +
+	"\x16filesystem_total_bytes\x18\a \x01(\x04R\x14filesystemTotalBytes\x12<\n" +
+	"\x1afilesystem_available_bytes\x18\b \x01(\x04R\x18filesystemAvailableBytes\x12%\n" +
+	"\x0ewrite_isolated\x18\t \x01(\bR\rwriteIsolated\x12\x1f\n" +
+	"\vwrite_error\x18\n" +
+	" \x01(\tR\n" +
+	"writeError\x12*\n" +
+	"\x11created_unix_nano\x18\v \x01(\x03R\x0fcreatedUnixNano\"\xbf\x01\n" +
 	"\x17AccessCredentialRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
@@ -3924,8 +4181,19 @@ const file_internal_platform_rpc_datawire_data_proto_rawDesc = "" +
 	"\trevoke_id\x18\x05 \x01(\tR\brevokeId\"9\n" +
 	"\x18AccessCredentialResponse\x12\x1d\n" +
 	"\n" +
-	"root_index\x18\x01 \x01(\x04R\trootIndex2\xf7\x14\n" +
-	"\vDataService\x12y\n" +
+	"root_index\x18\x01 \x01(\x04R\trootIndex\"\x86\x01\n" +
+	"\x0eMonitorRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12 \n" +
+	"\ffrom_raft_id\x18\x02 \x01(\x04R\n" +
+	"fromRaftId\x12\x19\n" +
+	"\bend_unix\x18\x03 \x01(\x03R\aendUnix\x12\x18\n" +
+	"\aseconds\x18\x04 \x01(\x03R\aseconds\"\x82\x01\n" +
+	"\x0fMonitorResponse\x12%\n" +
+	"\x0etelemetry_json\x18\x01 \x01(\fR\rtelemetryJson\x12H\n" +
+	"\x06status\x18\x02 \x01(\v20.dubi.internal.data.v1.LocalRepairStatusResponseR\x06status2\xd8\x15\n" +
+	"\vDataService\x12_\n" +
+	"\x0eObserveMonitor\x12%.dubi.internal.data.v1.MonitorRequest\x1a&.dubi.internal.data.v1.MonitorResponse\x12y\n" +
 	"\x16MutateAccessCredential\x12..dubi.internal.data.v1.AccessCredentialRequest\x1a/.dubi.internal.data.v1.AccessCredentialResponse\x12g\n" +
 	"\fCreateTenant\x12*.dubi.internal.data.v1.CreateTenantRequest\x1a+.dubi.internal.data.v1.CreateTenantResponse\x12^\n" +
 	"\tPutRecord\x12'.dubi.internal.data.v1.PutRecordRequest\x1a(.dubi.internal.data.v1.PutRecordResponse\x12^\n" +
@@ -3963,7 +4231,7 @@ func file_internal_platform_rpc_datawire_data_proto_rawDescGZIP() []byte {
 	return file_internal_platform_rpc_datawire_data_proto_rawDescData
 }
 
-var file_internal_platform_rpc_datawire_data_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
+var file_internal_platform_rpc_datawire_data_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_internal_platform_rpc_datawire_data_proto_goTypes = []any{
 	(*CreateTenantRequest)(nil),         // 0: dubi.internal.data.v1.CreateTenantRequest
 	(*CreateTenantResponse)(nil),        // 1: dubi.internal.data.v1.CreateTenantResponse
@@ -4013,6 +4281,8 @@ var file_internal_platform_rpc_datawire_data_proto_goTypes = []any{
 	(*VolumeHealthStatus)(nil),          // 45: dubi.internal.data.v1.VolumeHealthStatus
 	(*AccessCredentialRequest)(nil),     // 46: dubi.internal.data.v1.AccessCredentialRequest
 	(*AccessCredentialResponse)(nil),    // 47: dubi.internal.data.v1.AccessCredentialResponse
+	(*MonitorRequest)(nil),              // 48: dubi.internal.data.v1.MonitorRequest
+	(*MonitorResponse)(nil),             // 49: dubi.internal.data.v1.MonitorResponse
 }
 var file_internal_platform_rpc_datawire_data_proto_depIdxs = []int32{
 	6,  // 0: dubi.internal.data.v1.CreateRepositoryRequest.repository:type_name -> dubi.internal.data.v1.RepositoryConfig
@@ -4030,59 +4300,62 @@ var file_internal_platform_rpc_datawire_data_proto_depIdxs = []int32{
 	45, // 12: dubi.internal.data.v1.LocalRepairStatusResponse.volumes:type_name -> dubi.internal.data.v1.VolumeHealthStatus
 	39, // 13: dubi.internal.data.v1.LocalRepairStatusResponse.scan_progress:type_name -> dubi.internal.data.v1.RepairScanProgress
 	41, // 14: dubi.internal.data.v1.LocalRepairStatusResponse.maintenance_io:type_name -> dubi.internal.data.v1.MaintenanceIOStatus
-	46, // 15: dubi.internal.data.v1.DataService.MutateAccessCredential:input_type -> dubi.internal.data.v1.AccessCredentialRequest
-	0,  // 16: dubi.internal.data.v1.DataService.CreateTenant:input_type -> dubi.internal.data.v1.CreateTenantRequest
-	2,  // 17: dubi.internal.data.v1.DataService.PutRecord:input_type -> dubi.internal.data.v1.PutRecordRequest
-	4,  // 18: dubi.internal.data.v1.DataService.GetRecord:input_type -> dubi.internal.data.v1.GetRecordRequest
-	7,  // 19: dubi.internal.data.v1.DataService.CreateRepository:input_type -> dubi.internal.data.v1.CreateRepositoryRequest
-	8,  // 20: dubi.internal.data.v1.DataService.UpdateRepository:input_type -> dubi.internal.data.v1.UpdateRepositoryRequest
-	9,  // 21: dubi.internal.data.v1.DataService.DeleteRepository:input_type -> dubi.internal.data.v1.DeleteRepositoryRequest
-	10, // 22: dubi.internal.data.v1.DataService.SetDefaultRepository:input_type -> dubi.internal.data.v1.SetDefaultRepositoryRequest
-	12, // 23: dubi.internal.data.v1.DataService.ListRepositories:input_type -> dubi.internal.data.v1.ListRepositoriesRequest
-	16, // 24: dubi.internal.data.v1.DataService.CreateBackupJob:input_type -> dubi.internal.data.v1.CreateBackupJobRequest
-	17, // 25: dubi.internal.data.v1.DataService.GetBackupJob:input_type -> dubi.internal.data.v1.GetBackupJobRequest
-	18, // 26: dubi.internal.data.v1.DataService.ListBackupJobs:input_type -> dubi.internal.data.v1.ListBackupJobsRequest
-	19, // 27: dubi.internal.data.v1.DataService.ClaimBackupJob:input_type -> dubi.internal.data.v1.ClaimBackupJobRequest
-	20, // 28: dubi.internal.data.v1.DataService.CompleteBackupJob:input_type -> dubi.internal.data.v1.CompleteBackupJobRequest
-	21, // 29: dubi.internal.data.v1.DataService.FailBackupJob:input_type -> dubi.internal.data.v1.FailBackupJobRequest
-	22, // 30: dubi.internal.data.v1.DataService.FinalizeBackupJob:input_type -> dubi.internal.data.v1.FinalizeBackupJobRequest
-	25, // 31: dubi.internal.data.v1.DataService.CreateTenantToken:input_type -> dubi.internal.data.v1.CreateTenantTokenRequest
-	27, // 32: dubi.internal.data.v1.DataService.RevokeTenantToken:input_type -> dubi.internal.data.v1.RevokeTenantTokenRequest
-	29, // 33: dubi.internal.data.v1.DataService.AddVolume:input_type -> dubi.internal.data.v1.AddVolumeRequest
-	31, // 34: dubi.internal.data.v1.DataService.DrainVolume:input_type -> dubi.internal.data.v1.DrainVolumeRequest
-	33, // 35: dubi.internal.data.v1.DataService.RemoveVolume:input_type -> dubi.internal.data.v1.RemoveVolumeRequest
-	35, // 36: dubi.internal.data.v1.DataService.CompactStore:input_type -> dubi.internal.data.v1.CompactStoreRequest
-	37, // 37: dubi.internal.data.v1.DataService.LocalRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
-	37, // 38: dubi.internal.data.v1.DataService.ClusterRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
-	47, // 39: dubi.internal.data.v1.DataService.MutateAccessCredential:output_type -> dubi.internal.data.v1.AccessCredentialResponse
-	1,  // 40: dubi.internal.data.v1.DataService.CreateTenant:output_type -> dubi.internal.data.v1.CreateTenantResponse
-	3,  // 41: dubi.internal.data.v1.DataService.PutRecord:output_type -> dubi.internal.data.v1.PutRecordResponse
-	5,  // 42: dubi.internal.data.v1.DataService.GetRecord:output_type -> dubi.internal.data.v1.GetRecordResponse
-	11, // 43: dubi.internal.data.v1.DataService.CreateRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
-	11, // 44: dubi.internal.data.v1.DataService.UpdateRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
-	11, // 45: dubi.internal.data.v1.DataService.DeleteRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
-	11, // 46: dubi.internal.data.v1.DataService.SetDefaultRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
-	13, // 47: dubi.internal.data.v1.DataService.ListRepositories:output_type -> dubi.internal.data.v1.ListRepositoriesResponse
-	23, // 48: dubi.internal.data.v1.DataService.CreateBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
-	23, // 49: dubi.internal.data.v1.DataService.GetBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
-	24, // 50: dubi.internal.data.v1.DataService.ListBackupJobs:output_type -> dubi.internal.data.v1.ListBackupJobsResponse
-	23, // 51: dubi.internal.data.v1.DataService.ClaimBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
-	23, // 52: dubi.internal.data.v1.DataService.CompleteBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
-	23, // 53: dubi.internal.data.v1.DataService.FailBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
-	23, // 54: dubi.internal.data.v1.DataService.FinalizeBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
-	26, // 55: dubi.internal.data.v1.DataService.CreateTenantToken:output_type -> dubi.internal.data.v1.CreateTenantTokenResponse
-	28, // 56: dubi.internal.data.v1.DataService.RevokeTenantToken:output_type -> dubi.internal.data.v1.RevokeTenantTokenResponse
-	30, // 57: dubi.internal.data.v1.DataService.AddVolume:output_type -> dubi.internal.data.v1.AddVolumeResponse
-	32, // 58: dubi.internal.data.v1.DataService.DrainVolume:output_type -> dubi.internal.data.v1.DrainVolumeResponse
-	34, // 59: dubi.internal.data.v1.DataService.RemoveVolume:output_type -> dubi.internal.data.v1.RemoveVolumeResponse
-	36, // 60: dubi.internal.data.v1.DataService.CompactStore:output_type -> dubi.internal.data.v1.CompactStoreResponse
-	40, // 61: dubi.internal.data.v1.DataService.LocalRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
-	40, // 62: dubi.internal.data.v1.DataService.ClusterRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
-	39, // [39:63] is the sub-list for method output_type
-	15, // [15:39] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	40, // 15: dubi.internal.data.v1.MonitorResponse.status:type_name -> dubi.internal.data.v1.LocalRepairStatusResponse
+	48, // 16: dubi.internal.data.v1.DataService.ObserveMonitor:input_type -> dubi.internal.data.v1.MonitorRequest
+	46, // 17: dubi.internal.data.v1.DataService.MutateAccessCredential:input_type -> dubi.internal.data.v1.AccessCredentialRequest
+	0,  // 18: dubi.internal.data.v1.DataService.CreateTenant:input_type -> dubi.internal.data.v1.CreateTenantRequest
+	2,  // 19: dubi.internal.data.v1.DataService.PutRecord:input_type -> dubi.internal.data.v1.PutRecordRequest
+	4,  // 20: dubi.internal.data.v1.DataService.GetRecord:input_type -> dubi.internal.data.v1.GetRecordRequest
+	7,  // 21: dubi.internal.data.v1.DataService.CreateRepository:input_type -> dubi.internal.data.v1.CreateRepositoryRequest
+	8,  // 22: dubi.internal.data.v1.DataService.UpdateRepository:input_type -> dubi.internal.data.v1.UpdateRepositoryRequest
+	9,  // 23: dubi.internal.data.v1.DataService.DeleteRepository:input_type -> dubi.internal.data.v1.DeleteRepositoryRequest
+	10, // 24: dubi.internal.data.v1.DataService.SetDefaultRepository:input_type -> dubi.internal.data.v1.SetDefaultRepositoryRequest
+	12, // 25: dubi.internal.data.v1.DataService.ListRepositories:input_type -> dubi.internal.data.v1.ListRepositoriesRequest
+	16, // 26: dubi.internal.data.v1.DataService.CreateBackupJob:input_type -> dubi.internal.data.v1.CreateBackupJobRequest
+	17, // 27: dubi.internal.data.v1.DataService.GetBackupJob:input_type -> dubi.internal.data.v1.GetBackupJobRequest
+	18, // 28: dubi.internal.data.v1.DataService.ListBackupJobs:input_type -> dubi.internal.data.v1.ListBackupJobsRequest
+	19, // 29: dubi.internal.data.v1.DataService.ClaimBackupJob:input_type -> dubi.internal.data.v1.ClaimBackupJobRequest
+	20, // 30: dubi.internal.data.v1.DataService.CompleteBackupJob:input_type -> dubi.internal.data.v1.CompleteBackupJobRequest
+	21, // 31: dubi.internal.data.v1.DataService.FailBackupJob:input_type -> dubi.internal.data.v1.FailBackupJobRequest
+	22, // 32: dubi.internal.data.v1.DataService.FinalizeBackupJob:input_type -> dubi.internal.data.v1.FinalizeBackupJobRequest
+	25, // 33: dubi.internal.data.v1.DataService.CreateTenantToken:input_type -> dubi.internal.data.v1.CreateTenantTokenRequest
+	27, // 34: dubi.internal.data.v1.DataService.RevokeTenantToken:input_type -> dubi.internal.data.v1.RevokeTenantTokenRequest
+	29, // 35: dubi.internal.data.v1.DataService.AddVolume:input_type -> dubi.internal.data.v1.AddVolumeRequest
+	31, // 36: dubi.internal.data.v1.DataService.DrainVolume:input_type -> dubi.internal.data.v1.DrainVolumeRequest
+	33, // 37: dubi.internal.data.v1.DataService.RemoveVolume:input_type -> dubi.internal.data.v1.RemoveVolumeRequest
+	35, // 38: dubi.internal.data.v1.DataService.CompactStore:input_type -> dubi.internal.data.v1.CompactStoreRequest
+	37, // 39: dubi.internal.data.v1.DataService.LocalRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
+	37, // 40: dubi.internal.data.v1.DataService.ClusterRepairStatus:input_type -> dubi.internal.data.v1.LocalRepairStatusRequest
+	49, // 41: dubi.internal.data.v1.DataService.ObserveMonitor:output_type -> dubi.internal.data.v1.MonitorResponse
+	47, // 42: dubi.internal.data.v1.DataService.MutateAccessCredential:output_type -> dubi.internal.data.v1.AccessCredentialResponse
+	1,  // 43: dubi.internal.data.v1.DataService.CreateTenant:output_type -> dubi.internal.data.v1.CreateTenantResponse
+	3,  // 44: dubi.internal.data.v1.DataService.PutRecord:output_type -> dubi.internal.data.v1.PutRecordResponse
+	5,  // 45: dubi.internal.data.v1.DataService.GetRecord:output_type -> dubi.internal.data.v1.GetRecordResponse
+	11, // 46: dubi.internal.data.v1.DataService.CreateRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	11, // 47: dubi.internal.data.v1.DataService.UpdateRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	11, // 48: dubi.internal.data.v1.DataService.DeleteRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	11, // 49: dubi.internal.data.v1.DataService.SetDefaultRepository:output_type -> dubi.internal.data.v1.RepositoryMutationResponse
+	13, // 50: dubi.internal.data.v1.DataService.ListRepositories:output_type -> dubi.internal.data.v1.ListRepositoriesResponse
+	23, // 51: dubi.internal.data.v1.DataService.CreateBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 52: dubi.internal.data.v1.DataService.GetBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	24, // 53: dubi.internal.data.v1.DataService.ListBackupJobs:output_type -> dubi.internal.data.v1.ListBackupJobsResponse
+	23, // 54: dubi.internal.data.v1.DataService.ClaimBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 55: dubi.internal.data.v1.DataService.CompleteBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 56: dubi.internal.data.v1.DataService.FailBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	23, // 57: dubi.internal.data.v1.DataService.FinalizeBackupJob:output_type -> dubi.internal.data.v1.BackupJobResponse
+	26, // 58: dubi.internal.data.v1.DataService.CreateTenantToken:output_type -> dubi.internal.data.v1.CreateTenantTokenResponse
+	28, // 59: dubi.internal.data.v1.DataService.RevokeTenantToken:output_type -> dubi.internal.data.v1.RevokeTenantTokenResponse
+	30, // 60: dubi.internal.data.v1.DataService.AddVolume:output_type -> dubi.internal.data.v1.AddVolumeResponse
+	32, // 61: dubi.internal.data.v1.DataService.DrainVolume:output_type -> dubi.internal.data.v1.DrainVolumeResponse
+	34, // 62: dubi.internal.data.v1.DataService.RemoveVolume:output_type -> dubi.internal.data.v1.RemoveVolumeResponse
+	36, // 63: dubi.internal.data.v1.DataService.CompactStore:output_type -> dubi.internal.data.v1.CompactStoreResponse
+	40, // 64: dubi.internal.data.v1.DataService.LocalRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
+	40, // 65: dubi.internal.data.v1.DataService.ClusterRepairStatus:output_type -> dubi.internal.data.v1.LocalRepairStatusResponse
+	41, // [41:66] is the sub-list for method output_type
+	16, // [16:41] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_internal_platform_rpc_datawire_data_proto_init() }
@@ -4096,7 +4369,7 @@ func file_internal_platform_rpc_datawire_data_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_platform_rpc_datawire_data_proto_rawDesc), len(file_internal_platform_rpc_datawire_data_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   48,
+			NumMessages:   50,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

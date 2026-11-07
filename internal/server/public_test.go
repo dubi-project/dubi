@@ -187,6 +187,10 @@ func (unavailableRootBarrier) ReadIndex(context.Context, string) (uint64, error)
 
 type emptyCredentialCatalog struct{}
 
+func (emptyCredentialCatalog) Tenant(string) (rootstate.Tenant, bool, error) {
+	return rootstate.Tenant{}, false, nil
+}
+
 func (emptyCredentialCatalog) AppliedIndex() uint64 { return 0 }
 func (emptyCredentialCatalog) TenantCredential(string) (rootstate.TenantCredential, bool, error) {
 	return rootstate.TenantCredential{}, false, nil

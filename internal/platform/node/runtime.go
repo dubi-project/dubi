@@ -27,6 +27,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 	"github.com/dubi-project/dubi/internal/platform/storage/snapshot"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
+	"github.com/dubi-project/dubi/internal/platform/tenantquota"
 	"google.golang.org/grpc"
 )
 
@@ -55,6 +56,7 @@ type Runtime struct {
 	Records         *records.Store
 	Snapshots       *snapshot.Store
 	RootJoin        *rootjoin.LocalStore
+	TenantQuota     *tenantquota.Service
 	// rootReadIndex optionally confirms a Root barrier through a remote voter.
 	// Learners cannot always complete a local ReadIndex before promotion, so
 	// production startup supplies this through the authenticated GroupClient.
@@ -500,7 +502,7 @@ func Open(options Options) (*Runtime, error) {
 	if err != nil {
 		return fail(err)
 	}
-	return &Runtime{Identity: value, Host: host, Root: root, Groups: groups,
+	return &Runtime{Identity: value, Host: host, Root: root, Groups: groups, TenantQuota: &tenantquota.Service{Root: root},
 		Engines: engines, JoinManager: joiner, LocalMembership: localMembership, Volumes: volumes, Packs: packs, Records: data,
 		Snapshots: artifacts, RootJoin: localJoin, recoveryContext: recoveryContext, cancelRecovery: cancelRecovery, closeDone: make(chan struct{})}, nil
 }

@@ -239,6 +239,10 @@ func (s *State) validateSnapshotEntries(image snapshotImage) error {
 				return errors.New("engine snapshot contains invalid value key, size or attribution")
 			}
 			values[keyspace] = true
+		case bytes.HasPrefix(entry.Key, usageIndexPrefix):
+			if err := validateUsageIndex(entry.Key, entry.Value, func(key []byte) ([]byte, bool, error) { b, ok := seen[string(key)]; return b, ok, nil }, s.groupID, image.Applied); err != nil {
+				return err
+			}
 		case bytes.HasPrefix(entry.Key, recordReferencePrefix):
 			ref, err := decodeRecordReference(entry.Key, entry.Value, s.groupID, image.Applied)
 			if err != nil || entry.TenantID != ref.Descriptor.Keyspace.TenantID {

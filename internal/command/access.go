@@ -23,7 +23,7 @@ func runAccess(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	store := f.String("store", "", "Node metadata directory")
 	endpoint := f.String("server", "", "Node RPC address")
 	role := f.String("role", "admin", "admin or monitor")
-	ttl := f.Duration("ttl", 90*24*time.Hour, "credential lifetime, maximum 366 days")
+	ttl := f.Duration("ttl", 90*24*time.Hour, "credential lifetime, 0 means never expires, maximum 366 days")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}

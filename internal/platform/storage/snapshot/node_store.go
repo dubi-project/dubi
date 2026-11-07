@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/dubi-project/dubi/internal/platform/identity"
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 	"golang.org/x/sys/unix"
 )
 
@@ -217,6 +218,9 @@ func openOwnedDirectory(parent *os.Root) (*os.Root, error) {
 }
 
 func validStorageID(value, prefix string) bool {
+	if resourceid.PrefixSupported(prefix) {
+		return resourceid.Valid(value, prefix)
+	}
 	if len(value) != len(prefix)+32 || !strings.HasPrefix(value, prefix) || strings.ToLower(value) != value {
 		return false
 	}

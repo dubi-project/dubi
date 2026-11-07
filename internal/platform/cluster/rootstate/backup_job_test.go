@@ -92,3 +92,28 @@ func TestBackupJobLifecycleLeaseTakeoverAndSnapshot(t *testing.T) {
 func testBackupMembership(raftID uint64) *raftpb.ConfState {
 	return &raftpb.ConfState{Voters: []uint64{raftID}}
 }
+
+func TestRepositoryMutationCannotRedirectExistingBackup(t *testing.T) {
+	state := rootFileState(t, t.TempDir())
+	defer state.Close()
+	if err := state.ApplyMembership(1, testBackupMembership(11)); err != nil {
+		t.Fatal(err)
+	}
+	applyRootFileCommand(t, state, Command{Type: RegisterNode, Node: &Node{NodeID: "node_00000000000000000000000000000011", RaftID: 11, RegionID: "west", Address: "127.0.0.1:10011"}})
+	applyRootFileCommand(t, state, Command{Type: CreateRepository, Repository: &repository.Repository{Name: "local", Type: repository.TypeFile, Path: "/backup/dubi"}})
+	r, _, _ := state.Repository("local")
+	result := applyBackupCommand(t, state, "create-guard-job", Command{Type: CreateBackupJob, BackupJob: &BackupJob{JobID: "guard-job", Repository: "local", ClusterID: "cluster_00000000000000000000000000000011", CreatedUnix: 123}})
+	if result.Error != "" {
+		t.Fatal(result.Error)
+	}
+	next := r
+	next.Path = "/other"
+	result = applyBackupCommand(t, state, "redirect", Command{Type: UpdateRepository, Repository: &next, RepositoryIfMatch: r.Revision()})
+	if result.Error != "Repository has an active backup" {
+		t.Fatalf("active backup redirected: %+v", result)
+	}
+	j, _, _ := state.BackupJob("guard-job")
+	if j.CreatedUnix != 123 {
+		t.Fatal("timestamp lost")
+	}
+}

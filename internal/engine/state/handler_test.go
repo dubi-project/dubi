@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
@@ -73,7 +74,7 @@ func TestStateCASDeletionRetryIsolationAndRecovery(t *testing.T) {
 	if r.Version != first.version() || r.Confirmed {
 		t.Fatal("publication alone became confirmed", r)
 	}
-	if retry := apply(a, first); retry != r {
+	if retry := apply(a, first); !reflect.DeepEqual(retry, r) {
 		t.Fatal("duplicate changed result", retry, r)
 	}
 	for _, target := range []router.Target{b, c} {
@@ -166,5 +167,37 @@ func TestStateCodecBoundariesAndDeterminism(t *testing.T) {
 	}
 	if decode([]byte(`{"format":1,"unknown":2}`), new(query)) == nil || decode([]byte(`{"format":1} {}`), new(query)) == nil {
 		t.Fatal("ambiguous wire payload accepted")
+	}
+}
+
+func TestQuotaAbortFencesLatePublication(t *testing.T) {
+	s, err := enginestate.Open(filepath.Join(t.TempDir(), "state"), "data-1", Handler{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	r := rootstate.Range{RangeID: "quota-range", TenantID: "t", ModuleID: "config", EngineID: EngineID, OwnerGroupID: "data-1", Epoch: 1, State: rootstate.RangeStateActive}
+	if err := s.ApplyRange(1, "activate", r); err != nil {
+		t.Fatal(err)
+	}
+	target := router.Target{Keyspace: r.Keyspace(), RangeID: r.RangeID, OwnerGroupID: r.OwnerGroupID, Epoch: 1, RoutingKey: dataKey([]byte("key"))}
+	o := operation{Format: 1, RequestID: "late", Key: []byte("key"), Value: []byte("should-not-appear")}
+	payload, _ := json.Marshal(publication{Abort: &abortOperation{RequestID: o.RequestID, Version: o.version(), Key: o.Key}})
+	if err := s.ApplyRouted(2, "cancel", target, payload); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := records.Describe(target.Keyspace, target.OwnerGroupID, target.RoutingKey, o.body())
+	late, _ := json.Marshal(publication{Operation: o, Descriptor: d})
+	if err := s.ApplyRouted(3, "late", target, late); err != nil {
+		t.Fatal(err)
+	}
+	queryPayload, _ := json.Marshal(query{Format: 1, RequestID: o.RequestID, Version: o.version()})
+	out, _, err := s.QueryRouted(context.Background(), barrier{s}, target, queryPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got queryResult
+	if decode(out.Value, &got) != nil || got.Head != nil || got.Receipt == nil || got.Receipt.Code != "cancelled" {
+		t.Fatal("cancelled write published", got)
 	}
 }

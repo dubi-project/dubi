@@ -251,6 +251,7 @@ message CompactStoreResponse {
 message LocalRepairStatusRequest {
   string cluster_id = 1;
   uint64 from_raft_id = 2;
+  bool include_volume_details = 3;
 }
 message LocalRepairIssue {
   string group_id = 1;
@@ -291,6 +292,13 @@ message LocalRepairStatusResponse {
   // Deduplicated healthy Active filesystems; observations, not reservations.
   uint64 capacity_total_bytes = 20;
   uint64 capacity_available_bytes = 21;
+  int64 observed_unix = 22;
+  bool volume_details_supported = 23;
+  uint32 total_volumes = 24;
+  uint64 filesystem_total_bytes = 25;
+  uint64 filesystem_available_bytes = 26;
+  bool rebalance_supported = 27;
+  string rebalance_phase = 28;
 }
 message MaintenanceIOStatus {
  string active = 1;
@@ -324,6 +332,13 @@ message VolumeHealthStatus {
   string state = 2;
   string health = 3;
   string error = 4;
+  string path = 5;
+  bool capacity_known = 6;
+  uint64 filesystem_total_bytes = 7;
+  uint64 filesystem_available_bytes = 8;
+  bool write_isolated = 9;
+  string write_error = 10;
+  int64 created_unix_nano = 11;
 }
 message AccessCredentialRequest {
   string cluster_id = 1;
@@ -333,7 +348,10 @@ message AccessCredentialRequest {
   string revoke_id = 5;
 }
 message AccessCredentialResponse { uint64 root_index = 1; }
+message MonitorRequest { string cluster_id = 1; uint64 from_raft_id = 2; int64 end_unix = 3; int64 seconds = 4; }
+message MonitorResponse { bytes telemetry_json = 1; LocalRepairStatusResponse status = 2; }
 service DataService {
+  rpc ObserveMonitor(MonitorRequest) returns (MonitorResponse);
   rpc MutateAccessCredential(AccessCredentialRequest) returns (AccessCredentialResponse);
   rpc CreateTenant(CreateTenantRequest) returns (CreateTenantResponse);
   rpc PutRecord(PutRecordRequest) returns (PutRecordResponse);

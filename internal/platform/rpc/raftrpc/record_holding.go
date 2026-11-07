@@ -3,7 +3,6 @@ package raftrpc
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/raft"
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftwire"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 	"google.golang.org/grpc"
@@ -255,13 +255,7 @@ type HoldingObservation struct {
 	Holding            records.Holding
 }
 
-func validHoldingID(value, prefix string) bool {
-	if len(value) != len(prefix)+32 || value[:len(prefix)] != prefix {
-		return false
-	}
-	decoded, err := hex.DecodeString(value[len(prefix):])
-	return err == nil && hex.EncodeToString(decoded) == value[len(prefix):]
-}
+func validHoldingID(value, prefix string) bool { return resourceid.Valid(value, prefix) }
 
 func decodeHoldingObservation(cluster string, target uint64, expected records.Descriptor, r *raftwire.ObserveRecordHoldingResponse) (HoldingObservation, error) {
 	bad := errors.New("invalid record holding observation")

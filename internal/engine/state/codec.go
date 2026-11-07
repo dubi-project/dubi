@@ -53,24 +53,29 @@ type content struct {
 	Value   []byte `json:"value,omitempty"`
 }
 type head struct {
-	Version   string `json:"version"`
-	Deleted   bool   `json:"deleted"`
-	RequestID string `json:"request_id"`
+	CreatedOrder uint64  `json:"created_order,omitempty"`
+	Bytes        *uint64 `json:"bytes,omitempty"`
+	Version      string  `json:"version"`
+	Deleted      bool    `json:"deleted"`
+	RequestID    string  `json:"request_id"`
 }
 type receipt struct {
-	Version   string `json:"version"`
-	Deleted   bool   `json:"deleted"`
-	Code      string `json:"code,omitempty"`
-	Confirmed bool   `json:"confirmed"`
+	Usage     *rootstate.UsageReport `json:"usage,omitempty"`
+	Version   string                 `json:"version"`
+	Deleted   bool                   `json:"deleted"`
+	Code      string                 `json:"code,omitempty"`
+	Confirmed bool                   `json:"confirmed"`
 }
 type query struct {
-	Format    int    `json:"format"`
-	RequestID string `json:"request_id,omitempty"`
-	Version   string `json:"version,omitempty"`
+	List      *ListRequest `json:"list,omitempty"`
+	Format    int          `json:"format"`
+	RequestID string       `json:"request_id,omitempty"`
+	Version   string       `json:"version,omitempty"`
 }
 type queryResult struct {
-	Head    *head    `json:"head,omitempty"`
-	Receipt *receipt `json:"receipt,omitempty"`
+	Usage   *rootstate.UsageReport `json:"usage,omitempty"`
+	Head    *head                  `json:"head,omitempty"`
+	Receipt *receipt               `json:"receipt,omitempty"`
 }
 
 func validVersion(v string) bool {

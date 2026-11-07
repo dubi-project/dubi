@@ -29,7 +29,7 @@ func runTenant(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	requestID := flags.String("request-id", "", "stable ID for diagnosing an uncertain request")
 	var ttl *time.Duration
 	if operation == "create" {
-		ttl = flags.Duration("ttl", 90*24*time.Hour, "Token lifetime (maximum 366 days)")
+		ttl = flags.Duration("ttl", 90*24*time.Hour, "Token lifetime (0 means never expires, maximum 366 days)")
 	}
 	if err := flags.Parse(args[2:]); err != nil {
 		return err
@@ -47,7 +47,7 @@ func runTenant(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if flags.NArg() != 1 || *store == "" || identityenrollment.ValidateNodeAddress(*server) != nil {
 		return errors.New("usage: dubi tenant token create|revoke [--store path] [--server host:port] <tenant|credential-id>")
 	}
-	if operation == "create" && (rootstate.ValidateTenantID(flags.Arg(0)) != nil || *ttl < time.Second ||
+	if operation == "create" && (rootstate.ValidateTenantID(flags.Arg(0)) != nil || (*ttl != 0 && *ttl < time.Second) ||
 		*ttl > 366*24*time.Hour || *ttl%time.Second != 0) {
 		return errors.New("Tenant ID or Token TTL is invalid")
 	}

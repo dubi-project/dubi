@@ -2,6 +2,7 @@ package rootstate
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -11,8 +12,9 @@ func TestTenantCredentialDurableIssueRevokeAndSnapshot(t *testing.T) {
 	value := TenantCredential{CredentialID: "cred_0123456789abcdef0123456789abcdef", TenantID: "tenant",
 		TokenSHA256: strings.Repeat("a", 64), CreatedUnix: 100, ExpiresUnix: 200}
 	applyRootFileCommand(t, state, Command{Type: CreateTenantCredential, TenantCredential: &value})
+	value.CreatedIndex = state.AppliedIndex()
 	read, found, err := state.TenantCredential(value.CredentialID)
-	if err != nil || !found || read != value {
+	if err != nil || !found || !reflect.DeepEqual(read, value) {
 		t.Fatal("created credential not durable", read, found, err)
 	}
 	applyRootFileCommand(t, state, Command{Type: RevokeTenantCredential,

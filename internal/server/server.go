@@ -34,6 +34,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/roottopology"
 	"github.com/dubi-project/dubi/internal/platform/identity"
 	"github.com/dubi-project/dubi/internal/platform/identity/nodepki"
+	"github.com/dubi-project/dubi/internal/platform/management"
 	"github.com/dubi-project/dubi/internal/platform/node"
 	"github.com/dubi-project/dubi/internal/platform/raft"
 	repository "github.com/dubi-project/dubi/internal/platform/recovery/repository"
@@ -48,6 +49,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinrpc"
 	"github.com/dubi-project/dubi/internal/platform/rpc/rootjoinwire"
 	"github.com/dubi-project/dubi/internal/platform/rpc/tlscredentials"
+	"github.com/dubi-project/dubi/internal/platform/telemetry"
 	etcdraft "go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
@@ -84,6 +86,7 @@ type Options struct {
 }
 
 type Server struct {
+	telemetry            *telemetry.Recorder
 	Runtime              *node.Runtime
 	GroupClient          *raftrpc.GroupClient
 	EngineData           *enginedata.Service // In-process only; not Tenant-authenticated.
@@ -108,6 +111,8 @@ type Server struct {
 	nodeBalance       *nodeBalanceWorker
 	backup            *backupWorker
 	ready             chan struct{}
+	quotaMaintenance  func(context.Context)
+	notifications     func(context.Context)
 	publicMaintenance func(context.Context)
 	localNode         *rootstate.Node
 	desiredName       string
@@ -577,7 +582,28 @@ func Open(options Options) (*Server, error) {
 	backup = &backupWorker{io: dataServer.io, runtime: runtime, client: client, storeRoot: options.StoreRoot, report: options.ReportError}
 	var publicHTTP *http.Server
 	var publicTLS *tls.Config
+	quota := runtime.TenantQuota
+	quota.Commit = func(ctx context.Context, c rootstate.Command) error {
+		return dataServer.rootCommandWithSubmit(ctx, c, rootControlHost.Submit)
+	}
+	quotaMaintenance := quotaMaintenanceWorker(runtime, quota, options.ReportError)
 	ready := make(chan struct{})
+	recorder := telemetry.New(runtime.Identity.NodeID, func() bool {
+		select {
+		case <-ready:
+			return true
+		default:
+			return false
+		}
+	})
+	dataServer.monitor = recorder
+	managementDirectory := management.New(managementSource{data: dataServer})
+	notifications := &management.Notifications{Root: runtime.Root, Barrier: runtime.ReadRootIndex, Commit: quota.Commit, Directory: managementDirectory}
+	notifications.ObserveAllowed = func() bool {
+		status, e := runtime.Host.Status(raft.RootGroupID)
+		return e == nil && status.LeaderID == runtime.Identity.RaftID
+	}
+	notificationMaintenance := notificationWorker(runtime, notifications, ready, options.ReportError)
 	if options.PublicListener != nil {
 		var repairSnapshot func() repairObservation
 		if liveRepair != nil {
@@ -587,15 +613,46 @@ func Open(options Options) (*Server, error) {
 		if err != nil {
 			return fail(err, transport, client)
 		}
+		configService := configmodule.New(configState)
+		components := publicComponentCatalog(runtime.Identity.NodeID)
+		tenantAPI := &httpapi.TenantManagement{Service: &management.Tenants{Root: runtime.Root, Barrier: runtime.ReadRootIndex, Commit: quota.Commit, Modules: []v1.TenantModule{{ID: "config", Name: "配置中心"}}}}
+		admin := http.NewServeMux()
+		admin.Handle(v1.ComponentsPath, httpapi.NewComponents(components))
+		configAdmin := &httpapi.AdminConfig{Service: configService, Root: runtime.Root, Barrier: runtime.ReadRootIndex}
+		admin.Handle(v1.AdminConfigPath, configAdmin)
+		admin.Handle(v1.AdminConfigEntryPath, configAdmin)
+		admin.Handle("/api/v1/admin/tenants", tenantAPI)
+		admin.Handle("/api/v1/admin/tenants/", tenantAPI)
+		admin.Handle("/api/v1/admin/tenant-modules", tenantAPI)
+		operations := &httpapi.Operations{Service: &management.Operations{Root: runtime.Root, Barrier: runtime.ReadRootIndex, Commit: quota.Commit, ClusterID: runtime.Identity.ClusterID, RepositoryKey: func() ([]byte, error) { return repository.LoadRepositoryKey(options.StoreRoot) }}}
+		for _, path := range []string{"credentials", "repositories", "backups"} {
+			admin.Handle("/api/v1/admin/"+path, operations)
+			admin.Handle("/api/v1/admin/"+path+"/", operations)
+		}
+		monitoring := &httpapi.Monitoring{Service: management.NewMonitoring(managementDirectory, managementSource{data: dataServer}, runtime.Root, quota.Commit)}
+		for _, path := range []string{"monitoring", "diagnostics", "diagnostics/"} {
+			admin.Handle("/api/v1/admin/"+path, monitoring)
+		}
+		noticeAPI := &httpapi.Notifications{Service: notifications}
+		admin.Handle("/api/v1/admin/notifications", noticeAPI)
+		admin.Handle("/api/v1/admin/notifications/", noticeAPI)
+		admin.Handle("/", httpapi.NewManagement(managementDirectory))
 		verifier := auth.Verifier{Barrier: runtime, Catalog: runtime.Root}
-		publicHTTP = newPublicHTTPServerWithConfig(verifier, runtime, ready, repairSnapshot, httpapi.NewConfig(configmodule.New(configState), verifier))
+		publicHTTP = newPublicHTTPServerWithConfig(verifier, runtime, ready, repairSnapshot, httpapi.NewConfig(configService, verifier))
 		publicHTTP.Handler = httpapi.NewGateway(httpapi.GatewayOptions{
-			Legacy: publicHTTP.Handler,
+			Legacy:        publicHTTP.Handler,
+			Admin:         admin,
+			TenantConsole: &httpapi.TenantConsole{Tenants: tenantAPI.Service, Operations: operations.Service, Config: configAdmin},
+			Accounts: &httpapi.Accounts{Root: runtime.Root, Barrier: runtime.ReadRootIndex, Commit: func(ctx context.Context, c rootstate.Command) error {
+				return dataServer.rootCommandWithSubmit(ctx, c, rootControlHost.Submit)
+			}},
+			Tenant: verifier,
 			Access: auth.AccessVerifier{Barrier: runtime, Catalog: runtime.Root},
 			Commit: func(ctx context.Context, c rootstate.Command) error {
 				return dataServer.rootCommandWithSubmit(ctx, c, rootControlHost.Submit)
 			},
 			Certificate: options.PublicCertificateInfo,
+			Metrics:     recorder.Metrics,
 			Audit: func(action, id, result string) {
 				if options.ReportError != nil {
 					options.ReportError(fmt.Errorf("gateway audit action=%s credential=%s result=%s", action, id, result))
@@ -606,9 +663,10 @@ func Open(options Options) (*Server, error) {
 				if options.PublicCertificateInfo != nil {
 					certificate = options.PublicCertificateInfo()
 				}
-				return v1.GatewayInfo{ClusterID: runtime.Identity.ClusterID, NodeID: runtime.Identity.NodeID, APIVersion: "v1", Console: "gateway-shell", BusinessModules: []string{"config"}, Management: "gateway-foundation", ObservedUnix: time.Now().Unix(), Certificate: certificate}, nil
+				return v1.GatewayInfo{ClusterID: runtime.Identity.ClusterID, NodeID: runtime.Identity.NodeID, APIVersion: "v1", Console: "react-shell", BusinessModules: []string{"config"}, Management: "cluster-management", ObservedUnix: time.Now().Unix(), Certificate: certificate}, nil
 			},
 		})
+		publicHTTP.Handler = recorder.Wrap(publicHTTP.Handler, httpapi.ConfigPath)
 		publicCertificate := options.PublicTLS
 		if publicCertificate == nil {
 			publicCertificate = options.ServerTLS
@@ -618,8 +676,8 @@ func Open(options Options) (*Server, error) {
 		publicTLS.ClientCAs = nil
 		publicTLS.NextProtos = []string{"http/1.1"}
 	}
-	return &Server{Runtime: runtime, GroupClient: client, EngineData: localData, MembershipReconciler: reconciler, NodeRemoval: nodeRemoval,
-		listener: limitListener(options.Listener, internalConnectionLimit), publicListener: limitedPublicListener(options.PublicListener), publicHTTP: publicHTTP, publicTLS: publicTLS,
+	return &Server{notifications: notificationMaintenance, telemetry: recorder, Runtime: runtime, GroupClient: client, EngineData: localData, MembershipReconciler: reconciler, NodeRemoval: nodeRemoval,
+		listener: limitListener(options.Listener, internalConnectionLimit), publicListener: limitedPublicListener(options.PublicListener), publicHTTP: publicHTTP, publicTLS: publicTLS, quotaMaintenance: quotaMaintenance,
 		grpc: grpcServer, transport: transport,
 		publicMaintenance: options.PublicMaintenance, scheduler: scheduler, certificates: certificates, regional: regional, liveRepair: liveRepair, ready: ready, localNode: localNode,
 		desiredName: func() string {
@@ -803,6 +861,18 @@ func (server *Server) Run(ctx context.Context) error {
 // run never closes owned resources. Close first cancels and joins this
 // supervisor and its workers, then releases transport/state/Store ownership.
 func (server *Server) run(runCtx context.Context, cancel context.CancelCauseFunc) error {
+	if server.notifications != nil {
+		server.workers.Add(1)
+		go func() { defer server.workers.Done(); server.notifications(runCtx) }()
+	}
+	if server.telemetry != nil {
+		server.workers.Add(1)
+		go func() { defer server.workers.Done(); server.telemetry.Run(runCtx) }()
+	}
+	if server.quotaMaintenance != nil {
+		server.workers.Add(1)
+		go func() { defer server.workers.Done(); server.quotaMaintenance(runCtx) }()
+	}
 	if server.publicMaintenance != nil {
 		server.workers.Add(1)
 		go func() { defer server.workers.Done(); server.publicMaintenance(runCtx) }()
@@ -1113,6 +1183,11 @@ func closeListener(listener net.Listener) error {
 }
 
 func validateOptions(options Options) error {
+	if options.PublicListener != nil {
+		if err := httpapi.ValidateConsole(); err != nil {
+			return err
+		}
+	}
 	if options.PublicTLS != nil && (options.PublicListener == nil ||
 		(len(options.PublicTLS.Certificates) == 0 && options.PublicTLS.GetCertificate == nil) ||
 		(options.PublicTLS.MaxVersion != 0 && options.PublicTLS.MaxVersion < tls.VersionTLS13)) {

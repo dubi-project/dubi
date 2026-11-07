@@ -32,13 +32,12 @@ dubi/
 │   ├── gateway/               # 按需落地：HTTP 等外部协议适配
 │   └── testkit/               # 故障注入、集群测试和恢复测试共用工具
 ├── docs/                      # 设计、运维与开发文档
-├── web/console/               # 未来嵌入 dubi 二进制的控制台源代码
 └── deploy/                    # 部署示例、服务单元和监控配置
 ```
 
 图中的 module/gateway 是职责规划，按功能创建；当前 engine 下 cache/file/message/search 等旧占位目录不代表已实现，也不决定将来的层次。优先按需求落地 State/Record/Blob/Index，不为占位目录补造 Engine。
 
-HTTP Gateway 与内嵌控制台的新增职责以 [HTTP Gateway 架构](http-gateway.md) 为准：`internal/gateway/http/` 负责协议适配与静态资源托管，`internal/module/` 负责业务 API，`web/console/` 负责控制台源码，`internal/server/` 保留监听器与生命周期装配。这些目录按功能落地，不要求先创建空包。业务导入/导出属于对应 Module；管理 API 可调用 Runtime 管理服务，但不能直接操作底层存储。
+HTTP Gateway 与内嵌控制台的新增职责以 [HTTP Gateway 架构](http-gateway.md) 为准：`internal/gateway/http/` 负责协议适配与静态资源托管，`internal/module/` 负责业务 API，独立相邻仓库 `dubi-project/webui` 负责 React 控制台源码，`internal/server/` 保留监听器与生命周期装配。这些目录按功能落地，不要求先创建空包。业务导入/导出属于对应 Module；管理 API 可调用 Runtime 管理服务，但不能直接操作底层存储。
 
 ## 依赖规则
 
@@ -69,3 +68,5 @@ HTTP Gateway 与内嵌控制台的新增职责以 [HTTP Gateway 架构](http-gat
 3. 多区间 Range 路由、拆分与合并由 Runtime 后续实现，Module 不新增存储容器或管理流程。
 
 Runtime 调用边界、职责和测试要求见[Engine / Module / Gateway 开发规范](../development/engine-module-gateway.md)。
+
+控制台构建：`../webui` 的 React 源码经 Vite 生成静态资源，`scripts/build.sh` 同步到 `internal/gateway/httpapi/console/` 后编译进 DUBI。该目录是生成快照，不手工编辑；部署只需要服务端二进制。

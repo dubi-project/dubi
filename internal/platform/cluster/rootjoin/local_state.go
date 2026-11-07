@@ -23,7 +23,7 @@ var (
 	ErrOlderView       = errors.New("Root routing view is older than the persisted cut")
 	ErrConflictingView = errors.New("Root routing view conflicts at the same applied index")
 	ErrRecoveryBehind  = errors.New("local Root recovery is behind its durable activation fence")
-	storeName          = regexp.MustCompile(`^store_[0-9a-f]{32}$`)
+	storeName          = regexp.MustCompile(`^store_([0-9a-f]{12}|[0-9a-f]{32})$`)
 )
 
 // LocalState is the identity-bound recovery model for an enrolled Node. It

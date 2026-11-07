@@ -182,6 +182,8 @@ func (s *State) validateStreamEntry(view *pebble.Snapshot, index uint64, key, va
 		if _, err := decodeGeoMetadata(key, value, s.groupID, index); err != nil {
 			return err
 		}
+	case bytes.HasPrefix(key, usageIndexPrefix):
+		return validateUsageIndex(key, value, func(k []byte) ([]byte, bool, error) { return snapshotReferenceMetadata(view, k) }, s.groupID, index)
 	case bytes.HasPrefix(key, recordReferencePrefix):
 		ref, err := decodeRecordReference(key, value, s.groupID, index)
 		if err != nil {

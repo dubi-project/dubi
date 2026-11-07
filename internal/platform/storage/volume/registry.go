@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dubi-project/dubi/internal/platform/identity"
 )
@@ -32,9 +33,10 @@ var (
 )
 
 type Record struct {
-	ID    string `json:"volume_id"`
-	Path  string `json:"path"`
-	State State  `json:"state"`
+	CreatedUnixNano int64  `json:"created_unix_nano,omitempty"`
+	ID              string `json:"volume_id"`
+	Path            string `json:"path"`
+	State           State  `json:"state"`
 	// Only pending registration uses device/inode checks. Active volume
 	// identity comes from its durable marker, not reboot-sensitive device IDs.
 	Device uint64 `json:"pending_device,omitempty"`
@@ -238,11 +240,11 @@ func (r *Registry) prepare(path string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	id, err := randomID("volume_")
+	id, err := uniqueVolumeID(r.manifest.Volumes, func() (string, error) { return randomID("volume_") })
 	if err != nil {
 		return Record{}, err
 	}
-	record := Record{ID: id, Path: path, State: Registered}
+	record := Record{ID: id, Path: path, State: Registered, CreatedUnixNano: time.Now().UnixNano()}
 	if err := validatePaths(r.root, append(slices.Clone(r.manifest.Volumes), record)); err != nil {
 		return Record{}, err
 	}
@@ -520,4 +522,22 @@ func (r *Registry) Close() error {
 		failures = append(failures, r.lock.Close())
 	}
 	return errors.Join(failures...)
+}
+
+// All historical entries, including Removed volumes, reserve their identities.
+// Caller holds the Registry lock; collision retries cannot race registration.
+func uniqueVolumeID(existing []Record, generate func() (string, error)) (string, error) {
+	for attempt := 0; attempt < 32; attempt++ {
+		id, err := generate()
+		if err != nil {
+			return "", err
+		}
+		if !validID(id, "volume_") {
+			return "", errors.New("invalid generated Volume identity")
+		}
+		if !slices.ContainsFunc(existing, func(r Record) bool { return r.ID == id }) {
+			return id, nil
+		}
+	}
+	return "", errors.New("could not generate a unique Volume identity")
 }

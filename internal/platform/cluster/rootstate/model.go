@@ -21,6 +21,9 @@ const (
 	FenceNode                  = "fence_node"
 	RegisterGroup              = "register_group"
 	RegisterTenant             = "register_tenant"
+	UpdateTenant               = "update_tenant"
+	DeleteAccessCredential     = "delete_access_credential"
+	DeleteTenantCredential     = "delete_tenant_credential"
 	CreateAccessCredential     = "create_access_credential"
 	RevokeAccessCredential     = "revoke_access_credential"
 	CreateTenantCredential     = "create_tenant_credential"
@@ -56,11 +59,12 @@ const (
 )
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
-var nodeIdentity = regexp.MustCompile(`^node_[0-9a-f]{32}$`)
+var nodeIdentity = regexp.MustCompile(`^node_([0-9a-f]{12}|[0-9a-f]{32})$`)
 
 type Node struct {
-	NodeID string `json:"node_id"`
-	RaftID uint64 `json:"raft_id"`
+	CreatedIndex uint64 `json:"created_index,omitempty"`
+	NodeID       string `json:"node_id"`
+	RaftID       uint64 `json:"raft_id"`
 	// Name is an optional operator-facing label. It is never used as Node
 	// identity, a routing key, or an authorization principal.
 	Name     string `json:"name,omitempty"`
@@ -184,18 +188,30 @@ type GroupChangeCompletion struct {
 }
 
 type Tenant struct {
-	TenantID string `json:"tenant_id"`
+	CreatedIndex uint64 `json:"created_index,omitempty"`
+	TenantID     string `json:"tenant_id"`
+	Name         string `json:"name,omitempty"`
+	// Nil preserves legacy module behavior; managed tenants always store an explicit list.
+	Modules      []string `json:"modules"`
+	StorageLimit uint64   `json:"storage_limit_bytes,omitempty"`
+	Revision     uint64   `json:"revision,omitempty"`
+	Accounting   bool     `json:"accounting,omitempty"`
 }
 
 // TenantCredential stores only a digest of a random application Token. The
 // plaintext Token is never a Root command, state value, snapshot or result.
 type TenantCredential struct {
-	CredentialID string `json:"credential_id"`
-	TenantID     string `json:"tenant_id"`
-	TokenSHA256  string `json:"token_sha256"`
-	CreatedUnix  int64  `json:"created_unix"`
-	ExpiresUnix  int64  `json:"expires_unix"`
-	RevokedIndex uint64 `json:"revoked_index,omitempty"`
+	Modules      []string `json:"modules,omitempty"`
+	Permission   string   `json:"permission,omitempty"`
+	CreatedIndex uint64   `json:"created_index,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	RequestID    string   `json:"request_id,omitempty"`
+	CredentialID string   `json:"credential_id"`
+	TenantID     string   `json:"tenant_id"`
+	TokenSHA256  string   `json:"token_sha256"`
+	CreatedUnix  int64    `json:"created_unix"`
+	ExpiresUnix  int64    `json:"expires_unix"`
+	RevokedIndex uint64   `json:"revoked_index,omitempty"`
 }
 
 type TenantCredentialRevocation struct {
@@ -341,6 +357,12 @@ func (value Range) Validate() error {
 // Command is an internal Root Group command, not a public engine API.
 // Exactly one payload matching Type must be present.
 type Command struct {
+	AdminAccountDelete  *AdminAccountDelete         `json:"admin_account_delete,omitempty"`
+	AdminAccountUpdate  *AdminAccountUpdate         `json:"admin_account_update,omitempty"`
+	NotificationUpdate  *NotificationUpdate         `json:"notification_update,omitempty"`
+	NotificationMark    *NotificationMark           `json:"notification_mark,omitempty"`
+	Diagnostic          *DiagnosticRecord           `json:"diagnostic,omitempty"`
+	RepositoryIfMatch   string                      `json:"repository_if_match,omitempty"`
 	Version             int                         `json:"version"`
 	RequestID           string                      `json:"request_id"`
 	Type                string                      `json:"type"`
@@ -348,6 +370,8 @@ type Command struct {
 	NodeRename          *NodeRename                 `json:"node_rename,omitempty"`
 	NodeFence           *NodeFenceRequest           `json:"node_fence,omitempty"`
 	Group               *Group                      `json:"group,omitempty"`
+	UsageReports        []UsageReport               `json:"usage_reports,omitempty"`
+	Quota               *QuotaMutation              `json:"quota,omitempty"`
 	Tenant              *Tenant                     `json:"tenant,omitempty"`
 	AccessCredential    *AccessCredential           `json:"access_credential,omitempty"`
 	AccessRevocation    *TenantCredentialRevocation `json:"access_revocation,omitempty"`
@@ -401,9 +425,12 @@ func (command Command) validate() error {
 	if command.Version != FormatVersion || !validID(command.RequestID) {
 		return errors.New("invalid Root command version or RequestID")
 	}
+	if command.RepositoryIfMatch != "" && (command.Type != UpdateRepository || !validDigest(command.RepositoryIfMatch)) {
+		return errors.New("invalid Repository revision condition")
+	}
 	payloads := 0
-	for _, present := range []bool{command.Node != nil, command.NodeRename != nil, command.NodeFence != nil, command.Group != nil, command.Tenant != nil,
-		command.AccessCredential != nil, command.AccessRevocation != nil, command.TenantCredential != nil, command.TenantRevocation != nil, command.InitialRange != nil,
+	for _, present := range []bool{command.AdminAccountDelete != nil, command.AdminAccountUpdate != nil, command.NotificationUpdate != nil, command.NotificationMark != nil, command.Diagnostic != nil, command.Node != nil, command.NodeRename != nil, command.NodeFence != nil, command.Group != nil, command.Tenant != nil,
+		len(command.UsageReports) != 0, command.Quota != nil, command.AccessCredential != nil, command.AccessRevocation != nil, command.TenantCredential != nil, command.TenantRevocation != nil, command.InitialRange != nil,
 		command.Activation != nil, command.Membership != nil, command.GroupPlan != nil, command.GroupCompletion != nil,
 		command.JoinGrant != nil, command.JoinConsumption != nil, command.JoinRevocation != nil,
 		command.RootJoinStart != nil, command.RootJoinFinish != nil, command.RegionPlan != nil, command.RegionConfirmation != nil, command.RegionGrowth != nil, command.EnrollmentAuthority != nil, command.RangePlacement != nil, command.GroupRetirement != nil, command.GroupRebuild != nil, command.NodeReady != nil, command.Repository != nil, command.RepositoryDelete != nil, command.RepositoryDefault != nil, command.BackupJob != nil, command.BackupJobClaim != nil, command.BackupJobCompletion != nil, command.BackupJobFailure != nil, command.BackupJobReference != nil} {
@@ -415,6 +442,31 @@ func (command Command) validate() error {
 		return errors.New("Root command requires exactly one payload")
 	}
 	switch command.Type {
+	case DeleteAdminAccount:
+		if command.AdminAccountDelete == nil {
+			return errors.New("missing account deletion")
+		}
+		return command.AdminAccountDelete.Validate()
+	case PutAdminAccount:
+		if command.AdminAccountUpdate == nil {
+			return errors.New("missing account update")
+		}
+		return command.AdminAccountUpdate.Validate()
+	case UpdateNotifications:
+		if command.NotificationUpdate == nil {
+			return errors.New("missing notification update")
+		}
+		return command.NotificationUpdate.Validate()
+	case MarkNotifications:
+		if command.NotificationMark == nil {
+			return errors.New("missing notification read mutation")
+		}
+		return command.NotificationMark.Validate()
+	case SaveDiagnostic:
+		if command.Diagnostic == nil || command.Diagnostic.ID != command.RequestID {
+			return errors.New("diagnostic payload required")
+		}
+		return command.Diagnostic.Validate()
 	case FenceNode:
 		if command.NodeFence == nil || !nodeIdentity.MatchString(command.NodeFence.NodeID) || command.NodeFence.RaftID == 0 {
 			return errors.New("invalid Node fence request")
@@ -425,11 +477,32 @@ func (command Command) validate() error {
 			return errors.New("invalid access credential creation")
 		}
 		return command.AccessCredential.Validate()
-	case RevokeAccessCredential:
+	case RevokeAccessCredential, DeleteAccessCredential:
 		if command.AccessRevocation == nil || !validTenantCredentialID(command.AccessRevocation.CredentialID) {
 			return errors.New("invalid access revocation")
 		}
 		return nil
+	case ReportTenantUsage:
+		if len(command.UsageReports) == 0 || len(command.UsageReports) > MaxUsageReports {
+			return errors.New("invalid usage report batch")
+		}
+		seen := map[string]bool{}
+		for _, report := range command.UsageReports {
+			if err := report.Validate(); err != nil {
+				return err
+			}
+			key := string(quotaItemKey(report.Space, report.Key))
+			if seen[key] {
+				return errors.New("duplicate usage report key")
+			}
+			seen[key] = true
+		}
+		return nil
+	case ReserveTenantQuota, CloseTenantQuota, FinishTenantQuota:
+		if command.Quota == nil {
+			return errors.New("quota payload required")
+		}
+		return command.Quota.Ticket.Validate()
 	case CreateTenantCredential:
 		if command.TenantCredential == nil {
 			return errors.New("create_tenant_credential requires credential payload")
@@ -438,7 +511,7 @@ func (command Command) validate() error {
 			return errors.New("new Tenant credential cannot be revoked")
 		}
 		return command.TenantCredential.Validate()
-	case RevokeTenantCredential:
+	case RevokeTenantCredential, DeleteTenantCredential:
 		if command.TenantRevocation == nil || !validTenantCredentialID(command.TenantRevocation.CredentialID) {
 			return errors.New("invalid Tenant credential revocation")
 		}
@@ -505,9 +578,15 @@ func (command Command) validate() error {
 		if !validID(command.Group.StateKind) || command.Group.Epoch != 0 || len(command.Group.Members) != 0 {
 			return errors.New("new Group cannot supply membership state")
 		}
-	case RegisterTenant:
+	case RegisterTenant, UpdateTenant:
 		if command.Tenant == nil || command.Node != nil || command.Group != nil || command.InitialRange != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil || !validID(command.Tenant.TenantID) {
 			return errors.New("invalid Tenant registration")
+		}
+		if err := command.Tenant.Validate(); err != nil {
+			return err
+		}
+		if command.Type == RegisterTenant && command.Tenant.Revision != 0 {
+			return errors.New("new Tenant cannot supply revision")
 		}
 	case PrepareRange:
 		if command.InitialRange == nil || command.Node != nil || command.Group != nil || command.Tenant != nil || command.Activation != nil || command.Membership != nil || command.GroupPlan != nil || command.GroupCompletion != nil {

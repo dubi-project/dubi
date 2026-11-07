@@ -4,7 +4,6 @@ package identity
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 	"golang.org/x/sys/unix"
 )
 
@@ -27,8 +27,8 @@ const (
 
 var (
 	identityMu = new(sync.Mutex)
-	nodeIDRE   = regexp.MustCompile(`^node_[0-9a-f]{32}$`)
-	clusterRE  = regexp.MustCompile(`^cluster_[0-9a-f]{32}$`)
+	nodeIDRE   = regexp.MustCompile(`^node_([0-9a-f]{12}|[0-9a-f]{32})$`)
+	clusterRE  = regexp.MustCompile(`^cluster_([0-9a-f]{12}|[0-9a-f]{32})$`)
 )
 
 // Identity is immutable after creation except for binding a joining node to a Cluster.
@@ -204,7 +204,7 @@ func load(root string) (Identity, error) {
 }
 
 func newIdentity(bootstrap bool) (Identity, error) {
-	nodeID, err := randomID("node_", 16)
+	nodeID, err := resourceid.New("node_")
 	if err != nil {
 		return Identity{}, err
 	}
@@ -216,20 +216,12 @@ func newIdentity(bootstrap bool) (Identity, error) {
 		CreatedAt: time.Now().UTC(), Origin: OriginJoin}
 	if bootstrap {
 		value.Origin = OriginBootstrap
-		value.ClusterID, err = randomID("cluster_", 16)
+		value.ClusterID, err = resourceid.New("cluster_")
 		if err != nil {
 			return Identity{}, err
 		}
 	}
 	return value, nil
-}
-
-func randomID(prefix string, size int) (string, error) {
-	random := make([]byte, size)
-	if _, err := io.ReadFull(rand.Reader, random); err != nil {
-		return "", fmt.Errorf("generate identity: %w", err)
-	}
-	return prefix + hex.EncodeToString(random), nil
 }
 
 func randomRaftID() (uint64, error) {

@@ -107,6 +107,33 @@ func NewWithGeoRetry(runtime *node.Runtime, client *raftrpc.GroupClient, geoRetr
 // RequestID and opaque mutation to each candidate; only the Owner executes
 // the physical-majority protocol. This method does not expose an external API.
 func (service *Service) Write(ctx context.Context, request WriteRequest) (WriteResult, error) {
+	if err := service.requireUnmetered(request.Keyspace); err != nil {
+		return WriteResult{State: WriteUnknown}, err
+	}
+	return service.writeEntry(ctx, request)
+}
+
+// Raw/internal physical writes cannot bypass logical accounting for an enabled
+// Tenant. Forwarded physical execution is a continuation of Mutate, not a new
+// admission, so ExecuteWrite deliberately does not repeat this entry check.
+func (service *Service) requireUnmetered(space rootstate.Keyspace) error {
+	if service == nil || service.runtime == nil || service.runtime.Root == nil || space.Validate() != nil {
+		return errors.New("invalid Engine data entry")
+	}
+	t, found, err := service.runtime.Root.Tenant(space.TenantID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("Tenant is not registered in the local directory")
+	}
+	if t.Accounting {
+		return errors.New("metered Tenant writes require Runtime logical mutation")
+	}
+	return nil
+}
+
+func (service *Service) writeEntry(ctx context.Context, request WriteRequest) (WriteResult, error) {
 	if ctx == nil {
 		return WriteResult{State: WriteUnknown}, errors.New("write context is required")
 	}
@@ -136,6 +163,9 @@ func (service *Service) Write(ctx context.Context, request WriteRequest) (WriteR
 
 // WriteLocal is retained for Owner-local callers that must not relay.
 func (service *Service) WriteLocal(ctx context.Context, request WriteRequest) (WriteResult, error) {
+	if err := service.requireUnmetered(request.Keyspace); err != nil {
+		return WriteResult{State: WriteUnknown}, err
+	}
 	return service.write(ctx, request, false)
 }
 

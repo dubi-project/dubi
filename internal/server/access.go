@@ -33,7 +33,7 @@ func (s *dataService) MutateAccessCredential(ctx context.Context, r *datawire.Ac
 		var v rootstate.AccessCredential
 		d := json.NewDecoder(bytes.NewReader(r.CredentialJson))
 		d.DisallowUnknownFields()
-		if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF || v.Validate() != nil || v.ParentID != "" || v.RevokedIndex != 0 || v.CreatedUnix > time.Now().Add(time.Minute).Unix() || v.ExpiresUnix <= time.Now().Unix() {
+		if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF || v.Validate() != nil || v.ParentID != "" || v.RevokedIndex != 0 || v.CreatedUnix > time.Now().Add(time.Minute).Unix() || (v.ExpiresUnix != 0 && v.ExpiresUnix <= time.Now().Unix()) {
 			return nil, status.Error(codes.InvalidArgument, "invalid access credential")
 		}
 		c.Type = rootstate.CreateAccessCredential

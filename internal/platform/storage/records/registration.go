@@ -8,10 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/vfs"
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 	"github.com/dubi-project/dubi/internal/platform/storage/pebbleutil"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
 	"golang.org/x/sys/unix"
@@ -40,7 +40,7 @@ func validToken(s string) bool {
 	return e == nil && len(v) == 16 && hex.EncodeToString(v) == s
 }
 func (r registration) validate() error {
-	if r.Version != 1 || !strings.HasPrefix(r.StoreID, "store_") || !validToken(strings.TrimPrefix(r.StoreID, "store_")) || !validToken(r.ResourceID) || (r.State != "pending" && r.State != "active") || r.State == "active" && (r.Device != 0 || r.Inode != 0) {
+	if r.Version != 1 || !resourceid.Valid(r.StoreID, "store_") || !validToken(r.ResourceID) || (r.State != "pending" && r.State != "active") || r.State == "active" && (r.Device != 0 || r.Inode != 0) {
 		return errors.New("invalid immutable record resource registration")
 	}
 	return nil

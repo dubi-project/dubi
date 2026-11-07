@@ -116,6 +116,8 @@ func (issuer *Issuer) Issue(ctx context.Context, request identityenrollment.Requ
 	} else if fenced {
 		return identityenrollment.Bundle{}, errors.New("Node identity is fenced")
 	}
+	// Root assigns creation order; retry still requires the exact CSR command.
+	descriptor.CreatedIndex = current.CreatedIndex
 	if found && current != descriptor {
 		return identityenrollment.Bundle{}, errors.New("RaftID is already registered to different Node metadata")
 	}

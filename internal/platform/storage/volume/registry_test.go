@@ -57,6 +57,9 @@ func TestDefaultVolumePersistsAndAddKeepsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if first.Volumes[0].CreatedUnixNano <= 0 || second.CreatedUnixNano < first.Volumes[0].CreatedUnixNano {
+		t.Fatal("volume creation time is missing or out of order")
+	}
 	if second.ID == first.Volumes[0].ID {
 		t.Fatal("volume IDs were reused")
 	}

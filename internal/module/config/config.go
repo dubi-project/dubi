@@ -8,6 +8,7 @@ import (
 
 	"github.com/dubi-project/dubi/internal/engine/state"
 	"github.com/dubi-project/dubi/internal/platform/auth"
+	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 )
 
 const ModuleID = "config"
@@ -23,6 +24,9 @@ func (s *Service) client(principal auth.Principal, key string) (*state.Client, e
 	if s == nil || s.state == nil || key == "" || len(key) > state.MaxKeyBytes || !utf8.ValidString(key) {
 		return nil, state.ErrInvalid
 	}
+	if err := principal.Authorize(rootstate.Keyspace{TenantID: principal.TenantID(), ModuleID: ModuleID, EngineID: state.EngineID}); err != nil {
+		return nil, err
+	}
 	return s.state.ForTenant(principal.TenantID())
 }
 func (s *Service) Get(ctx context.Context, principal auth.Principal, key string) (state.Entry, error) {
@@ -33,6 +37,9 @@ func (s *Service) Get(ctx context.Context, principal auth.Principal, key string)
 	return c.Get(ctx, []byte(key))
 }
 func (s *Service) Put(ctx context.Context, principal auth.Principal, key string, value []byte, requestID string, condition state.Condition) (state.Result, error) {
+	if err := principal.AuthorizeWrite(); err != nil {
+		return state.Result{}, err
+	}
 	c, err := s.client(principal, key)
 	if err != nil {
 		return state.Result{}, err
@@ -40,9 +47,21 @@ func (s *Service) Put(ctx context.Context, principal auth.Principal, key string,
 	return c.Put(ctx, []byte(key), value, requestID, condition)
 }
 func (s *Service) Delete(ctx context.Context, principal auth.Principal, key, requestID string, condition state.Condition) (state.Result, error) {
+	if err := principal.AuthorizeWrite(); err != nil {
+		return state.Result{}, err
+	}
 	c, err := s.client(principal, key)
 	if err != nil {
 		return state.Result{}, err
 	}
 	return c.Delete(ctx, []byte(key), requestID, condition)
+}
+
+func (s *Service) List(ctx context.Context, principal auth.Principal, request state.ListRequest) (state.ListPage, error) {
+	// Reuse the same bound module authorization; the placeholder is never stored.
+	c, err := s.client(principal, "list")
+	if err != nil {
+		return state.ListPage{}, err
+	}
+	return c.List(ctx, request)
 }

@@ -7,13 +7,19 @@ import (
 	"errors"
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/enginedata"
+	"github.com/dubi-project/dubi/internal/platform/cluster/enginestate"
 	"github.com/dubi-project/dubi/internal/platform/router"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 )
 
 // Engine fixes the Module and Engine identities at server assembly.
-type Engine struct{ binding enginedata.Binding }
-type Client struct{ backend *enginedata.Bound }
+type Engine struct {
+	binding enginedata.Binding
+}
+
+type Client struct {
+	backend *enginedata.Bound
+}
 
 func New(runtime *enginedata.Service, module string) (*Engine, error) {
 	b, err := runtime.Bind(module, EngineID)
@@ -101,6 +107,9 @@ func operationResult(o operation, r *receipt, replayed bool) (Result, error) {
 	if r.Version != o.version() {
 		return Result{}, ErrRequestReused
 	}
+	if r.Code == "cancelled" {
+		return Result{}, ErrCancelled
+	}
 	if r.Code == "conflict" {
 		return Result{}, ErrConflict
 	}
@@ -118,28 +127,50 @@ func (c *Client) mutate(ctx context.Context, o operation) (Result, error) {
 		return Result{}, err
 	}
 	q := query{Format: 1, RequestID: o.RequestID, Version: o.version()}
-	prior, err := c.lookup(ctx, o.Key, q)
+	result, err := c.backend.Mutate(ctx, enginedata.Mutation{
+		Value: o.logicalValue(),
+		Write: enginedata.BoundWrite{RequestID: o.RequestID, Key: dataKey(o.Key), Body: o.body(),
+			Publish: func(d records.Descriptor) ([]byte, error) {
+				return json.Marshal(publication{Operation: o, Descriptor: d})
+			}},
+		Inspect: func(ctx context.Context) (enginedata.MutationView, error) {
+			got, err := c.lookup(ctx, o.Key, q)
+			if err != nil {
+				return enginedata.MutationView{}, err
+			}
+			view := enginedata.MutationView{Current: got.Usage, Exists: got.Head != nil && !got.Head.Deleted}
+			if got.Receipt != nil {
+				view.Receipt, _ = json.Marshal(got.Receipt)
+				view.Published = got.Receipt.Usage
+				view.Confirmed = got.Receipt.Confirmed
+				view.Rejected = got.Receipt.Code != ""
+			}
+			return view, nil
+		},
+	})
 	if err != nil {
+		if errors.Is(err, ErrRequestReused) {
+			return Result{}, ErrRequestReused
+		}
+		if errors.Is(err, enginedata.ErrMutationUnknown) {
+			return Result{}, errors.Join(ErrUnknown, err)
+		}
 		return Result{}, err
 	}
-	if prior.Receipt != nil && (prior.Receipt.Confirmed || prior.Receipt.Code != "") {
-		return operationResult(o, prior.Receipt, true)
+	if len(result.Receipt) != 0 {
+		var r receipt
+		if err := decode(result.Receipt, &r); err != nil {
+			return Result{}, errors.Join(ErrUnknown, err)
+		}
+		return operationResult(o, &r, result.Replayed)
 	}
-	written, writeErr := c.backend.Write(ctx, enginedata.BoundWrite{RequestID: o.RequestID, Key: dataKey(o.Key), Body: o.body(),
-		Publish: func(d records.Descriptor) ([]byte, error) {
-			return json.Marshal(publication{Operation: o, Descriptor: d})
-		}})
-	if writeErr == nil && (written.State == enginedata.WriteLocalReady || written.State == enginedata.WriteGeoReady) {
-		return Result{RequestID: o.RequestID, Version: o.version(), Deleted: o.Delete}, nil
+	return Result{RequestID: o.RequestID, Version: o.version(), Deleted: o.Delete}, nil
+}
+
+func (o operation) logicalValue() enginestate.LogicalValue {
+	size := uint64(0)
+	if !o.Delete {
+		size = uint64(len(o.Key) + len(o.Value))
 	}
-	// A rejection is a durable Engine outcome. A transport failure is not one;
-	// consult the Owner, keeping the caller's original cancellation/deadline.
-	after, err := c.lookup(ctx, o.Key, q)
-	if err == nil && after.Receipt != nil && (after.Receipt.Confirmed || after.Receipt.Code != "") {
-		return operationResult(o, after.Receipt, true)
-	}
-	if errors.Is(err, ErrRequestReused) {
-		return Result{}, err
-	}
-	return Result{}, errors.Join(ErrUnknown, writeErr, err)
+	return enginestate.LogicalValue{Key: o.Key, Bytes: size}
 }

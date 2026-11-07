@@ -22,6 +22,7 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/rpc/raftrpc"
 	"github.com/dubi-project/dubi/internal/platform/storage/records"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
+	"github.com/dubi-project/dubi/internal/platform/telemetry"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -30,6 +31,7 @@ import (
 // dataService is a Node-authenticated development entry point. Tenant client
 // authorization belongs to a later public API and is deliberately not implied.
 type dataService struct {
+	monitor *telemetry.Recorder
 	datawire.UnimplementedDataServiceServer
 	runtime       *node.Runtime
 	client        *raftrpc.GroupClient
@@ -635,7 +637,7 @@ func (s *dataService) LocalRepairStatus(ctx context.Context, request *datawire.L
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	return s.localRepairStatusResponse()
+	return s.localStatusResponse(request.GetIncludeVolumeDetails())
 }
 
 // ClusterRepairStatus is the peer-facing diagnostic path. A current Root
@@ -666,10 +668,14 @@ func (s *dataService) ClusterRepairStatus(ctx context.Context, request *datawire
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	return s.localRepairStatusResponse()
+	return s.localStatusResponse(request.GetIncludeVolumeDetails())
 }
 
 func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusResponse, error) {
+	return s.localStatusResponse(false)
+}
+
+func (s *dataService) localStatusResponse(details bool) (*datawire.LocalRepairStatusResponse, error) {
 	local := s.runtime.Identity
 	var response *datawire.LocalRepairStatusResponse
 	if s.repair == nil {
@@ -678,6 +684,17 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 		response = encodeRepairStatus(s.repair.snapshot())
 	}
 	if s.runtime.Records != nil {
+		if details {
+			task, err := s.runtime.Records.NodeBalanceTask()
+			if err != nil {
+				return nil, status.Errorf(codes.Unavailable, "read balance status: %v", err)
+			}
+			response.RebalanceSupported = true
+			response.RebalancePhase = "no_active_handoff"
+			if task != nil {
+				response.RebalancePhase = task.Phase
+			}
+		}
 		migration, err := s.runtime.Records.VolumeMigration()
 		if err != nil {
 			return nil, status.Errorf(codes.Unavailable, "read Volume migration status: %v", err)
@@ -701,6 +718,11 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 			return nil, status.Errorf(codes.Unavailable, "read Volume health: %v", err)
 		}
 		response.CapacitySupported = true
+		response.ObservedUnix = time.Now().Unix()
+		response.VolumeDetailsSupported = details
+		response.TotalVolumes = uint32(len(report.Volumes))
+		response.FilesystemTotalBytes = report.Capacity.TotalBytes
+		response.FilesystemAvailableBytes = report.Capacity.AvailableBytes
 		var blocked map[string]string
 		if s.runtime.Packs != nil {
 			blocked = s.runtime.Packs.WriteErrors()
@@ -709,11 +731,18 @@ func (s *dataService) localRepairStatusResponse() (*datawire.LocalRepairStatusRe
 		capacity := volume.WritableDiskCapacity(report, blocked)
 		response.CapacityTotalBytes, response.CapacityAvailableBytes = capacity.TotalBytes, capacity.AvailableBytes
 		for _, item := range report.Volumes {
-			if len(response.Volumes) >= 64 {
+			if !details && len(response.Volumes) >= 64 {
 				break
 			}
-			response.Volumes = append(response.Volumes, &datawire.VolumeHealthStatus{VolumeId: item.ID,
-				State: string(item.State), Health: item.Health, Error: item.Error})
+			v := &datawire.VolumeHealthStatus{CreatedUnixNano: item.CreatedUnixNano, VolumeId: item.ID, State: string(item.State), Health: item.Health, Error: item.Error}
+			if details {
+				v.Path = item.Path
+				v.CapacityKnown = item.Health == "healthy" && item.Capacity.TotalBytes > 0
+				v.FilesystemTotalBytes, v.FilesystemAvailableBytes = item.Capacity.TotalBytes, item.Capacity.AvailableBytes
+				v.WriteError = blocked[item.ID]
+				v.WriteIsolated = v.WriteError != ""
+			}
+			response.Volumes = append(response.Volumes, v)
 		}
 	}
 	if s.io != nil {
@@ -848,7 +877,7 @@ func (s *dataService) CreateTenant(ctx context.Context, request *datawire.Create
 		return nil, err
 	}
 	defer release()
-	if err := s.rootCommand(ctx, rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.RequestId, Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: request.TenantId}}); err != nil {
+	if err := s.rootCommand(ctx, rootstate.Command{Version: rootstate.FormatVersion, RequestID: request.RequestId, Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: request.TenantId, Name: request.TenantId, Modules: []string{"config"}, Accounting: true}}); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "create Tenant: %v", err)
 	}
 	return &datawire.CreateTenantResponse{RootIndex: s.runtime.Root.AppliedIndex()}, nil
@@ -859,7 +888,7 @@ func (s *dataService) CreateTenant(ctx context.Context, request *datawire.Create
 // uncertain/lost response cannot be reconstructed from the hash in Root.
 func (s *dataService) CreateTenantToken(ctx context.Context, request *datawire.CreateTenantTokenRequest) (*datawire.CreateTenantTokenResponse, error) {
 	if request == nil || proto.Size(request) > 32<<10 || rootstate.ValidateRequestID(request.RequestId) != nil ||
-		rootstate.ValidateTenantID(request.TenantId) != nil || request.TtlSeconds == 0 ||
+		rootstate.ValidateTenantID(request.TenantId) != nil ||
 		request.TtlSeconds > maxTenantTokenTTLSeconds {
 		return nil, status.Error(codes.InvalidArgument, "invalid Tenant Token request")
 	}

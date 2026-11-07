@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 	"golang.org/x/sys/unix"
 )
 
@@ -25,6 +26,9 @@ const (
 )
 
 func randomID(prefix string) (string, error) {
+	if resourceid.PrefixSupported(prefix) {
+		return resourceid.New(prefix)
+	}
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
 		return "", err
@@ -33,6 +37,9 @@ func randomID(prefix string) (string, error) {
 }
 
 func validID(value, prefix string) bool {
+	if resourceid.PrefixSupported(prefix) {
+		return resourceid.Valid(value, prefix)
+	}
 	if len(value) != len(prefix)+32 || !strings.HasPrefix(value, prefix) {
 		return false
 	}

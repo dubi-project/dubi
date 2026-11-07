@@ -146,7 +146,7 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 		}
 	case strings.HasPrefix(name, "data/node/"):
 		var node Node
-		if decodeStreamJSON(value, &node) != nil || !bytes.Equal(key, nodeKey(node.RaftID)) ||
+		if decodeStreamJSON(value, &node) != nil || node.CreatedIndex > index || !bytes.Equal(key, nodeKey(node.RaftID)) ||
 			(Command{Version: FormatVersion, RequestID: "snapshot", Type: RegisterNode, Node: &node}).validate() != nil {
 			return bad()
 		}
@@ -234,26 +234,133 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 			change.GroupID != groupID || change.State != GroupChangePending {
 			return bad()
 		}
+	case strings.HasPrefix(name, "data/admin-username/"):
+		var a AdminAccount
+		if streamJSON(view, adminAccountKey(string(value)), &a) != nil || a.Username != strings.TrimPrefix(name, "data/admin-username/") {
+			return bad()
+		}
+	case strings.HasPrefix(name, "data/admin-account/"):
+		var a AdminAccount
+		if decodeStreamJSON(value, &a) != nil || a.Validate() != nil || a.CreatedIndex == 0 || a.CreatedIndex > a.Revision || a.AuthVersion == 0 || a.AuthVersion > a.Revision || a.Revision > index || !bytes.Equal(key, adminAccountKey(a.ID)) {
+			return bad()
+		}
+		usernameID, e := streamValue(view, []byte("data/admin-username/"+a.Username))
+		if e != nil || string(usernameID) != a.ID {
+			return bad()
+		}
+		if a.TenantID != "" {
+			var tenant Tenant
+			if streamJSON(view, tenantKey(a.TenantID), &tenant) != nil || tenant.TenantID != a.TenantID {
+				return bad()
+			}
+		}
+	case name == "data/notifications":
+		var f NotificationFeed
+		if decodeStreamJSON(value, &f) != nil || f.Validate(index) != nil {
+			return bad()
+		}
+	case strings.HasPrefix(name, "data/notification-read/"):
+		var r NotificationReads
+		if decodeStreamJSON(value, &r) != nil || !(r.CredentialID == "" && bytes.Equal(key, notificationReadKey("cluster")) || validTenantCredentialID(r.CredentialID) && bytes.Equal(key, notificationReadKey(r.CredentialID))) || len(r.IDs) > MaxNotifications {
+			return bad()
+		}
+		seen := map[string]bool{}
+		for _, id := range r.IDs {
+			if !validID(id) || seen[id] {
+				return bad()
+			}
+			seen[id] = true
+		}
+	case strings.HasPrefix(name, "data/diagnostic/"):
+		var d DiagnosticRecord
+		if decodeStreamJSON(value, &d) != nil || d.Validate() != nil || d.CreatedIndex == 0 || d.CreatedIndex > index || !bytes.Equal(key, diagnosticKey(d.ID)) {
+			return bad()
+		}
 	case strings.HasPrefix(name, "data/tenant/"):
 		var tenant Tenant
-		if decodeStreamJSON(value, &tenant) != nil || !validID(tenant.TenantID) || !bytes.Equal(key, tenantKey(tenant.TenantID)) {
+		if decodeStreamJSON(value, &tenant) != nil || tenant.Validate() != nil || tenant.Revision > index || tenant.CreatedIndex > index || !bytes.Equal(key, tenantKey(tenant.TenantID)) {
 			return bad()
+		}
+	case strings.HasPrefix(name, "data/tenant-usage/"):
+		var u TenantUsage
+		var t Tenant
+		id := strings.TrimPrefix(name, "data/tenant-usage/")
+		if decodeStreamJSON(value, &u) != nil || u.Used > 1<<50 || u.Reserved > 1<<50 || u.Used+u.Reserved > 1<<50 || streamJSON(view, tenantKey(id), &t) != nil || !t.Accounting {
+			return bad()
+		}
+	case strings.HasPrefix(name, "data/tenant-quota-ticket/"), strings.HasPrefix(name, "data/tenant-quota-pending/"):
+		var q QuotaTicket
+		var t Tenant
+		if decodeStreamJSON(value, &q) != nil || q.Validate() != nil || streamJSON(view, tenantKey(q.TenantID), &t) != nil || !t.Accounting {
+			return bad()
+		}
+		pending := strings.HasPrefix(name, "data/tenant-quota-pending/")
+		if pending {
+			var stored QuotaTicket
+			if q.Done || !bytes.Equal(key, quotaPendingKey(q.ID)) || streamJSON(view, quotaTicketKey(q.ID), &stored) != nil {
+				return bad()
+			}
+			a, _ := json.Marshal(q)
+			b, _ := json.Marshal(stored)
+			if !bytes.Equal(a, b) {
+				return bad()
+			}
+		} else if !bytes.Equal(key, quotaTicketKey(q.ID)) {
+			return bad()
+		}
+		if !q.Done {
+			var k QuotaKey
+			var u TenantUsage
+			if streamJSON(view, quotaItemKey(q.Space(), q.Key), &k) != nil || k.Pending != q.ID || k.Bytes != q.OldBytes || streamJSON(view, quotaUsageKey(q.TenantID), &u) != nil {
+				return bad()
+			}
+			if q.Bytes > q.OldBytes && u.Reserved < q.Bytes-q.OldBytes {
+				return bad()
+			}
+		}
+	case strings.HasPrefix(name, "data/tenant-quota-key/"):
+		var k QuotaKey
+		if decodeStreamJSON(value, &k) != nil || k.Bytes > 1<<30 || (k.Current == "" && k.Bytes != 0 && k.Report == nil) {
+			return bad()
+		}
+		if k.Report != nil {
+			if k.Report.Validate() != nil || k.Report.Bytes != k.Bytes || k.Current != "" || k.Pending != "" || !bytes.Equal(key, quotaItemKey(k.Report.Space, k.Report.Key)) {
+				return bad()
+			}
+		}
+		if k.Current != "" {
+			var t QuotaTicket
+			if streamJSON(view, quotaTicketKey(k.Current), &t) != nil || !t.Done || !t.Applied || t.Bytes != k.Bytes || !bytes.Equal(key, quotaItemKey(t.Space(), t.Key)) {
+				return bad()
+			}
+		}
+		if k.Pending != "" {
+			var t QuotaTicket
+			if streamJSON(view, quotaTicketKey(k.Pending), &t) != nil || t.Done || t.OldBytes != k.Bytes || !bytes.Equal(key, quotaItemKey(t.Space(), t.Key)) {
+				return bad()
+			}
 		}
 	case strings.HasPrefix(name, "data/access-credential/"):
 		var credential AccessCredential
-		if decodeStreamJSON(value, &credential) != nil || credential.Validate() != nil || credential.RevokedIndex > index || !bytes.Equal(key, accessCredentialKey(credential.CredentialID)) {
+		if decodeStreamJSON(value, &credential) != nil || credential.Validate() != nil || credential.RevokedIndex > index || credential.CreatedIndex > index || !bytes.Equal(key, accessCredentialKey(credential.CredentialID)) {
 			return bad()
+		}
+		if credential.AccountID != "" {
+			var a AdminAccount
+			if streamJSON(view, adminAccountKey(credential.AccountID), &a) != nil || a.Validate() != nil || a.AuthVersion != credential.AccountVersion || a.Disabled {
+				return bad()
+			}
 		}
 		if credential.ParentID != "" {
 			var parent AccessCredential
-			if streamJSON(view, accessCredentialKey(credential.ParentID), &parent) != nil || parent.Role != "admin" || parent.ParentID != "" || credential.ExpiresUnix > parent.ExpiresUnix {
+			if streamJSON(view, accessCredentialKey(credential.ParentID), &parent) != nil || parent.Role != "admin" || parent.ParentID != "" || (parent.ExpiresUnix != 0 && credential.ExpiresUnix > parent.ExpiresUnix) {
 				return bad()
 			}
 		}
 	case strings.HasPrefix(name, "data/tenant-credential/"):
 		var credential TenantCredential
 		if decodeStreamJSON(value, &credential) != nil || credential.Validate() != nil ||
-			credential.RevokedIndex > index ||
+			credential.RevokedIndex > index || credential.CreatedIndex > index ||
 			!bytes.Equal(key, tenantCredentialKey(credential.CredentialID)) {
 			return bad()
 		}
@@ -263,7 +370,7 @@ func validateStreamEntry(view rootSnapshotReader, index uint64, key, value []byt
 		}
 	case strings.HasPrefix(name, "data/repository/"):
 		var config repository.Repository
-		if decodeStreamJSON(value, &config) != nil || config.Validate() != nil || !bytes.Equal(key, repositoryKey(config.Name)) {
+		if decodeStreamJSON(value, &config) != nil || config.Validate() != nil || config.CreatedIndex > index || !bytes.Equal(key, repositoryKey(config.Name)) {
 			return bad()
 		}
 	case strings.HasPrefix(name, "data/backup-job/"):

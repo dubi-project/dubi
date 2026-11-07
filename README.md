@@ -29,3 +29,7 @@ Byfile 提供经验证的底座代码与实现经验；DUBI 不依赖 Byfile 的
 `--store` 保存身份、证书、共识状态、索引和卷登记，不是独立的集群存储资源。一个 Node 管理多个 Volume，内部 StoreID 只用于实例身份校验。未指定卷时，初始化会登记 `<store>/volume`；使用 `dubi init --volume <空目录> --volume <空目录>` 可直接选择多个外部卷，不创建默认卷目录。后续加卷保留原默认卷；重启按登记恢复，不自动重建丢失卷。`dubi volume list` 查询持久登记与健康；`dubi volume add <空目录>` 追加卷，可通过本机认证管理入口在线执行。StoreID/VolumeID 自动生成，重启保留；通用 Pack 已实现追加、校验读取、封存、崩溃恢复，以及按 Volume 统一的持久集合清单与自动滚动（不同 Engine 可混写同一 Pack）（见 [Pack 实现边界](docs/architecture/pack.md)）；Node Runtime 已装配带字节预约的多卷 Pack Pool，默认自动选卷、不新增配置。通用 enginestate 已接通大值 Pack 落盘、本地引用/result/applied 原子发布，以及跨节点重建位置的 Raft 逻辑快照（见 [提交边界](docs/architecture/pack-state.md)）。内置 `record` 已提供最小写入器；显式 Node 移除、全新身份普通加入及旧 Pack 数据自动补齐已有同机实验闭环；Volume 长期容量均衡、跨机器/跨区域故障验收仍未完成。
 
 当前 `dubi init` 自动创建新集群稳定身份、托管 PKI 和首节点 Root；运行中的首节点可用 `dubi join token` 生成一次性凭证，新节点用 `dubi join --ticket-file <私密文件>` 自动登记身份/卷、完成 mTLS 签发、Root 接纳并运行。加入回执和本地阶段持久化，支持中断恢复及无凭证重启；托管后台按已接纳节点自动调整 Root 投票拓扑。`dubi status` 使用本节点证书读取实时 Root 视图，可查看节点、Region、地址、投票成员和 leader，并单独显示本机卷健康与后台修复最近观察到的错误；这些观察不证明全群数据多数。三节点同区域形成数据 Group 后，可用 `dubi tenant create` 和 `dubi record put|get` 验证不可变 Pack 写入、物理多数、跨节点读取、单节点离线后的继续读写、RequestID 幂等和重启恢复。这是使用 Node 证书的开发验证入口，不是面向租户的公开数据 API；跨 Region 数据多数及生产故障验收也尚未完成。凭证保护与启动边界见 [`docs/operations/server.md`](docs/operations/server.md)。
+
+### 构建内嵌 React 管理界面
+
+前端源码在独立仓库 `dubi-project/webui`，与本仓库并列检出。在本仓库执行 `./scripts/build.sh`，会构建 React + TypeScript 前端并嵌入最终的 `dubi` 二进制；可以传入前端仓库路径。开发构建需要 Node/npm，部署运行不需要。普通 `go build ./cmd/dubi` 使用本仓库已有的前端静态快照。详细约定见 [HTTP Gateway](docs/architecture/http-gateway.md#12-react-构建与嵌入)。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse,concurrent.futures,json,ssl,subprocess,urllib.request,urllib.error
+import argparse,concurrent.futures,json,re,ssl,subprocess,time,urllib.request,urllib.error,urllib.parse
 from pathlib import Path
 parser=argparse.ArgumentParser(description="Verify three existing disposable VPS Gateway nodes; creates and revokes one temporary admin token.")
 parser.add_argument("--directory",type=Path,required=True,help="private demo directory with binary and credential files")
@@ -26,21 +26,72 @@ def call(node,path,token=None,method='GET',body=None,cookie=None,origin=None,csr
  b=r.read();return r.status,dict(r.headers),b
 
 def check(label,expected,*args,**kwargs):
+ started=time.monotonic()
  status,headers,body=call(*args,**kwargs)
  if status!=expected:raise AssertionError(f'{label}: expected {expected}, got {status}: {body[:300]!r}')
- results.append({'check':label,'status':status});return headers,body
+ results.append({'check':label,'status':status,'elapsed_ms':round((time.monotonic()-started)*1000,2)});return headers,body
 for i in range(3):
  check('node%d health'%i,200,i,'/healthz')
  check('node%d ready'%i,200,i,'/readyz')
- check('node%d UI'%i,200,i,'/')
+ _,html=check('node%d UI'%i,200,i,'/')
+ assets=re.findall(r'(?:src|href)="(/assets/[^"]+)"',html.decode())
+ assert any(path.endswith('.js') for path in assets) and any(path.endswith('.css') for path in assets)
+ for path in assets:
+  headers,content=check('node%d bundled asset %s'%(i,path),200,i,path)
+  assert content and 'immutable' in headers['Cache-Control']
+ check('node%d client page fallback'%i,200,i,'/ui/nodes')
+ check('node%d missing asset stays 404'%i,404,i,'/assets/missing.js')
  check('node%d admin'%i,200,i,'/api/v1/admin/gateway',token=admin['token'])
  check('node%d anonymous metrics'%i,401,i,'/metrics')
  check('node%d monitor'%i,200,i,'/metrics',token=monitor['token'])
  check('node%d monitor cannot administer'%i,403,i,'/api/v1/admin/gateway',token=monitor['token'])
- check('node%d tenant cannot administer'%i,401,i,'/api/v1/admin/gateway',token=tenant['token'])
+ check('node%d tenant cannot administer'%i,403,i,'/api/v1/admin/gateway',token=tenant['token'])
  check('node%d admin cannot read tenant'%i,401,i,'/api/v1/config/entry?key=demo',token=admin['token'])
  _,b=check('node%d tenant reads Config'%i,200,i,'/api/v1/config/entry?key=demo',token=tenant['token'])
  assert json.loads(b)['value']=='SGVsbG8gRFVCSQ=='
+# Query each public entry, including the Volume inventories of the other nodes.
+for i in range(3):
+ def read(path,expected=200,token=admin['token']):
+  headers,body=check('node%d management %s'%(i,path),expected,i,'/api/v1/admin/'+path,token=token)
+  value=json.loads(body)
+  if expected==200:
+   assert value['meta']['request_id']==next(v for k,v in headers.items() if k.lower()=='x-request-id')
+   assert value['meta']['complete'],value['meta']
+   return value['data']
+  return value
+ nodes=read('nodes')['items'];assert len(nodes)==3
+ regions=read('regions')['items'];assert sum(r['node_count'] for r in regions)==3
+ cluster=read('cluster');assert cluster['node_count']==3 and cluster['capacity_observed_nodes']==3
+ inventory=read('volumes')['items'];assert inventory and all(v['node_id'] and v['region_id'] and v['path'] for v in inventory)
+ vp=read('volumes?limit=1');volume_pairs=[(v['node_id'],v['volume_id']) for v in vp['items']]
+ while vp['next_cursor']:
+  vp=read('volumes?limit=1&cursor='+urllib.parse.quote(vp['next_cursor'],safe=''))
+  volume_pairs.extend((v['node_id'],v['volume_id']) for v in vp['items'])
+ assert volume_pairs==sorted((v['node_id'],v['volume_id']) for v in inventory)
+ read('volumes',403,monitor['token'])
+ read('volumes',403,tenant['token'])
+ read('maintenance')
+ assert read('gateway')['console']=='react-shell'
+ for region in regions:
+  members=read('regions/'+urllib.parse.quote(region['region_id'],safe='')+'/nodes')['items']
+  assert len(members)==region['node_count']
+ for node in nodes:
+  prefix='nodes/'+node['node_id']
+  assert read(prefix)['node_id']==node['node_id']
+  read(prefix+'/maintenance')
+  volumes=read(prefix+'/volumes')['items'];assert volumes and all(v['path'] for v in volumes)
+  for volume in volumes:
+   detail=read(prefix+'/volumes/'+volume['volume_id'])
+   assert detail['path']==volume['path'] and detail['capacity'] is not None
+ page=read('nodes?limit=1');seen=[page['items'][0]['node_id']]
+ while page['next_cursor']:
+  page=read('nodes?limit=1&cursor='+urllib.parse.quote(page['next_cursor'],safe=''))
+  seen.extend(n['node_id'] for n in page['items'])
+ assert seen==sorted(n['node_id'] for n in nodes)
+ read('nodes?limit=201',400)
+ read('regions/not-a-region/nodes',404)
+ read('nodes',403,monitor['token'])
+ read('regions',403,tenant['token'])
 check('cross-origin login refused',403,0,'/api/v1/auth/login',method='POST',body={'token':admin['token']},origin='https://wrong.example')
 h,b=check('admin login',200,0,'/api/v1/auth/login',method='POST',body={'token':admin['token']},origin=urls[0])
 cookie=h['Set-Cookie'].split(';',1)[0];csrf=json.loads(b)['csrf_token']

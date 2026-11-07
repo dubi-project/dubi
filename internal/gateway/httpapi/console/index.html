@@ -1,1 +1,15 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DUBI Gateway</title><link rel="stylesheet" href="/assets/gateway.css"><main><h1>DUBI</h1><p>Gateway 接线验证页 · 正式控制台待接入</p><form id="login"><label>管理员 Token<input id="token" type="password" required autocomplete="off" placeholder="dubi-access.…"></label><button>登录</button></form><section id="session" hidden><p id="identity"></p><button id="refresh">刷新入口状态</button> <button id="logout">退出登录</button><pre id="state"></pre></section><p id="message" role="status"></p><footer>管理登录不会授予 Tenant 数据访问权限。业务 API 使用独立的 Tenant Token。</footer></main><script src="/assets/gateway.js" defer></script></html>
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>DUBI</title>
+    <script type="module" crossorigin src="/assets/index-ce_KMuuR.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-JyLYhL3G.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>请启用 JavaScript 以使用 DUBI 管理界面。</noscript>
+  </body>
+</html>

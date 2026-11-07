@@ -47,6 +47,10 @@ func TestBootstrapNodeSelfRegistrationIsConfirmedAndImmutable(t *testing.T) {
 	if err := runtime.EnsureLocalNode(ctx, "west", "127.0.0.1:7443"); err != nil {
 		t.Fatal(err)
 	}
+	registered, ok, err := runtime.Root.Node(runtime.Identity.RaftID)
+	if err != nil || !ok || registered.CreatedIndex == 0 {
+		t.Fatal("missing creation order", err)
+	}
 	first, found, err := runtime.Root.Node(runtime.Identity.RaftID)
 	if err != nil || !found || first.NodeID != runtime.Identity.NodeID || first.RegionID != "west" || first.Address != "127.0.0.1:7443" {
 		t.Fatal(first, found, err)

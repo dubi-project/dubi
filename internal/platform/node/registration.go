@@ -103,6 +103,8 @@ func (runtime *Runtime) EnsureLocalNodeWithName(ctx context.Context, region, add
 		if name == "" {
 			descriptor.Name = current.Name
 		}
+		// Creation order is assigned by Root and is not a network identity field.
+		descriptor.CreatedIndex = current.CreatedIndex
 		if current != descriptor {
 			return errors.New("local network metadata differs from registered Node; controlled address/Region change required")
 		}
@@ -125,6 +127,7 @@ func (runtime *Runtime) EnsureLocalNodeWithName(ctx context.Context, region, add
 		return errors.Join(submitErr, err, fmt.Errorf("Root did not confirm exact bootstrap registration: found=%v rejection=%q", found, result.Error))
 	}
 	current, found, err = runtime.Root.Node(runtime.Identity.RaftID)
+	descriptor.CreatedIndex = current.CreatedIndex
 	if err != nil || !found || current != descriptor {
 		return errors.Join(err, errors.New("confirmed bootstrap registration differs from Node descriptor"))
 	}

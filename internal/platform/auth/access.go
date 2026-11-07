@@ -56,7 +56,7 @@ func (v AccessVerifier) Verify(ctx context.Context, token string) (rootstate.Acc
 		now = v.Now()
 	}
 	valid := func(c rootstate.AccessCredential) bool {
-		return c.Validate() == nil && c.RevokedIndex == 0 && now.Unix() >= c.CreatedUnix && now.Unix() < c.ExpiresUnix
+		return c.Validate() == nil && c.RevokedIndex == 0 && now.Unix() >= c.CreatedUnix && (c.ExpiresUnix == 0 || now.Unix() < c.ExpiresUnix)
 	}
 	if !found || c.CredentialID != id || !valid(c) {
 		return rootstate.AccessCredential{}, ErrInvalidCredential
@@ -75,5 +75,30 @@ func (v AccessVerifier) Verify(ctx context.Context, token string) (rootstate.Acc
 			return rootstate.AccessCredential{}, ErrInvalidCredential
 		}
 	}
+	if c.AccountID != "" {
+		catalog, ok := v.Catalog.(interface {
+			AdminAccount(string) (rootstate.AdminAccount, bool, error)
+		})
+		if !ok {
+			return rootstate.AccessCredential{}, ErrAuthorizationUnavailable
+		}
+		a, found, e := catalog.AdminAccount(c.AccountID)
+		if e != nil {
+			return rootstate.AccessCredential{}, ErrAuthorizationUnavailable
+		}
+		if !found || a.Disabled || a.AuthVersion != c.AccountVersion {
+			return rootstate.AccessCredential{}, ErrInvalidCredential
+		}
+	}
 	return c, nil
+}
+func generateAccountSession(a rootstate.AdminAccount) (string, rootstate.AccessCredential, error) {
+	token, c, e := GenerateAccess("admin", "", time.Now(), 12*time.Hour)
+	if e != nil {
+		return "", c, e
+	}
+	c.Role = "session"
+	c.AccountID = a.ID
+	c.AccountVersion = a.AuthVersion
+	return token, c, c.Validate()
 }

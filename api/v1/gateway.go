@@ -7,12 +7,17 @@ const (
 	GatewayInfoPath = "/api/v1/admin/gateway"
 )
 
-// Admin login uses a high-entropy operator credential created through the
-// Node-authenticated CLI. It grants no Tenant data access.
+// One login for scoped accounts; TenantID and Role come only from verified account state.
 type LoginRequest struct {
-	Token string `json:"token"`
+	Token    string `json:"token,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 type AccessIdentity struct {
+	TenantID     string `json:"tenant_id,omitempty"`
+	AccountID    string `json:"account_id,omitempty"`
+	Username     string `json:"username,omitempty"`
+	Name         string `json:"name,omitempty"`
 	CredentialID string `json:"credential_id,omitempty"`
 	Role         string `json:"role"`
 	ExpiresUnix  int64  `json:"expires_unix"`

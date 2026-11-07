@@ -111,7 +111,7 @@ func TestStateConfigPublicAcceptance(t *testing.T) {
 	tokens := make([]string, 2)
 	credentials := make([]rootstate.TenantCredential, 2)
 	for i, tenant := range []string{"config-a", "config-b"} {
-		apply(rootstate.Command{RequestID: "tenant-" + tenant, Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: tenant}})
+		apply(rootstate.Command{RequestID: "tenant-" + tenant, Type: rootstate.RegisterTenant, Tenant: &rootstate.Tenant{TenantID: tenant, Accounting: true}})
 		token, credential, err := auth.Generate(tenant, time.Now(), time.Hour)
 		if err != nil {
 			t.Fatal(err)
@@ -133,7 +133,7 @@ func TestStateConfigPublicAcceptance(t *testing.T) {
 		gatewayRPC[i] = n.address
 		gatewayPublic[i] = n.process.PublicAddress()
 	}
-	verifyGatewayThroughRemoteEntry(t, ctx, client, gatewayStores, gatewayRPC, gatewayPublic)
+	verifyGatewayThroughRemoteEntry(t, ctx, client, gatewayStores, gatewayRPC, gatewayPublic, tokens[0])
 	call := func(n int, token, method, query string, payload any) (int, []byte, error) {
 		var b []byte
 		if payload != nil {
@@ -229,6 +229,31 @@ func TestStateConfigPublicAcceptance(t *testing.T) {
 	if _, err := bound.Get(ctx, []byte("service/flags")); !errors.Is(err, stateengine.ErrNotFound) {
 		t.Fatal("Module leak", err)
 	}
+	// A new Engine binding automatically uses Runtime policy. It must not
+	// bypass the Tenant's module allowlist by omitting an Engine quota setter.
+	if _, err := bound.Put(ctx, []byte("service/flags"), []byte("session"), "forbidden-session", stateengine.Condition{}); err == nil {
+		t.Fatal("new Engine binding bypassed Tenant module policy")
+	}
+	tenant, _, err := first.Runtime.Root.Tenant("config-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant.Modules = []string{"config", "session"}
+	apply(rootstate.Command{RequestID: "allow-session", Type: rootstate.UpdateTenant, Tenant: &tenant})
+	for {
+		local, ok, err := nodes[1].process.Runtime.Root.Tenant("config-a")
+		if err == nil && ok && local.AllowsModule("session") {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	if err := nodes[1].process.Runtime.TenantQuota.Refresh(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := bound.Put(ctx, []byte("service/flags"), []byte("session"), "create", stateengine.Condition{}); err != nil {
 		t.Fatal(err)
 	}
@@ -260,5 +285,6 @@ func TestStateConfigPublicAcceptance(t *testing.T) {
 	must(0, tokens[0], "PUT", key, create, 200)
 	apply(rootstate.Command{RequestID: "revoke-config", Type: rootstate.RevokeTenantCredential, TenantRevocation: &rootstate.TenantCredentialRevocation{CredentialID: credentials[0].CredentialID}})
 	must(2, tokens[0], "GET", key, nil, 401)
+	verifyManagementRegionUnavailable(t, ctx, client, nodes[1].store, nodes[1].address, nodes[1].process.PublicAddress(), nodes[3].stop)
 	t.Log("State + Config acceptance: CAS, tombstone/ABA, retry history, Tenant/Module isolation, TLS auth/revocation and Node restart passed")
 }

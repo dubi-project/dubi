@@ -84,3 +84,11 @@ func TestRootJoinEndpointEquivalenceDoesNotResolveDNS(t *testing.T) {
 		t.Fatal("ports collapsed")
 	}
 }
+
+func TestRoutingCanonicalIgnoresManagementCreationOrder(t *testing.T) {
+	input := View{Peers: []rootstate.Node{{NodeID: "node_000000000001", RaftID: 1, CreatedIndex: 42}}}
+	canonical := input.CloneCanonical()
+	if canonical.Peers[0].CreatedIndex != 0 || input.Peers[0].CreatedIndex != 42 {
+		t.Fatal("routing metadata normalization mutated source or retained creation order")
+	}
+}

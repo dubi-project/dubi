@@ -51,8 +51,24 @@ func (b Binding) ForTenant(tenant string) (*Bound, error) {
 }
 
 func (b *Bound) Write(ctx context.Context, r BoundWrite) (WriteResult, error) {
-	if b == nil || b.binding.service == nil || ctx == nil || rootstate.ValidateRequestID(r.RequestID) != nil || len(r.Key) == 0 || len(r.Key) > 4096 || r.Publish == nil {
+	return b.write(ctx, r, false)
+}
+
+func validateBoundWrite(r BoundWrite) error {
+	if rootstate.ValidateRequestID(r.RequestID) != nil || len(r.Key) == 0 || len(r.Key) > 4096 || r.Publish == nil {
+		return errors.New("invalid bound Engine write")
+	}
+	return nil
+}
+
+func (b *Bound) write(ctx context.Context, r BoundWrite, logical bool) (WriteResult, error) {
+	if b == nil || b.binding.service == nil || ctx == nil || validateBoundWrite(r) != nil {
 		return WriteResult{State: WriteUnknown}, errors.New("invalid bound Engine write")
+	}
+	if !logical {
+		if err := b.binding.service.requireUnmetered(b.space); err != nil {
+			return WriteResult{State: WriteUnknown}, err
+		}
 	}
 	started := time.Now()
 	err := b.binding.service.ensureRange(ctx, b.space)
@@ -61,7 +77,8 @@ func (b *Bound) Write(ctx context.Context, r BoundWrite) (WriteResult, error) {
 		return WriteResult{State: WriteUnknown}, fmt.Errorf("prepare bound Range: %w", err)
 	}
 	requestID, _ := b.space.BindRequestID(r.RequestID)
-	return b.binding.service.Write(ctx, WriteRequest{RequestID: requestID, Keyspace: b.space, Key: r.Key, Body: r.Body, Publish: r.Publish})
+	request := WriteRequest{RequestID: requestID, Keyspace: b.space, Key: r.Key, Body: r.Body, Publish: r.Publish}
+	return b.binding.service.writeEntry(ctx, request)
 }
 
 func (b *Bound) Read(ctx context.Context, key []byte) (recordwrite.LocalRead, error) {

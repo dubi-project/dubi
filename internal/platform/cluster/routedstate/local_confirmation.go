@@ -7,6 +7,7 @@ import (
 
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 	"github.com/dubi-project/dubi/internal/platform/placement"
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 	"github.com/dubi-project/dubi/internal/platform/router"
 )
 
@@ -30,13 +31,7 @@ type LocalConfirmation struct {
 
 const MaxLocalConfirmationBytes = 1 << 20
 
-func validPhysicalID(value, prefix string) bool {
-	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+32 {
-		return false
-	}
-	b, err := hex.DecodeString(value[len(prefix):])
-	return err == nil && len(b) == 16 && prefix+hex.EncodeToString(b) == value
-}
+func validPhysicalID(value, prefix string) bool { return resourceid.Valid(value, prefix) }
 
 func (c LocalConfirmation) Validate() error {
 	if c.Target.Validate() != nil || len(c.Target.RoutingKey) > 4096 || len(c.Key) == 0 || len(c.Key) > 4096 ||

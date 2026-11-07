@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/dubi-project/dubi/internal/platform/protocol"
 	"github.com/dubi-project/dubi/internal/platform/resource"
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 	"github.com/dubi-project/dubi/internal/platform/storage/diskbudget"
 	"github.com/dubi-project/dubi/internal/platform/storage/pack"
 	"github.com/dubi-project/dubi/internal/platform/storage/volume"
@@ -633,7 +634,7 @@ func (s *Store) RepairExisting(ctx context.Context, d Descriptor, payload []byte
 func (s *Store) validateEntry(id string, e entry) error {
 	storedID, err := e.Descriptor.ID()
 	if err != nil || e.Version != recordIndexVersion || storedID != id || e.Location.StoreID != s.identity.StoreID ||
-		!strings.HasPrefix(e.Location.VolumeID, "volume_") || !validToken(strings.TrimPrefix(e.Location.VolumeID, "volume_")) ||
+		!resourceid.Valid(e.Location.VolumeID, "volume_") ||
 		!strings.HasPrefix(e.Location.PackID, "pack_") || !validToken(strings.TrimPrefix(e.Location.PackID, "pack_")) ||
 		e.Location.Offset <= 0 || e.Location.Length <= 0 || e.Location.Length > pack.MaxPayloadSize+pack.MaxKeySize+pack.MaxEngineSize+pack.MaxTenantSize+1024 {
 		return ErrCorrupt

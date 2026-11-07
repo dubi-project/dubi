@@ -92,6 +92,20 @@ func (transaction *Transaction) flush() error {
 	for _, key := range keys {
 		staged := transaction.recordReferences[key]
 		dbKey := recordReferenceKey(transaction.keyspace, []byte(key))
+		old, found, err := transaction.state.recordReference(transaction.keyspace, []byte(key))
+		if err != nil {
+			return err
+		}
+		if found && old.Usage != nil {
+			if err := transaction.batch.Delete(usageIndexKey(old), nil); err != nil {
+				return err
+			}
+		}
+		if !staged.deleted && staged.reference.Usage != nil {
+			if err := transaction.batch.Set(usageIndexKey(staged.reference), dbKey, nil); err != nil {
+				return err
+			}
+		}
 		// A replacement or deletion invalidates any confirmation for the old
 		// publication in the same atomic engine transaction.
 		if err := transaction.batch.Delete(localConfirmationKey(transaction.keyspace, []byte(key)), nil); err != nil {

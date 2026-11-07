@@ -22,23 +22,32 @@ var recordReferencePrefix = []byte("data/record-reference/")
 // the current metadata OwnerGroupID. No Store, Volume or Pack location enters
 // this replicated record. Index identifies this publication, including ABA.
 type RecordReference struct {
-	Version      int                `json:"version"`
-	Descriptor   records.Descriptor `json:"descriptor"`
-	OwnerGroupID string             `json:"owner_group_id"`
-	RangeID      string             `json:"range_id"`
-	RangeEpoch   uint64             `json:"range_epoch"`
-	RoutingKey   []byte             `json:"routing_key"`
-	RequestID    string             `json:"request_id"`
-	CommandHash  string             `json:"command_hash"`
-	Index        uint64             `json:"index"`
+	Version      int                    `json:"version"`
+	Descriptor   records.Descriptor     `json:"descriptor"`
+	OwnerGroupID string                 `json:"owner_group_id"`
+	RangeID      string                 `json:"range_id"`
+	RangeEpoch   uint64                 `json:"range_epoch"`
+	RoutingKey   []byte                 `json:"routing_key"`
+	RequestID    string                 `json:"request_id"`
+	CommandHash  string                 `json:"command_hash"`
+	Index        uint64                 `json:"index"`
+	Usage        *rootstate.UsageReport `json:"usage,omitempty"`
 }
 
 func (r RecordReference) clone() RecordReference {
 	r.Descriptor.Key = bytes.Clone(r.Descriptor.Key)
 	r.RoutingKey = bytes.Clone(r.RoutingKey)
+	if r.Usage != nil {
+		u := *r.Usage
+		u.Key = bytes.Clone(u.Key)
+		r.Usage = &u
+	}
 	return r
 }
 func (r RecordReference) validate() error {
+	if r.Usage != nil && (r.Usage.Validate() != nil || r.Usage.Space != r.Descriptor.Keyspace || r.Usage.RangeID != r.RangeID || r.Usage.OwnerGroupID != r.OwnerGroupID || r.Usage.Epoch != r.RangeEpoch || r.Usage.Index != r.Index) {
+		return errors.New("invalid record usage metadata")
+	}
 	if r.Version != 2 || r.Descriptor.Validate() != nil || raft.ValidateGroupID(r.OwnerGroupID) != nil || r.OwnerGroupID == raft.RootGroupID || rootstate.ValidateRangeID(r.RangeID) != nil || r.RangeEpoch == 0 || len(r.RoutingKey) > 4096 || rootstate.ValidateRequestID(r.RequestID) != nil || r.Index == 0 || len(r.CommandHash) != 64 {
 		return errors.New("invalid authoritative record reference")
 	}
@@ -86,6 +95,12 @@ func validateRecordReferenceLinks(ref RecordReference, lookup func([]byte) ([]by
 			return nil, errors.New("record reference has a missing metadata backlink")
 		}
 		return v, nil
+	}
+	if ref.Usage != nil {
+		b, err := read(usageIndexKey(ref))
+		if err != nil || !bytes.Equal(b, recordReferenceKey(ref.Descriptor.Keyspace, ref.Descriptor.Key)) {
+			return errors.Join(err, errors.New("missing usage index"))
+		}
 	}
 	encoded, err := read(fenceRangeKey(ref.RangeID))
 	if err != nil {

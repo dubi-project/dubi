@@ -24,8 +24,10 @@ type ReadHandler interface {
 // ReadView exposes only keys in the Target's immutable Keyspace. It is valid for the duration of
 // the ReadRouted callback and cannot access Fence, result, or Raft metadata.
 type ReadView struct {
-	state    *State
-	keyspace rootstate.Keyspace
+	ctx       context.Context
+	fullRange bool
+	state     *State
+	keyspace  rootstate.Keyspace
 }
 
 func (view ReadView) Get(key []byte) ([]byte, bool, error) {
@@ -72,7 +74,7 @@ func (s *State) ReadRouted(
 	if err := router.CheckOwner(s.groupID, descriptor, target); err != nil {
 		return 0, err
 	}
-	if err := read(ReadView{state: s, keyspace: target.Keyspace}); err != nil {
+	if err := read(ReadView{ctx: ctx, state: s, keyspace: target.Keyspace, fullRange: len(descriptor.Start) == 0 && len(descriptor.End) == 0}); err != nil {
 		return 0, err
 	}
 	return index, nil

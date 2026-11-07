@@ -8,28 +8,33 @@ import (
 )
 
 // AccessCredential is a cluster management/monitoring credential, never a Tenant.
-// Sessions reference an admin credential; revoking the parent revokes all sessions.
+// Sessions reference an admin credential or a versioned admin account.
 type AccessCredential struct {
-	CredentialID string `json:"credential_id"`
-	Role         string `json:"role"`
-	TokenSHA256  string `json:"token_sha256"`
-	CreatedUnix  int64  `json:"created_unix"`
-	ExpiresUnix  int64  `json:"expires_unix"`
-	RevokedIndex uint64 `json:"revoked_index,omitempty"`
-	ParentID     string `json:"parent_id,omitempty"`
+	CreatedIndex   uint64 `json:"created_index,omitempty"`
+	Name           string `json:"name,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	CredentialID   string `json:"credential_id"`
+	Role           string `json:"role"`
+	TokenSHA256    string `json:"token_sha256"`
+	CreatedUnix    int64  `json:"created_unix"`
+	ExpiresUnix    int64  `json:"expires_unix"`
+	RevokedIndex   uint64 `json:"revoked_index,omitempty"`
+	AccountID      string `json:"account_id,omitempty"`
+	AccountVersion uint64 `json:"account_version,omitempty"`
+	ParentID       string `json:"parent_id,omitempty"`
 }
 
 func (v AccessCredential) Validate() error {
-	if !validTenantCredentialID(v.CredentialID) || !validDigest(v.TokenSHA256) || v.CreatedUnix <= 0 || v.ExpiresUnix <= v.CreatedUnix || v.ExpiresUnix-v.CreatedUnix > maxTenantCredentialLifetimeSeconds {
+	if ValidateCredentialName(v.Name) != nil || (v.RequestID != "" && ValidateRequestID(v.RequestID) != nil) || !validTenantCredentialID(v.CredentialID) || !validDigest(v.TokenSHA256) || !validCredentialLifetime(v.CreatedUnix, v.ExpiresUnix) {
 		return errors.New("invalid access credential")
 	}
 	switch v.Role {
 	case "admin", "monitor":
-		if v.ParentID != "" {
+		if v.ParentID != "" || v.AccountID != "" || v.AccountVersion != 0 {
 			return errors.New("access token cannot have parent")
 		}
 	case "session":
-		if !validTenantCredentialID(v.ParentID) || v.ParentID == v.CredentialID || v.ExpiresUnix-v.CreatedUnix > 12*60*60 {
+		if v.ExpiresUnix == 0 || (v.AccountID == "" && (!validTenantCredentialID(v.ParentID) || v.AccountVersion != 0)) || (v.AccountID != "" && (ValidateAccountID(v.AccountID) != nil || v.AccountVersion == 0 || v.ParentID != "")) || v.ParentID == v.CredentialID || v.ExpiresUnix-v.CreatedUnix > 12*60*60 {
 			return errors.New("invalid admin session")
 		}
 	default:
@@ -61,6 +66,40 @@ func (s *State) accessCredential(id string) (AccessCredential, bool, error) {
 	return v, err == nil, err
 }
 func (s *State) applyAccessCredential(batch *pebble.Batch, c Command) (string, error) {
+	if c.Type == DeleteAccessCredential {
+		id := c.AccessRevocation.CredentialID
+		v, found, err := s.accessCredential(id)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", nil
+		}
+		if v.Role == "session" || v.RevokedIndex == 0 {
+			return "Only revoked credentials can be deleted", nil
+		}
+		it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/access-credential/"), UpperBound: []byte("data/access-credential0")})
+		if err != nil {
+			return "", err
+		}
+		for it.First(); it.Valid(); it.Next() {
+			var child AccessCredential
+			if json.Unmarshal(it.Value(), &child) != nil || child.Validate() != nil {
+				_ = it.Close()
+				return "", errors.New("invalid stored access credential")
+			}
+			if child.ParentID == id {
+				if err = batch.Delete(it.Key(), nil); err != nil {
+					_ = it.Close()
+					return "", err
+				}
+			}
+		}
+		if err = errors.Join(it.Error(), it.Close()); err != nil {
+			return "", err
+		}
+		return "", batch.Delete(accessCredentialKey(id), nil)
+	}
 	if c.Type == RevokeAccessCredential {
 		v, found, err := s.accessCredential(c.AccessRevocation.CredentialID)
 		if err != nil {
@@ -75,6 +114,11 @@ func (s *State) applyAccessCredential(batch *pebble.Batch, c Command) (string, e
 		return "", setJSON(batch, accessCredentialKey(v.CredentialID), v)
 	}
 	v := *c.AccessCredential
+	if _, found, err := s.get(tenantCredentialKey(v.CredentialID)); err != nil {
+		return "", err
+	} else if found {
+		return "credential ID is already registered", nil
+	}
 	if _, found, err := s.accessCredential(v.CredentialID); err != nil {
 		return "", err
 	} else if found {
@@ -85,8 +129,17 @@ func (s *State) applyAccessCredential(batch *pebble.Batch, c Command) (string, e
 		if err != nil {
 			return "", err
 		}
-		if !found || p.Role != "admin" || p.RevokedIndex != 0 || v.CreatedUnix < p.CreatedUnix || v.ExpiresUnix > p.ExpiresUnix {
+		if !found || p.Role != "admin" || p.RevokedIndex != 0 || v.CreatedUnix < p.CreatedUnix || (p.ExpiresUnix != 0 && v.ExpiresUnix > p.ExpiresUnix) {
 			return "admin credential unavailable", nil
+		}
+	}
+	if v.AccountID != "" {
+		a, found, err := s.adminAccount(v.AccountID)
+		if err != nil {
+			return "", err
+		}
+		if !found || a.Disabled || a.AuthVersion != v.AccountVersion {
+			return "admin account unavailable", nil
 		}
 	}
 	// A bounded scan prevents login traffic from growing session state forever.
@@ -109,7 +162,7 @@ func (s *State) applyAccessCredential(batch *pebble.Batch, c Command) (string, e
 			continue
 		}
 		count++
-		if v.ParentID != "" && prior.ParentID == v.ParentID {
+		if (v.ParentID != "" && prior.ParentID == v.ParentID) || (v.AccountID != "" && prior.AccountID == v.AccountID) {
 			children++
 		}
 		if count >= 4096 || children >= 32 {
@@ -120,5 +173,29 @@ func (s *State) applyAccessCredential(batch *pebble.Batch, c Command) (string, e
 	if err := errors.Join(it.Error(), it.Close()); err != nil {
 		return "", err
 	}
+	v.CreatedIndex = s.applied + 1
 	return "", setJSON(batch, accessCredentialKey(v.CredentialID), v)
+}
+
+// AccessCredentials returns verifier metadata at the caller's confirmed Root cut.
+func (s *State) AccessCredentials() ([]AccessCredential, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
+	out := []AccessCredential{}
+	it, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte("data/access-credential/"), UpperBound: []byte("data/access-credential0")})
+	if err != nil {
+		return nil, err
+	}
+	defer it.Close()
+	for it.First(); it.Valid(); it.Next() {
+		var v AccessCredential
+		if json.Unmarshal(it.Value(), &v) != nil || v.Validate() != nil || len(out) >= 4096 {
+			return nil, errors.New("invalid access directory")
+		}
+		out = append(out, v)
+	}
+	return out, it.Error()
 }

@@ -4,6 +4,9 @@
 package repository
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -29,11 +32,12 @@ var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 // Repository record never contains a plaintext access key, secret, password,
 // or token. The encryption key lifecycle is owned by the recovery platform.
 type Repository struct {
-	Name   string `json:"name"`
-	Type   Type   `json:"type"`
-	Path   string `json:"path,omitempty"`
-	Bucket string `json:"bucket,omitempty"`
-	Prefix string `json:"prefix,omitempty"`
+	CreatedIndex uint64 `json:"created_index,omitempty"`
+	Name         string `json:"name"`
+	Type         Type   `json:"type"`
+	Path         string `json:"path,omitempty"`
+	Bucket       string `json:"bucket,omitempty"`
+	Prefix       string `json:"prefix,omitempty"`
 
 	Endpoint  string `json:"endpoint,omitempty"`
 	Region    string `json:"region,omitempty"`
@@ -97,3 +101,10 @@ func (value Repository) Validate() error {
 
 func (value Repository) IsFile() bool { return value.Type == TypeFile }
 func (value Repository) IsS3() bool   { return value.Type == TypeS3 }
+
+// Revision covers the encrypted envelope as well as destination settings.
+func (value Repository) Revision() string {
+	b, _ := json.Marshal(value)
+	digest := sha256.Sum256(b)
+	return hex.EncodeToString(digest[:])
+}

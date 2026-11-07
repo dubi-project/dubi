@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/dubi-project/dubi/internal/platform/resourceid"
 )
 
 var ErrRetained = errors.New("record is retained for an unfinished data handoff")
@@ -30,7 +31,7 @@ type retentionRow struct {
 }
 
 func retentionKey(source string) ([]byte, error) {
-	if !strings.HasPrefix(source, "node_") || !validToken(strings.TrimPrefix(source, "node_")) {
+	if !resourceid.Valid(source, "node_") {
 		return nil, errors.New("invalid retention source identity")
 	}
 	return []byte("retention/incoming/" + source), nil

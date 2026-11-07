@@ -4,12 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,15 +20,28 @@ import (
 	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
 )
 
-//go:embed console/*
-var console embed.FS
-
 const sessionCookie = "__Host-dubi_session"
 
 // Admin handlers receive only verified management identity. Module handlers
 // remain responsible for their own Tenant-bound contract.
 type adminContextKey struct{}
+type adminRecheckKey struct{}
+
+func revalidateAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if fn, ok := r.Context().Value(adminRecheckKey{}).(func() error); ok {
+		if err := fn(); err != nil {
+			gatewayError(w, 503, "authorization_unavailable", "无法重新确认管理权限，请核对操作结果后重试。")
+			return false
+		}
+		return true
+	}
+	gatewayError(w, 403, "forbidden", "管理身份不可用。")
+	return false
+}
+
 type AdminPrincipal struct {
+	TenantID     string
+	AccountID    string
 	CredentialID string
 	Role         string
 }
@@ -40,25 +52,36 @@ func AdminIdentity(ctx context.Context) (AdminPrincipal, bool) {
 }
 
 type GatewayOptions struct {
-	Admin       http.Handler
-	Audit       func(action, credential, result string)
-	Certificate func() any
+	Metrics       func(io.Writer)
+	Admin         http.Handler
+	TenantConsole http.Handler
+	Accounts      *Accounts
+	Audit         func(action, credential, result string)
+	Certificate   func() any
 
 	Legacy http.Handler
 	Access auth.AccessVerifier
+	Tenant auth.Verifier
 	Commit func(context.Context, rootstate.Command) error
 	Info   func(context.Context) (any, error)
 }
 type Gateway struct {
-	options     GatewayOptions
-	slots       chan struct{}
-	mu          sync.Mutex
-	loginWindow time.Time
-	logins      int
+	options         GatewayOptions
+	slots           chan struct{}
+	mu              sync.Mutex
+	loginWindow     time.Time
+	logins          int
+	consoleManifest consoleManifest
+	consoleErr      error
 }
 
 func NewGateway(o GatewayOptions) *Gateway {
-	return &Gateway{options: o, slots: make(chan struct{}, 32)}
+	files, err := fs.Sub(console, "console")
+	var manifest consoleManifest
+	if err == nil {
+		manifest, err = validateConsole(files)
+	}
+	return &Gateway{options: o, slots: make(chan struct{}, 32), consoleManifest: manifest, consoleErr: err}
 }
 func jsonReply(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -66,14 +89,17 @@ func jsonReply(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func gatewayError(w http.ResponseWriter, status int, code, message string) {
-	failure(w, status, code, message, "")
+	failure(w, status, code, message, w.Header().Get("X-Request-ID"))
 }
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	if strings.HasPrefix(r.URL.Path, "/api/v1/admin/") || strings.HasPrefix(r.URL.Path, "/api/v1/tenant/") {
+		managementRequestID(w)
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-	if r.URL.Path == "/" || r.URL.Path == "/assets/gateway.js" || r.URL.Path == "/assets/gateway.css" {
+	if isConsoleRequest(r) {
 		g.static(w, r)
 		return
 	}
@@ -111,9 +137,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.options.Legacy.ServeHTTP(w, clone)
 		return
 	}
-	known := r.URL.Path == "/api/v1/me" || r.URL.Path == "/api/v1/auth/logout" || strings.HasPrefix(r.URL.Path, "/api/v1/admin/") || r.URL.Path == "/metrics"
+	known := r.URL.Path == "/api/v1/me" || r.URL.Path == "/api/v1/auth/logout" || strings.HasPrefix(r.URL.Path, "/api/v1/admin/") || strings.HasPrefix(r.URL.Path, "/api/v1/tenant/") || r.URL.Path == "/metrics"
 	if !known {
 		gatewayError(w, 404, "not_found", "API not found")
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/v1/admin/") && len(r.Header.Values("Authorization")) == 1 && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer dubi.") {
+		_, err := g.options.Tenant.Verify(ctx, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		if err != nil {
+			g.authError(w, err)
+		} else {
+			gatewayError(w, 403, "forbidden", "admin permission required")
+		}
 		return
 	}
 	c, token, cookie, err := g.authenticate(r)
@@ -121,12 +156,28 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.authError(w, err)
 		return
 	}
+	principal, err := g.principal(r.Context(), c)
+	if err != nil {
+		g.authError(w, err)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/v1/tenant/") {
+		g.tenantRequest(w, r, c, token, cookie, principal)
+		return
+	}
 	if r.URL.Path == "/metrics" {
+		if principal.TenantID != "" {
+			gatewayError(w, 403, "forbidden", "集群监控不可访问。")
+			return
+		}
 		if c.Role != "monitor" && c.Role != "admin" && c.Role != "session" {
 			gatewayError(w, 403, "forbidden", "monitor permission required")
 			return
 		}
 		g.options.Legacy.ServeHTTP(w, r)
+		if r.Method == http.MethodGet && g.options.Metrics != nil {
+			g.options.Metrics(w)
+		}
 		if r.Method == http.MethodGet && g.options.Certificate != nil {
 			if s, ok := g.options.Certificate().(interface{ GatewayMetrics() string }); ok {
 				_, _ = io.WriteString(w, s.GatewayMetrics())
@@ -135,7 +186,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/admin/") {
-		if c.Role != "admin" && c.Role != "session" {
+		if principal.TenantID != "" || principal.Role != "admin" {
 			gatewayError(w, 403, "forbidden", "admin permission required")
 			return
 		}
@@ -148,8 +199,29 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				gatewayError(w, 404, "not_found", "management API not implemented")
 				return
 			}
-			r = r.WithContext(context.WithValue(ctx, adminContextKey{}, AdminPrincipal{CredentialID: c.CredentialID, Role: "admin"}))
-			g.options.Admin.ServeHTTP(w, r)
+			r = r.WithContext(context.WithValue(ctx, adminContextKey{}, principal))
+			r = r.WithContext(context.WithValue(r.Context(), adminRecheckKey{}, func() error {
+				current, _, _, err := g.authenticate(r)
+				if err != nil {
+					return err
+				}
+				p, e := g.principal(r.Context(), current)
+				if e != nil {
+					return e
+				}
+				if p.TenantID != "" || p.Role != "admin" || p.CredentialID != principal.CredentialID {
+					return auth.ErrInvalidCredential
+				}
+				return nil
+			}))
+			if g.options.Accounts != nil && (r.URL.Path == "/api/v1/admin/accounts" || strings.HasPrefix(r.URL.Path, "/api/v1/admin/accounts/") || r.URL.Path == "/api/v1/admin/profile" || r.URL.Path == "/api/v1/admin/password") {
+				g.options.Accounts.ServeHTTP(w, r)
+			} else {
+				g.options.Admin.ServeHTTP(w, r)
+			}
+			if r.Method != "GET" && r.Method != "HEAD" {
+				g.audit("management_"+r.Method, c.CredentialID, "handled")
+			}
 			return
 		}
 	}
@@ -158,11 +230,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !method(w, r, "GET") {
 			return
 		}
-		role := c.Role
-		if role == "session" {
-			role = "admin"
+		role := principal.Role
+		v := map[string]any{"credential_id": c.CredentialID, "role": role, "expires_unix": c.ExpiresUnix, "tenant_id": principal.TenantID}
+		if c.AccountID != "" && g.options.Accounts != nil {
+			a, e := g.options.Accounts.current(ctx, c.CredentialID)
+			if e != nil {
+				g.authError(w, auth.ErrInvalidCredential)
+				return
+			}
+			v["account_id"] = a.ID
+			v["username"] = a.Username
+			v["name"] = a.Name
 		}
-		v := map[string]any{"credential_id": c.CredentialID, "role": role, "expires_unix": c.ExpiresUnix}
 		if cookie {
 			v["csrf_token"] = csrf(token)
 		}
@@ -191,8 +270,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !method(w, r, "GET") {
 			return
 		}
-		if c.Role != "admin" && c.Role != "session" {
+		if principal.TenantID != "" || principal.Role != "admin" {
 			gatewayError(w, 403, "forbidden", "admin permission required")
+			return
+		}
+		if _, err := parseManagementQuery(r); err != nil {
+			gatewayError(w, 400, "invalid_request", err.Error())
 			return
 		}
 		v, err := g.options.Info(ctx)
@@ -200,7 +283,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			gatewayError(w, 503, "unavailable", "gateway state unavailable")
 			return
 		}
-		jsonReply(w, 200, v)
+		managementReply(w, v, true, nil)
 	}
 }
 func method(w http.ResponseWriter, r *http.Request, want string) bool {
@@ -291,20 +374,45 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
 		gatewayError(w, 400, "invalid_request", "invalid login request")
 		return
 	}
-	parent, err := g.options.Access.Verify(r.Context(), input.Token)
-	input.Token = ""
-	if err != nil {
-		g.authError(w, err)
+	var token string
+	var c rootstate.AccessCredential
+	var err error
+	var account rootstate.AdminAccount
+	ttl := 12 * time.Hour
+	if input.Token != "" && input.Username == "" && input.Password == "" {
+		parent, e := g.options.Access.Verify(r.Context(), input.Token)
+		input.Token = ""
+		if e != nil {
+			g.authError(w, e)
+			return
+		}
+		if parent.Role != "admin" {
+			gatewayError(w, 403, "forbidden", "admin credential required")
+			return
+		}
+		if parent.ExpiresUnix != 0 {
+			ttl = min(ttl, time.Until(time.Unix(parent.ExpiresUnix, 0)))
+		}
+		token, c, err = auth.GenerateAccess("session", parent.CredentialID, time.Now(), ttl)
+	} else if input.Token == "" && input.Username != "" && input.Password != "" && g.options.Accounts != nil {
+		account, err = g.options.Accounts.Authenticate(r.Context(), input.Username, input.Password)
+		input.Password = ""
+		if err != nil {
+			g.audit("password_login", "", "rejected")
+			if errors.Is(err, auth.ErrInvalidCredential) {
+				gatewayError(w, 401, "unauthorized", "账号或密码不正确。")
+			} else {
+				g.authError(w, err)
+			}
+			return
+		}
+		token, c, err = auth.GenerateAccountSession(account)
+	} else {
+		gatewayError(w, 400, "invalid_request", "请提供账号密码或管理员 Token。")
 		return
 	}
-	if parent.Role != "admin" {
-		gatewayError(w, 403, "forbidden", "admin credential required")
-		return
-	}
-	ttl := min(12*time.Hour, time.Until(time.Unix(parent.ExpiresUnix, 0)))
-	token, c, err := auth.GenerateAccess("session", parent.CredentialID, time.Now(), ttl)
 	if err != nil {
-		gatewayError(w, 401, "unauthorized", "credential expires too soon")
+		gatewayError(w, 401, "unauthorized", "无法创建会话，请重新登录。")
 		return
 	}
 	if err = g.options.Commit(r.Context(), rootstate.Command{Version: rootstate.FormatVersion, RequestID: "session-" + c.CredentialID, Type: rootstate.CreateAccessCredential, AccessCredential: &c}); err != nil {
@@ -313,33 +421,8 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(ttl.Seconds()), Expires: time.Unix(c.ExpiresUnix, 0)})
 	g.audit("login", c.CredentialID, "success")
-	jsonReply(w, 200, v1.AccessIdentity{CredentialID: c.CredentialID, Role: "admin", ExpiresUnix: c.ExpiresUnix, CSRFToken: csrf(token)})
+	jsonReply(w, 200, v1.AccessIdentity{AccountID: account.ID, Username: account.Username, Name: account.Name, CredentialID: c.CredentialID, TenantID: account.TenantID, Role: account.EffectiveRole(), ExpiresUnix: c.ExpiresUnix, CSRFToken: csrf(token)})
 }
-func (g *Gateway) static(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" && r.Method != "HEAD" {
-		w.Header().Set("Allow", "GET, HEAD")
-		gatewayError(w, 405, "method_not_allowed", "unsupported method")
-		return
-	}
-	name, kind := "index.html", "text/html; charset=utf-8"
-	if r.URL.Path == "/assets/gateway.js" {
-		name, kind = "gateway.js", "application/javascript"
-	}
-	if r.URL.Path == "/assets/gateway.css" {
-		name, kind = "gateway.css", "text/css"
-	}
-	b, err := console.ReadFile("console/" + name)
-	if err != nil {
-		http.Error(w, "console asset missing", 500)
-		return
-	}
-	w.Header().Set("Content-Type", kind)
-	w.Header().Set("Content-Length", fmt.Sprint(len(b)))
-	if r.Method != "HEAD" {
-		_, _ = w.Write(b)
-	}
-}
-
 func (g *Gateway) audit(action, id, result string) {
 	if g.options.Audit != nil {
 		g.options.Audit(action, id, result)

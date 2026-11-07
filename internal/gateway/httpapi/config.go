@@ -15,6 +15,8 @@ import (
 	"github.com/dubi-project/dubi/internal/engine/state"
 	configmodule "github.com/dubi-project/dubi/internal/module/config"
 	"github.com/dubi-project/dubi/internal/platform/auth"
+	"github.com/dubi-project/dubi/internal/platform/cluster/rootstate"
+	"github.com/dubi-project/dubi/internal/platform/tenantquota"
 )
 
 const ConfigPath = v1.ConfigEntryPath
@@ -111,7 +113,11 @@ func (h *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.respondError(w, err, m.RequestID)
 		return
 	}
-	if _, err := h.verifier.Verify(ctx, token); err != nil {
+	refreshed, verifyErr := h.verifier.Verify(ctx, token)
+	if verifyErr == nil {
+		verifyErr = refreshed.Authorize(rootstate.Keyspace{TenantID: refreshed.TenantID(), ModuleID: configmodule.ModuleID, EngineID: state.EngineID})
+	}
+	if err := verifyErr; err != nil {
 		if r.Method != http.MethodGet {
 			failure(w, 503, "outcome_unknown", "authorization could not be reconfirmed after mutation; retry the same request ID", m.RequestID)
 		} else {
@@ -140,6 +146,12 @@ func parseKey(r *http.Request) (string, error) {
 }
 func (h *Config) respondError(w http.ResponseWriter, err error, id string) {
 	switch {
+	case errors.Is(err, tenantquota.ErrExceeded):
+		failure(w, 409, "quota_exceeded", "Tenant storage quota exceeded", id)
+	case errors.Is(err, state.ErrCancelled):
+		failure(w, 409, "operation_cancelled", state.ErrCancelled.Error(), id)
+	case errors.Is(err, tenantquota.ErrReused):
+		failure(w, 409, "request_id_reused", "request ID reused", id)
 	case errors.Is(err, state.ErrUnknown):
 		failure(w, 503, "outcome_unknown", state.ErrUnknown.Error(), id)
 	case errors.Is(err, state.ErrInvalid):
